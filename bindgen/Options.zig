@@ -1,7 +1,21 @@
 interface_json: []const u8,
 output_dir: []const u8,
+interface_import: []const u8 = "godot_interface",
+/// How members of generated `extern struct`s are initialized.
+member_initialization: MemberInitialization = .none,
+/// Omit deprecated types and interface functions from the generated wrapper.
+strip_deprecation: bool = false,
 
 const Options = @This();
+
+pub const MemberInitialization = enum {
+    /// Do not write a default initializer (the current/previous behavior).
+    none,
+    /// Initialize members with `= undefined`.
+    undefined,
+    /// Initialize members with `= @import("std").mem.zeroes(T)`.
+    zero,
+};
 
 pub fn parseFromArgs(args: []const [:0]const u8) !Options {
     var options: Options = undefined;
@@ -24,17 +38,23 @@ pub fn parseFromArgs(args: []const [:0]const u8) !Options {
         }
     }
 
-    inline for (type_info.field_names, type_info.field_types, 0..) |field_name, FieldType, field_index| {
+    inline for (type_info.field_names, type_info.field_types, type_info.field_attrs, 0..) |field_name, FieldType, field_attr, field_index| {
         if (!found_fields[field_index]) {
             if (@typeInfo(FieldType) == .optional) {
                 @field(options, field_name) = null;
                 found_fields[field_index] = true;
             } else {
-                std.log.err("Missing required field: {s}", .{field_name});
-                return error.MissingField;
+                if (field_attr.default_value_ptr != null) {
+                    @field(options, field_name) = field_attr.defaultValue(FieldType) orelse unreachable;
+                    found_fields[field_index] = true;
+                } else {
+                    std.log.err("Missing required field: {s}", .{field_name});
+                    return error.MissingField;
+                }
             }
         }
     }
+    assert(std.mem.allEqual(bool, &found_fields, true));
 
     return options;
 }
@@ -77,16 +97,37 @@ pub fn format(self: Options, writer: *Io.Writer) void {
     writer.print("Options:\n", .{}) catch {};
     const type_info = @typeInfo(Options).@"struct";
     inline for (type_info.field_names, type_info.field_types) |field_name, FieldType| {
-        switch (FieldType) {
-            []const u8, []u8 => {
-                writer.print("  --{s}={s}\n", .{ field_name, @field(self, field_name) }) catch {};
-            },
-            else => {
-                writer.print("  --{s}={}\n", .{ field_name, @field(self, field_name) }) catch {};
-            },
+        switch (@typeInfo(FieldType)) {
+            .pointer => writer.print("  --{s}={s}\n", .{ field_name, @field(self, field_name) }) catch {},
+            .@"enum" => writer.print("  --{s}={s}\n", .{ field_name, @tagName(@field(self, field_name)) }) catch {},
+            else => writer.print("  --{s}={}\n", .{ field_name, @field(self, field_name) }) catch {},
         }
     }
 }
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Io = std.Io;
+
+test "member initialization option parses and formats" {
+    const options = try Options.parseFromArgs(&.{
+        "--interface_json=in.json",
+        "--output_dir=out",
+        "--member_initialization=zero",
+        "--strip_deprecation=true",
+    });
+    try std.testing.expectEqual(Options.MemberInitialization.zero, options.member_initialization);
+    try std.testing.expect(options.strip_deprecation);
+
+    const default_options = try Options.parseFromArgs(&.{
+        "--interface_json=in.json",
+        "--output_dir=out",
+    });
+    try std.testing.expectEqual(Options.MemberInitialization.none, default_options.member_initialization);
+
+    // The formatted help must show the name the parser accepts, not `.zero`.
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    options.format(&aw.writer);
+    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "--member_initialization=zero") != null);
+}

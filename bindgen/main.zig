@@ -4,16 +4,19 @@ pub fn main(init: std.process.Init) !void {
     const options = try Options.parseFromArgs(args);
     std.debug.print("Parsed options: {f}\n", .{options});
 
-    const context = try Context.init(arena, init.io, options);
-    const size: f32 = @floatFromInt(context.interface_json.len);
-    std.debug.print("Context initialized with interface_json length: {} KB.\n", .{size / 1024.0});
+    var context = try Context.init(arena, init.io, options);
+    defer context.deinit();
 
-    const interface_json_parsed = try InterfaceJson.parse(arena, context.interface_json);
-    std.debug.print("Parsed interface JSON: types: {}, interface: {}\n", .{ interface_json_parsed.value.types.len, interface_json_parsed.value.interface.len });
+    std.debug.print("Parsed interface JSON: types: {}, interface: {}\n", .{
+        context.interface_json.types.len,
+        context.interface_json.interface.len,
+    });
+
+    try generators.generateInterfaceBindings(&context, options);
 }
 
 const std = @import("std");
 
 const Options = @import("Options.zig");
 const Context = @import("Context.zig");
-const InterfaceJson = @import("InterfaceJson.zig");
+const generators = @import("generators.zig");

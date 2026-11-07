@@ -1,7 +1,3 @@
-const std = @import("std");
-const build_zon = @import("build.zig.zon");
-const Translator = @import("translate_c").Translator;
-
 pub const InitializationLevel = enum {
     core,
     servers,
@@ -22,50 +18,77 @@ pub fn build(b: *std.Build) void {
         "minimum_initialization_level",
         "Minimum initialization level for the library",
     ) orelse .scene;
-    const gd_ext_default_init = b.option(
-        bool,
-        "gd_ext_default_init",
-        "Default initialization all the GDExtension C structs to zero or not.",
-    ) orelse true;
-    const gdextension_interface_header = b.option(
+    const gdext_interface_header = b.option(
         std.Build.LazyPath,
-        "gdextension_interface_header",
+        "gdext_interface_header",
         "Path to the GDExtension interface header file.",
     ) orelse b.path("gd_interface/gdextension_interface.h");
-    const gdextension_interface_json = b.option(
+    const gdext_interface_json = b.option(
         []const u8,
-        "gdextension_interface_json",
+        "gdext_interface_json",
         "Path to the GDExtension interface json file.",
     ) orelse "gd_interface/gdextension_interface.json";
-    const gdextension_output_dir = b.option(
+    const gdext_output_dir = b.option(
         []const u8,
         "gdextension_output_dir",
         "Path to the output directory for generated files.",
-    ) orelse "src/godot";
+    ) orelse "src/godot/bindings";
+    const gdext_member_init = b.option(
+        MemberInitialization,
+        "gdext_member_init",
+        "Member initialization for gdextension interface extern structs.",
+    ) orelse .zero;
+    const gdext_strip_deprecation = b.option(
+        bool,
+        "gdext_strip_deprecation",
+        "Stip all the deprecated extension interface.",
+    ) orelse false;
 
     const translate_c = b.dependency("translate_c", .{});
     const godot_interface: Translator = .init(translate_c, .{
-        .c_source_file = gdextension_interface_header,
+        .c_source_file = gdext_interface_header,
         .target = target,
         .optimize = optimize,
-        .default_init = gd_ext_default_init,
+        .default_init = gdext_member_init != .none,
     });
 
+    const casez = b.dependency("casez", .{}).module("casez");
+
+    const bindgen_module = b.createModule(.{
+        .optimize = optimize,
+        .target = target,
+        .root_source_file = b.path("bindgen/main.zig"),
+        .imports = &.{
+            .{ .name = "casez", .module = casez },
+        },
+    });
     const bindgen = b.addExecutable(.{
         .name = "bindgen",
-        .root_module = b.createModule(.{
-            .optimize = optimize,
-            .target = target,
-            .root_source_file = b.path("bindgen/main.zig"),
-        }),
+        .root_module = bindgen_module,
     });
     const bindgen_step = b.step("gen", "Generate godot bindgen");
     const bindgen_run = b.addRunArtifact(bindgen);
     bindgen_run.expectExitCode(0);
-    bindgen_run.addArg(b.fmt("--interface_json={s}", .{gdextension_interface_json}));
-    bindgen_run.addArg(b.fmt("--output_dir={s}", .{gdextension_output_dir}));
+    bindgen_run.addArg(b.fmt("--interface_json={s}", .{gdext_interface_json}));
+    bindgen_run.addArg(b.fmt("--output_dir={s}", .{gdext_output_dir}));
+    bindgen_run.addArg(b.fmt("--member_initialization={s}", .{@tagName(gdext_member_init)}));
+    bindgen_run.addArg(b.fmt("--strip_deprecation={}", .{gdext_strip_deprecation}));
     bindgen_run.setCwd(b.path("."));
+    bindgen_run.addPassthruArgs();
     bindgen_step.dependOn(&bindgen_run.step);
+
+    const bindgen_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .optimize = optimize,
+            .target = target,
+            .root_source_file = b.path("bindgen/tests.zig"),
+            .imports = &.{
+                .{ .name = "casez", .module = casez },
+            },
+        }),
+    });
+    const bindgen_test_step = b.step("test-bindgen", "Run bindgen unit tests");
+    bindgen_test_step.dependOn(&b.addRunArtifact(bindgen_tests).step);
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "entry_point", entry_point);
@@ -92,3 +115,9 @@ pub fn build(b: *std.Build) void {
     );
     b.default_step.dependOn(&install.step);
 }
+
+const std = @import("std");
+const build_zon = @import("build.zig.zon");
+const Translator = @import("translate_c").Translator;
+
+const MemberInitialization = @import("bindgen/Options.zig").MemberInitialization;
