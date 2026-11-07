@@ -1,0 +1,1 @@
+Run `zig build gen` first before doing anything.

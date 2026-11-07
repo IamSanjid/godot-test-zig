@@ -1,0 +1,3 @@
+[submodule "vendor/casez"]
+	path = vendor/casez
+	url = https://github.com/IamSanjid/casez.git
