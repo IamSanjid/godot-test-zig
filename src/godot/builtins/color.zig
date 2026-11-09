@@ -2,9 +2,9 @@
 //!
 //! Godot stores `Color` as four `float`s even in double builds, so this file
 //! defines the struct directly (no `single`/`double` split).
-//! String-based helpers (`to_html`, `html`, `html_is_valid`, `from_string`) and
-//! OKHSL conversion are deferred until the `String` builtin and the `ok_color`
-//! port exist.
+//! String-based helpers (`to_html`, `html`, `html_is_valid`, `from_string`) are
+//! deferred until the `String` builtin exists. The `r8`/`hsv`/`ok_hsl` members
+//! are computed and exposed through Godot-style getter/setter pairs.
 
 pub const Color = extern struct {
     r: f32 = 0,
@@ -214,6 +214,114 @@ pub const Color = extern struct {
         return value;
     }
 
+    pub fn getR8(self: Self) i32 {
+        return @intFromFloat(std.math.clamp(@round(self.r * C.color_byte_max), 0, C.color_byte_max));
+    }
+
+    pub fn setR8(self: *Self, value: i32) void {
+        self.r = @as(f32, @floatFromInt(std.math.clamp(value, 0, 255))) / C.color_byte_max;
+    }
+
+    pub fn getG8(self: Self) i32 {
+        return @intFromFloat(std.math.clamp(@round(self.g * C.color_byte_max), 0, C.color_byte_max));
+    }
+
+    pub fn setG8(self: *Self, value: i32) void {
+        self.g = @as(f32, @floatFromInt(std.math.clamp(value, 0, 255))) / C.color_byte_max;
+    }
+
+    pub fn getB8(self: Self) i32 {
+        return @intFromFloat(std.math.clamp(@round(self.b * C.color_byte_max), 0, C.color_byte_max));
+    }
+
+    pub fn setB8(self: *Self, value: i32) void {
+        self.b = @as(f32, @floatFromInt(std.math.clamp(value, 0, 255))) / C.color_byte_max;
+    }
+
+    pub fn getA8(self: Self) i32 {
+        return @intFromFloat(std.math.clamp(@round(self.a * C.color_byte_max), 0, C.color_byte_max));
+    }
+
+    pub fn setA8(self: *Self, value: i32) void {
+        self.a = @as(f32, @floatFromInt(std.math.clamp(value, 0, 255))) / C.color_byte_max;
+    }
+
+    pub fn getH(self: Self) f32 {
+        const min_rg = @min(self.r, self.g);
+        const min = @min(min_rg, self.b);
+        const max_rg = @max(self.r, self.g);
+        const max = @max(max_rg, self.b);
+        const delta = max - min;
+
+        if (delta == 0) return 0;
+
+        var h: f32 = if (self.r == max)
+            (self.g - self.b) / delta
+        else if (self.g == max)
+            2 + (self.b - self.r) / delta
+        else
+            4 + (self.r - self.g) / delta;
+
+        h /= 6;
+        if (h < 0) h += 1;
+        return h;
+    }
+
+    pub fn getS(self: Self) f32 {
+        const min_rg = @min(self.r, self.g);
+        const min = @min(min_rg, self.b);
+        const max_rg = @max(self.r, self.g);
+        const max = @max(max_rg, self.b);
+        const delta = max - min;
+        return if (max != 0) delta / max else 0;
+    }
+
+    pub fn getV(self: Self) f32 {
+        const max_rg = @max(self.r, self.g);
+        return @max(max_rg, self.b);
+    }
+
+    pub fn setH(self: *Self, h: f32) void {
+        self.* = fromHsv(h, self.getS(), self.getV(), self.a);
+    }
+
+    pub fn setS(self: *Self, s: f32) void {
+        self.* = fromHsv(self.getH(), s, self.getV(), self.a);
+    }
+
+    pub fn setV(self: *Self, v: f32) void {
+        self.* = fromHsv(self.getH(), self.getS(), v, self.a);
+    }
+
+    pub fn getOkHslH(self: Self) f32 {
+        return clampOkHsl(ok_color.srgbToOkhsl(.{ .r = self.r, .g = self.g, .b = self.b }).h);
+    }
+
+    pub fn getOkHslS(self: Self) f32 {
+        return clampOkHsl(ok_color.srgbToOkhsl(.{ .r = self.r, .g = self.g, .b = self.b }).s);
+    }
+
+    pub fn getOkHslL(self: Self) f32 {
+        return clampOkHsl(ok_color.srgbToOkhsl(.{ .r = self.r, .g = self.g, .b = self.b }).l);
+    }
+
+    pub fn setOkHslH(self: *Self, h: f32) void {
+        self.* = fromOkHsl(h, self.getOkHslS(), self.getOkHslL(), self.a);
+    }
+
+    pub fn setOkHslS(self: *Self, s: f32) void {
+        self.* = fromOkHsl(self.getOkHslH(), s, self.getOkHslL(), self.a);
+    }
+
+    pub fn setOkHslL(self: *Self, l: f32) void {
+        self.* = fromOkHsl(self.getOkHslH(), self.getOkHslS(), l, self.a);
+    }
+
+    pub fn fromOkHsl(h: f32, s: f32, l: f32, alpha: f32) Self {
+        const rgb = ok_color.okhslToSrgb(.{ .h = h, .s = s, .l = l });
+        return Self.init(rgb.r, rgb.g, rgb.b, alpha).clamp(Self.black, Self.white);
+    }
+
     pub fn clamp(self: Self, min: Self, max: Self) Self {
         return .{
             .r = std.math.clamp(self.r, min.r, max.r),
@@ -367,6 +475,11 @@ pub const Color = extern struct {
         return @abs(a - b) < tolerance;
     }
 
+    fn clampOkHsl(value: f32) f32 {
+        if (std.math.isNan(value)) return 0;
+        return std.math.clamp(value, 0, 1);
+    }
+
     fn srgbChannelToLinear(value: f32) f32 {
         return if (value < 0.04045)
             value * (1.0 / 12.92)
@@ -433,6 +546,35 @@ test "Color operations" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.75), blended.a, 0.00001);
 }
 
+test "Color computed members" {
+    var value = Color.init(0.2, 0.4, 0.8, 1);
+
+    value.setR8(128);
+    value.setG8(64);
+    value.setB8(32);
+    value.setA8(255);
+    try std.testing.expectEqual(@as(i32, 128), value.getR8());
+    try std.testing.expectEqual(@as(i32, 64), value.getG8());
+    try std.testing.expectEqual(@as(i32, 32), value.getB8());
+    try std.testing.expectEqual(@as(i32, 255), value.getA8());
+
+    const hsv = Color.init(0.2, 0.4, 0.8, 1);
+    const hue = hsv.getH();
+    const saturation = hsv.getS();
+    const brightness = hsv.getV();
+    value.setH(hue);
+    value.setS(saturation);
+    value.setV(brightness);
+    try std.testing.expect(value.getH() >= 0 and value.getH() <= 1);
+
+    const okhsl = Color.fromOkHsl(0.5, 0.5, 0.5, 1);
+    try std.testing.expect(okhsl.getOkHslH() >= 0);
+    value.setOkHslH(0.25);
+    value.setOkHslS(0.5);
+    value.setOkHslL(0.5);
+    try std.testing.expect(value.getOkHslH() >= 0);
+}
+
 test "all Color methods compile" {
     const value = Color.init(0.25, 0.5, 0.75, 1);
     const other = Color.init(0.1, 0.2, 0.3, 0.4);
@@ -456,6 +598,10 @@ test "all Color methods compile" {
     std.mem.doNotOptimizeAway(Color.hex(0x11223344));
     std.mem.doNotOptimizeAway(Color.hex64(0x1122334455667788));
     std.mem.doNotOptimizeAway(Color.fromHsv(0.5, 0.5, 0.5, 1));
+    std.mem.doNotOptimizeAway(Color.fromOkHsl(0.5, 0.5, 0.5, 1));
+    std.mem.doNotOptimizeAway(value.getOkHslH());
+    std.mem.doNotOptimizeAway(value.getOkHslS());
+    std.mem.doNotOptimizeAway(value.getOkHslL());
     std.mem.doNotOptimizeAway(Color.fromRgbe9995(0x12345678));
     std.mem.doNotOptimizeAway(Color.fromRgba8(1, 2, 3, 4));
 }
@@ -468,3 +614,4 @@ test "Color constants" {
 
 const std = @import("std");
 const constants = @import("constants.zig");
+const ok_color = @import("ok_color.zig");

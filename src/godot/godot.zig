@@ -66,7 +66,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const build_options = @import("build_options");
-pub const bindings = @import("bindings/bindings.zig");
+pub const bindings = @import("bindings");
 const interface = bindings.interface;
 pub const DefaultDispatcher = bindings.Dispatcher(&.{});
 pub const engine_allocator = @import("heap.zig").engine_allocator;

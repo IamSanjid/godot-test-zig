@@ -44,6 +44,30 @@ pub fn PlaneOf(comptime Real: type) type {
             return self.normal.scale(self.d);
         }
 
+        pub fn getX(self: Self) Real {
+            return self.normal.x;
+        }
+
+        pub fn setX(self: *Self, value: Real) void {
+            self.normal.x = value;
+        }
+
+        pub fn getY(self: Self) Real {
+            return self.normal.y;
+        }
+
+        pub fn setY(self: *Self, value: Real) void {
+            self.normal.y = value;
+        }
+
+        pub fn getZ(self: Self) Real {
+            return self.normal.z;
+        }
+
+        pub fn setZ(self: *Self, value: Real) void {
+            self.normal.z = value;
+        }
+
         pub fn isPointOver(self: Self, point: V3) bool {
             return self.normal.dot(point) > self.d;
         }
@@ -138,6 +162,18 @@ pub const double = struct {
 
 /// Default single-precision alias, replaceable by a build-configuration module.
 pub const Plane = single.Plane;
+
+test "Plane component members" {
+    const P = single.Plane;
+    var plane = P.init(.{ .x = 1, .y = 2, .z = 3 }, 4);
+    try std.testing.expectEqual(@as(f32, 1), plane.getX());
+    try std.testing.expectEqual(@as(f32, 2), plane.getY());
+    try std.testing.expectEqual(@as(f32, 3), plane.getZ());
+    plane.setX(7);
+    plane.setY(8);
+    plane.setZ(9);
+    try std.testing.expectEqual(vector.single.Vector3{ .x = 7, .y = 8, .z = 9 }, plane.normal);
+}
 
 test "Plane layout" {
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(single.Plane));

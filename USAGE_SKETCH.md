@@ -35,3 +35,5 @@ the `src/godot/bindings` for internal classes and their methods + op will try to
     var getSupport_ptr: c.GDExtensionPtrBuiltInMethod = null;
 ```
 Also will expose a comptime fn to check the layout(field offsets + size).
+
+"bindings" are a completely different module, it doesn't depend on anything else.

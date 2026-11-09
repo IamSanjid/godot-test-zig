@@ -38,6 +38,11 @@ pub fn build(b: *std.Build) !void {
         "gdext_bindgen_output_dir",
         "Path to the output directory for generated files.",
     ) orelse "src/godot/bindings";
+    const gdext_interface_import = b.option(
+        []const u8,
+        "gdext_interface_import",
+        "This will be used for the godot interface module name when imported by the bindings.",
+    ) orelse "godot_interface";
     const gdext_member_init = b.option(
         MemberInitialization,
         "gdext_member_init",
@@ -72,20 +77,32 @@ pub fn build(b: *std.Build) !void {
     build_options.addOption([]const u8, "entry_point", entry_point);
     build_options.addOption(InitializationLevel, "minimum_initialization_level", minimum_initialization_level);
     build_options.addOption(struct { os_tag: std.Target.Os.Tag }, "target", .{ .os_tag = target.result.os.tag });
+    const build_options_mod = build_options.createModule();
+
+    const bindings = b.createModule(.{
+        .root_source_file = b.path("src/godot/bindings/bindings.zig"),
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = gdext_interface_import, .module = godot_interface.mod },
+        },
+        .target = target,
+        .optimize = optimize,
+    });
 
     const lib = b.addLibrary(.{
         .name = @tagName(build_zon.name),
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/entrypoint.zig"),
             .imports = &.{
-                .{ .name = "build_options", .module = build_options.createModule() },
-                .{ .name = "godot_interface", .module = godot_interface.mod },
+                .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "bindings", .module = bindings },
             },
             .target = target,
             .optimize = optimize,
         }),
         .linkage = .dynamic,
     });
+
     const install = b.addInstallFileWithDir(
         lib.getEmittedBin(),
         .{ .custom = install_dir },

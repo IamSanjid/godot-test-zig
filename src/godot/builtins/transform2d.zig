@@ -64,6 +64,26 @@ pub fn Transform2dOf(comptime Real: type) type {
             return self.columns[2];
         }
 
+        pub fn setOrigin(self: *Self, value: V2) void {
+            self.columns[2] = value;
+        }
+
+        pub fn getX(self: Self) V2 {
+            return self.columns[0];
+        }
+
+        pub fn setX(self: *Self, value: V2) void {
+            self.columns[0] = value;
+        }
+
+        pub fn getY(self: Self) V2 {
+            return self.columns[1];
+        }
+
+        pub fn setY(self: *Self, value: V2) void {
+            self.columns[1] = value;
+        }
+
         pub fn getScale(self: Self) V2 {
             const det = self.determinant();
             const sign: Real = if (det < 0) -1 else if (det > 0) 1 else 0;
@@ -278,6 +298,17 @@ pub const double = struct {
 
 /// Default single-precision alias, replaceable by a build-configuration module.
 pub const Transform2D = single.Transform2D;
+
+test "Transform2D member aliases" {
+    const T = single.Transform2D;
+    var xform = T.identity;
+    xform.setX(.{ .x = 1, .y = 2 });
+    xform.setY(.{ .x = 3, .y = 4 });
+    xform.setOrigin(.{ .x = 5, .y = 6 });
+    try std.testing.expectEqual(vector.single.Vector2{ .x = 1, .y = 2 }, xform.getX());
+    try std.testing.expectEqual(vector.single.Vector2{ .x = 3, .y = 4 }, xform.getY());
+    try std.testing.expectEqual(vector.single.Vector2{ .x = 5, .y = 6 }, xform.getOrigin());
+}
 
 test "Transform2D layout" {
     try std.testing.expectEqual(@as(usize, 24), @sizeOf(single.Transform2D));

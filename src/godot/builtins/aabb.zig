@@ -1,9 +1,8 @@
 //! Pure-Zig implementation of Godot's `AABB` builtin.
 //!
 //! An AABB is a position plus a size, both `Vector3`s. The math here mirrors
-//! `core/math/aabb.{h,cpp}`. Plane/Transform3D-dependent methods and operators
-//! (`intersects_plane`, `* Transform3D`, `not`) are intentionally left out
-//! until those builtins exist.
+//! `core/math/aabb.{h,cpp}`. The computed `end` member is exposed as
+//! `getEnd`/`setEnd`, matching Godot's `get_end`/`set_end` accessors.
 //!
 //! `intersects_segment` and `intersects_ray` are exposed as `?Vector3` instead
 //! of Godot's `Variant` return: `null` means "no intersection".
@@ -23,6 +22,10 @@ pub fn AabbOf(comptime Real: type) type {
 
         pub fn getEnd(self: Self) V3 {
             return self.position.add(self.size);
+        }
+
+        pub fn setEnd(self: *Self, end: V3) void {
+            self.size = end.sub(self.position);
         }
 
         pub fn getCenter(self: Self) V3 {
@@ -387,6 +390,14 @@ pub const double = struct {
 /// Default single-precision alias. As with `vector.zig`, precision selection can
 /// be exported from a build-configuration-aware module later.
 pub const AABB = single.AABB;
+
+test "AABB end member" {
+    const Box = single.AABB;
+    var box = Box{ .position = .{ .x = 1, .y = 2, .z = 3 }, .size = .{ .x = 4, .y = 5, .z = 6 } };
+    try std.testing.expectEqual(vector.single.Vector3{ .x = 5, .y = 7, .z = 9 }, box.getEnd());
+    box.setEnd(.{ .x = 10, .y = 20, .z = 30 });
+    try std.testing.expectEqual(vector.single.Vector3{ .x = 9, .y = 18, .z = 27 }, box.size);
+}
 
 test "AABB layout" {
     try std.testing.expectEqual(@as(usize, 24), @sizeOf(single.AABB));

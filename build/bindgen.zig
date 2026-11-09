@@ -1,6 +1,7 @@
 pub const RunOptions = struct {
     interface_json: []const u8 = "",
     output_dir: []const u8 = "",
+    interface_import: []const u8 = "godot_interface",
     member_initialization: MemberInitialization = .none,
     strip_deprecation: bool = false,
     run_step_name: []const u8 = "gen",
@@ -29,6 +30,7 @@ pub fn buildRun(b: *std.Build, opt: RunOptions) void {
     bindgen_run.expectExitCode(0);
     bindgen_run.addArg(b.fmt("--interface_json={s}", .{opt.interface_json}));
     bindgen_run.addArg(b.fmt("--output_dir={s}", .{opt.output_dir}));
+    bindgen_run.addArg(b.fmt("--interface_import={s}", .{opt.interface_import}));
     bindgen_run.addArg(b.fmt("--member_initialization={s}", .{@tagName(opt.member_initialization)}));
     bindgen_run.addArg(b.fmt("--strip_deprecation={}", .{opt.strip_deprecation}));
     bindgen_run.setCwd(b.path("."));

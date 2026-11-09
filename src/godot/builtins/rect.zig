@@ -28,6 +28,14 @@ pub fn Rect2Of(comptime Real: type) type {
             return self.position.add(self.size.scale(0.5));
         }
 
+        pub fn getEnd(self: Self) V2 {
+            return self.position.add(self.size);
+        }
+
+        pub fn setEnd(self: *Self, end: V2) void {
+            self.size = end.sub(self.position);
+        }
+
         pub fn getArea(self: Self) Real {
             return self.size.x * self.size.y;
         }
@@ -172,6 +180,14 @@ pub fn Rect2iOf(comptime T: type) type {
             return self.position.add(.{ .x = @divTrunc(self.size.x, 2), .y = @divTrunc(self.size.y, 2) });
         }
 
+        pub fn getEnd(self: Self) V2 {
+            return self.position.add(self.size);
+        }
+
+        pub fn setEnd(self: *Self, end: V2) void {
+            self.size = end.sub(self.position);
+        }
+
         pub fn getArea(self: Self) T {
             return self.size.x * self.size.y;
         }
@@ -300,6 +316,22 @@ pub const double = struct {
 /// Default single-precision aliases, replaceable by a build-configuration module.
 pub const Rect2 = single.Rect2;
 pub const Rect2i = IntRect2;
+
+test "Rect2 end member" {
+    const R = single.Rect2;
+    var rect = R.init(.{ .x = 1, .y = 2 }, .{ .x = 4, .y = 6 });
+    try std.testing.expectEqual(vector.single.Vector2{ .x = 5, .y = 8 }, rect.getEnd());
+    rect.setEnd(.{ .x = 10, .y = 12 });
+    try std.testing.expectEqual(vector.single.Vector2{ .x = 9, .y = 10 }, rect.size);
+}
+
+test "Rect2i end member" {
+    const R = Rect2i;
+    var rect = R.init(.{ .x = 1, .y = 2 }, .{ .x = 4, .y = 6 });
+    try std.testing.expectEqual(vector.single.Vector2i{ .x = 5, .y = 8 }, rect.getEnd());
+    rect.setEnd(.{ .x = 10, .y = 12 });
+    try std.testing.expectEqual(vector.single.Vector2i{ .x = 9, .y = 10 }, rect.size);
+}
 
 test "Rect2 layout" {
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(single.Rect2));

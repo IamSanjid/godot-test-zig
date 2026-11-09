@@ -133,6 +133,30 @@ pub fn BasisOf(comptime Real: type) type {
             }
         }
 
+        pub fn getX(self: Self) V3 {
+            return self.getColumn(0);
+        }
+
+        pub fn setX(self: *Self, value: V3) void {
+            self.setColumn(0, value);
+        }
+
+        pub fn getY(self: Self) V3 {
+            return self.getColumn(1);
+        }
+
+        pub fn setY(self: *Self, value: V3) void {
+            self.setColumn(1, value);
+        }
+
+        pub fn getZ(self: Self) V3 {
+            return self.getColumn(2);
+        }
+
+        pub fn setZ(self: *Self, value: V3) void {
+            self.setColumn(2, value);
+        }
+
         pub fn transposed(self: Self) Self {
             return .{ .rows = .{
                 .{ .x = self.rows[0].x, .y = self.rows[1].x, .z = self.rows[2].x },
@@ -493,6 +517,17 @@ pub const double = struct {
 
 /// Default single-precision alias, replaceable by a build-configuration module.
 pub const Basis = single.Basis;
+
+test "Basis column members" {
+    const B = single.Basis;
+    var basis = B.identity;
+    basis.setX(.{ .x = 1, .y = 2, .z = 3 });
+    basis.setY(.{ .x = 4, .y = 5, .z = 6 });
+    basis.setZ(.{ .x = 7, .y = 8, .z = 9 });
+    try std.testing.expectEqual(vec.single.Vector3{ .x = 1, .y = 2, .z = 3 }, basis.getX());
+    try std.testing.expectEqual(vec.single.Vector3{ .x = 4, .y = 5, .z = 6 }, basis.getY());
+    try std.testing.expectEqual(vec.single.Vector3{ .x = 7, .y = 8, .z = 9 }, basis.getZ());
+}
 
 test "Basis layout" {
     try std.testing.expectEqual(@as(usize, 36), @sizeOf(single.Basis));

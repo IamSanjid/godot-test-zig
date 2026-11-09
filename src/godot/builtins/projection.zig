@@ -33,6 +33,38 @@ pub fn ProjectionOf(comptime Real: type) type {
         pub const identity: Self = .{};
         pub const zero: Self = .{ .columns = .{ .zero, .zero, .zero, .zero } };
 
+        pub fn getX(self: Self) V4 {
+            return self.columns[0];
+        }
+
+        pub fn setX(self: *Self, value: V4) void {
+            self.columns[0] = value;
+        }
+
+        pub fn getY(self: Self) V4 {
+            return self.columns[1];
+        }
+
+        pub fn setY(self: *Self, value: V4) void {
+            self.columns[1] = value;
+        }
+
+        pub fn getZ(self: Self) V4 {
+            return self.columns[2];
+        }
+
+        pub fn setZ(self: *Self, value: V4) void {
+            self.columns[2] = value;
+        }
+
+        pub fn getW(self: Self) V4 {
+            return self.columns[3];
+        }
+
+        pub fn setW(self: *Self, value: V4) void {
+            self.columns[3] = value;
+        }
+
         pub fn determinant(self: Self) Real {
             var matrix: [4][4]Real = undefined;
             for (0..4) |row| {
@@ -547,6 +579,23 @@ pub const double = struct {
 
 /// Default single-precision alias, replaceable by a build-configuration module.
 pub const Projection = single.Projection;
+
+test "Projection member aliases" {
+    const P = single.Projection;
+    var projection = P.identity;
+    const x_value = vector.single.Vector4{ .x = 1, .y = 2, .z = 3, .w = 4 };
+    const y_value = vector.single.Vector4{ .x = 5, .y = 6, .z = 7, .w = 8 };
+    const z_value = vector.single.Vector4{ .x = 9, .y = 10, .z = 11, .w = 12 };
+    const w_value = vector.single.Vector4{ .x = 13, .y = 14, .z = 15, .w = 16 };
+    projection.setX(x_value);
+    projection.setY(y_value);
+    projection.setZ(z_value);
+    projection.setW(w_value);
+    try std.testing.expectEqual(x_value, projection.getX());
+    try std.testing.expectEqual(y_value, projection.getY());
+    try std.testing.expectEqual(z_value, projection.getZ());
+    try std.testing.expectEqual(w_value, projection.getW());
+}
 
 test "Projection layout" {
     try std.testing.expectEqual(@as(usize, 64), @sizeOf(single.Projection));
