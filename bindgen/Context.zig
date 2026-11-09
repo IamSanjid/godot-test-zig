@@ -23,7 +23,7 @@ pub fn init(arena: Allocator, io: Io, options: Options) !Context {
         return err;
     };
 
-    const interface_wrapper_path = try std.fs.path.join(arena, &.{ options.output_dir, "interface_wrapper.zig" });
+    const interface_wrapper_path = try std.fs.path.join(arena, &.{ options.output_dir, "interface.zig" });
     const interface_wrapper = Io.Dir.cwd().createFile(io, interface_wrapper_path, .{}) catch |err| {
         std.log.err("Failed to create interface wrapper file `{s}`: {}", .{ interface_wrapper_path, err });
         return err;

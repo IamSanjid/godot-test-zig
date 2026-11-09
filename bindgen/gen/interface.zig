@@ -1,9 +1,15 @@
-//! GDExtension interface table emission.
+//! GDExtension interface tag/type emission.
 //!
 //! `InterfaceJson.interface` describes the functions resolved through
-//! `GDExtensionInterfaceGetProcAddress`. The generated `Procs` struct holds
-//! one non-optional function pointer per entry and an `init` helper that loads
-//! every pointer, failing with a diagnostic that names the missing function.
+//! `GDExtensionInterfaceGetProcAddress`. The generated file exposes:
+//!
+//! * `ProcsTag`: an enum of raw interface names, for table indexing.
+//! * `ProcsTypes`: one `pub const <raw_name> = *const fn (...) ...` alias per
+//!   interface function.
+//!
+//! Raw C names are kept verbatim; no case conversion is applied.
+//! Documentation, argument documentation, `Since`, and deprecation notes are
+//! attached to both the enum tags and the type aliases.
 
 pub fn emit(
     writer: *Io.Writer,
@@ -11,31 +17,28 @@ pub fn emit(
     functions: []const InterfaceJson.InterfaceFunction,
     strip_deprecation: bool,
 ) !void {
-    var field_count: usize = 0;
-    for (functions) |function| {
-        if (isStripped(function, strip_deprecation)) continue;
-        field_count += 1;
-    }
-
-    // The get-proc-address typedef is itself part of the wrapper. Fall back to
-    // the translated declaration if a future interface JSON drops it.
-    const get_proc_address_type = if (registry.get("GDExtensionInterfaceGetProcAddress")) |entry|
-        entry.zig
-    else
-        "gdi.GDExtensionInterfaceGetProcAddress";
-
-    try writer.writeAll("pub const Procs = struct {\n");
-
+    try writer.writeAll("pub const ProcsTag = enum {\n");
     for (functions) |function| {
         if (isStripped(function, strip_deprecation)) continue;
 
         try writeComment(writer, registry, function);
         try writer.writeAll("    ");
-        try common.writeIdent(writer, .camel, function.name);
-        try writer.writeAll(": *const fn (");
+        try writeRawIdent(writer, function.name);
+        try writer.writeAll(",\n");
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll("pub const ProcsTypes = struct {\n");
+    for (functions) |function| {
+        if (isStripped(function, strip_deprecation)) continue;
+
+        try writeComment(writer, registry, function);
+        try writer.writeAll("    pub const ");
+        try writeRawIdent(writer, function.name);
+        try writer.writeAll(" = *const fn (");
         for (function.arguments, 0..) |argument, index| {
             if (argument.name) |name| {
-                try common.writeIdent(writer, .snake, name);
+                try writeRawIdent(writer, name);
                 try writer.writeAll(": ");
             }
             try common.writeType(writer, registry, argument.type);
@@ -47,57 +50,67 @@ pub fn emit(
         } else {
             try writer.writeAll("void");
         }
-        try writer.writeAll(",\n");
+        try writer.writeAll(";\n");
     }
+    try writer.writeAll("};\n");
+}
 
-    try writer.writeAll(
-        \\
-        \\    pub const Diagnostics = struct {
-        \\        function: [64]u8 = @splat(0),
-        \\
-        \\        pub const Where = struct {
-        \\            function: []const u8,
-        \\        };
-        \\
-        \\        pub fn fail(maybe_diags: ?*Diagnostics, where: Where, err: anyerror) anyerror {
-        \\            const diags = maybe_diags orelse return err;
-        \\            std.mem.copyForwards(u8, diags.function[0..], where.function);
-        \\            return err;
-        \\        }
-        \\
-        \\        pub fn format(self: Diagnostics, w: *std.Io.Writer) !void {
-        \\            try w.print("Function: {s}", .{std.mem.sliceTo(&self.function, 0)});
-        \\        }
-        \\    };
-        \\
-    );
-
-    try writer.print(
-        "    pub fn init(getProcAddress: Child({s}), diags: ?*Diagnostics) !@This() {{\n",
-        .{get_proc_address_type},
-    );
-    if (field_count == 0) {
-        try writer.writeAll("        return .{};\n");
+fn writeRawIdent(writer: *Io.Writer, name: []const u8) !void {
+    if (std.zig.isValidId(name)) {
+        try writer.writeAll(name);
     } else {
-        try writer.writeAll("        return .{\n");
-        for (functions) |function| {
-            if (isStripped(function, strip_deprecation)) continue;
-
-            try writer.writeAll("            .");
-            try common.writeIdent(writer, .camel, function.name);
-            try writer.print(
-                " = @ptrCast(getProcAddress(\"{s}\") orelse return Diagnostics.fail(diags, .{{ .function = \"{s}\" }}, error.FunctionNotFound)),\n",
-                .{ function.name, function.name },
-            );
-        }
-        try writer.writeAll("        };\n");
+        try writer.print("@\"{s}\"", .{name});
     }
-    try writer.writeAll("    }\n};\n");
 }
 
 fn writeComment(writer: *Io.Writer, registry: Registry, function: InterfaceJson.InterfaceFunction) !void {
-    try common.writeDesc(writer, function.description, 4, 3);
-    if (function.description.len != 0) try writer.writeAll("    ///\n");
+    var wrote_content = false;
+
+    if (function.description.len != 0) {
+        try common.writeDesc(writer, function.description, 4, 3);
+        wrote_content = true;
+    }
+
+    if (function.return_value) |return_value| {
+        if (return_value.description) |description| {
+            if (description.len != 0) {
+                if (wrote_content) try writer.writeAll("    ///\n");
+                try writer.writeAll("    /// Returns:\n");
+                for (description) |line| {
+                    try writer.print("    ///   {s}\n", .{line});
+                }
+                wrote_content = true;
+            }
+        }
+    }
+
+    var has_argument_docs = false;
+    for (function.arguments) |argument| {
+        if (argument.description) |description| {
+            if (description.len != 0) {
+                has_argument_docs = true;
+                break;
+            }
+        }
+    }
+
+    if (has_argument_docs) {
+        if (wrote_content) try writer.writeAll("    ///\n");
+        try writer.writeAll("    /// Arguments:\n");
+        for (function.arguments) |argument| {
+            const description = argument.description orelse continue;
+            if (description.len == 0) continue;
+
+            const name = argument.name orelse "arg";
+            try writer.print("    ///   {s}: {s}\n", .{ name, description[0] });
+            for (description[1..]) |line| {
+                try writer.print("    ///       {s}\n", .{line});
+            }
+        }
+        wrote_content = true;
+    }
+
+    if (wrote_content) try writer.writeAll("    ///\n");
 
     try writer.print("    /// Since: {s}\n", .{function.since});
     try common.writeDeprecated(writer, registry, function.deprecated, 4, 3);
@@ -113,23 +126,33 @@ fn isStripped(function: InterfaceJson.InterfaceFunction, strip_deprecation: bool
     return strip_deprecation and function.deprecated != null;
 }
 
-test "interface table and init" {
+test "interface tags and type aliases" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
 
     const types = [_]InterfaceJson.TypeDecl{
         .{ .name = "GDExtensionInterfaceGetProcAddress", .data = .{ .function = .{ .arguments = &.{} } } },
-        .{ .name = "GDExtensionInterfaceFunctionPtr", .data = .{ .function = .{ .arguments = &.{} } } },
     };
     const registry = try Registry.init(arena_state.allocator(), &types, false);
 
     const functions = [_]InterfaceJson.InterfaceFunction{
         .{
             .name = "mem_alloc2",
-            .return_value = .{ .type = "void*" },
+            .return_value = .{
+                .type = "void*",
+                .description = &.{"A pointer to the allocated memory."},
+            },
             .arguments = &.{
-                .{ .name = "p_bytes", .type = "size_t" },
-                .{ .name = "p_padding", .type = "GDExtensionBool" },
+                .{
+                    .name = "p_bytes",
+                    .type = "size_t",
+                    .description = &.{"The amount of memory to allocate in bytes."},
+                },
+                .{
+                    .name = "p_padding",
+                    .type = "GDExtensionBool",
+                    .description = &.{"Whether to request padding."},
+                },
             },
             .description = &.{"Allocates memory."},
             .since = "4.6",
@@ -148,18 +171,27 @@ test "interface table and init" {
     try emit(&aw.writer, registry, &functions, false);
 
     const output = aw.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "pub const Procs = struct {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "memAlloc2: *const fn (p_bytes: usize, p_padding: bool) callconv(.c) ?*anyopaque,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ".memAlloc2 = @ptrCast(getProcAddress(\"mem_alloc2\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "pub const Diagnostics = struct {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "pub fn init(getProcAddress: Child(InterfaceGetProcAddress)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub const ProcsTag = enum {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub const ProcsTypes = struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\n    mem_alloc2,\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub const mem_alloc2 = *const fn (p_bytes: usize, p_padding: bool) callconv(.c) ?*anyopaque;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "/// Arguments:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "///   p_bytes: The amount of memory to allocate in bytes.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "/// Returns:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "/// Since: 4.6") != null);
 
-    // Deprecation filtering omits the whole field and its initializer.
+    // No camel-case conversion and no generated loader.
+    try std.testing.expect(std.mem.indexOf(u8, output, "memAlloc2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub const Procs = struct") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Diagnostics") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub fn init") == null);
+
+    // Deprecation filtering omits both the tag and the type alias.
     var stripped: Io.Writer.Allocating = .init(std.testing.allocator);
     defer stripped.deinit();
     try emit(&stripped.writer, registry, &functions, true);
-    try std.testing.expect(std.mem.indexOf(u8, stripped.writer.buffered(), "oldFunction") == null);
-    try std.testing.expect(std.mem.indexOf(u8, stripped.writer.buffered(), "memAlloc2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped.writer.buffered(), "old_function") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stripped.writer.buffered(), "mem_alloc2") != null);
 }
 
 const std = @import("std");

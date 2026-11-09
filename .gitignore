@@ -1,4 +1,6 @@
 .zig-cache/
 zig-pkg/
 zig-out/
-src/godot/bindings/
+src/godot/bindings/*
+# We need this for exposing and direct access through `godot.bindgen` instead of our "auto" layer.
+!src/godot/bindings/bindings.zig
