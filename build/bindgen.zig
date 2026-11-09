@@ -1,4 +1,4 @@
-pub const RunOptions = struct {
+pub const BuildRunOptions = struct {
     interface_json: []const u8 = "",
     output_dir: []const u8 = "",
     interface_import: []const u8 = "godot_interface",
@@ -8,12 +8,12 @@ pub const RunOptions = struct {
     casez: *std.Build.Module,
 };
 
-pub const TestOptions = struct {
+pub const BuildTestOptions = struct {
     test_step_name: []const u8 = "test-bindgen",
     casez: *std.Build.Module,
 };
 
-pub fn buildRun(b: *std.Build, opt: RunOptions) void {
+pub fn buildRun(b: *std.Build, opt: BuildRunOptions) void {
     const bindgen = b.addExecutable(.{
         .name = "bindgen",
         .root_module = b.createModule(.{
@@ -36,11 +36,11 @@ pub fn buildRun(b: *std.Build, opt: RunOptions) void {
     bindgen_run.setCwd(b.path("."));
     bindgen_run.addPassthruArgs();
 
-    const bindgen_step = b.step(opt.run_step_name, "Generate godot bindgen");
+    const bindgen_step = b.step(opt.run_step_name, "Generate godot bindings");
     bindgen_step.dependOn(&bindgen_run.step);
 }
 
-pub fn buildTest(b: *std.Build, opt: TestOptions) void {
+pub fn buildTest(b: *std.Build, opt: BuildTestOptions) void {
     const bindgen_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .optimize = .debug,
