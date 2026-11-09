@@ -77,12 +77,10 @@ pub fn build(b: *std.Build) !void {
     build_options.addOption([]const u8, "entry_point", entry_point);
     build_options.addOption(InitializationLevel, "minimum_initialization_level", minimum_initialization_level);
     build_options.addOption(struct { os_tag: std.Target.Os.Tag }, "target", .{ .os_tag = target.result.os.tag });
-    const build_options_mod = build_options.createModule();
 
     const bindings = b.createModule(.{
         .root_source_file = b.path("src/godot/bindings/bindings.zig"),
         .imports = &.{
-            .{ .name = "build_options", .module = build_options_mod },
             .{ .name = gdext_interface_import, .module = godot_interface.mod },
         },
         .target = target,
@@ -94,7 +92,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/entrypoint.zig"),
             .imports = &.{
-                .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "build_options", .module = build_options.createModule() },
                 .{ .name = "bindings", .module = bindings },
             },
             .target = target,
