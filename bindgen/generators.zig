@@ -4,6 +4,7 @@
 //! 1. enums, handles and aliases, in interface-JSON order,
 //! 2. structs and function typedefs, in interface-JSON order,
 //! 3. the `ProcsTag`/`ProcsTypes` interface declarations.
+//! 4. one file per builtin class under `output_dir/builtins/`.
 //!
 //! Structs/functions are emitted last because they are the bulk of the file and
 //! reading the low-level typedefs first makes the generated wrapper easier to
@@ -69,6 +70,8 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
     try interface_gen.emit(writer, registry, interface_json.interface, options.strip_deprecation);
     try writer.writeAll("\n");
 
+    try builtin_gen.generate(arena, io, context.extension_api_json, options);
+
     try writer.print("const gdi = @import(\"{s}\");\n", .{options.interface_import});
 }
 
@@ -96,3 +99,4 @@ const alias_gen = @import("gen/alias.zig");
 const structure_gen = @import("gen/structure.zig");
 const function_gen = @import("gen/function.zig");
 const interface_gen = @import("gen/interface.zig");
+const builtin_gen = @import("gen/builtin.zig");

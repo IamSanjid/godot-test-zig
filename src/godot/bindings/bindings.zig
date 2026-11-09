@@ -1,7 +1,7 @@
 pub fn Dispatcher(comptime procs_tags: []const interface.ProcsTag) type {
     const tags_type_info = @typeInfo(interface.ProcsTag).@"enum";
 
-    const Procs = if (procs_tags.len == 0) blk: {
+    const ProcsT = if (procs_tags.len == 0) blk: {
         var field_types: [tags_type_info.field_names.len]type = undefined;
         for (tags_type_info.field_names, 0..) |field_name, i| {
             field_types[i] = @field(interface.ProcsTypes, field_name);
@@ -22,6 +22,7 @@ pub fn Dispatcher(comptime procs_tags: []const interface.ProcsTag) type {
         procs: Procs,
 
         const Self = @This();
+        pub const Procs = ProcsT;
         pub const Diagnostics = struct {
             function: [64]u8 = @splat(0),
 

@@ -1,5 +1,10 @@
 interface_json: []const u8,
+/// Godot's `extension_api.json` dump.
+extension_api_json: []const u8,
 output_dir: []const u8,
+/// Builtin layout configuration selected from `builtin_class_sizes` and
+/// `builtin_class_member_offsets`.
+builtin_build_conf: BuiltinBuildConf = .float_64,
 interface_import: []const u8 = "godot_interface",
 /// How members of generated `extern struct`s are initialized.
 member_initialization: MemberInitialization = .none,
@@ -7,6 +12,13 @@ member_initialization: MemberInitialization = .none,
 strip_deprecation: bool = false,
 
 const Options = @This();
+
+pub const BuiltinBuildConf = enum {
+    float_32,
+    float_64,
+    double_32,
+    double_64,
+};
 
 pub const MemberInitialization = enum {
     /// Do not write a default initializer (the current/previous behavior).
@@ -112,18 +124,23 @@ const Io = std.Io;
 test "member initialization option parses and formats" {
     const options = try Options.parseFromArgs(&.{
         "--interface_json=in.json",
+        "--extension_api_json=extension_api.json",
         "--output_dir=out",
+        "--builtin_build_conf=double_32",
         "--member_initialization=zero",
         "--strip_deprecation=true",
     });
     try std.testing.expectEqual(Options.MemberInitialization.zero, options.member_initialization);
+    try std.testing.expectEqual(Options.BuiltinBuildConf.double_32, options.builtin_build_conf);
     try std.testing.expect(options.strip_deprecation);
 
     const default_options = try Options.parseFromArgs(&.{
         "--interface_json=in.json",
+        "--extension_api_json=extension_api.json",
         "--output_dir=out",
     });
     try std.testing.expectEqual(Options.MemberInitialization.none, default_options.member_initialization);
+    try std.testing.expectEqual(Options.BuiltinBuildConf.float_64, default_options.builtin_build_conf);
 
     // The formatted help must show the name the parser accepts, not `.zero`.
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);

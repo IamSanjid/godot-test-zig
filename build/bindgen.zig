@@ -1,8 +1,10 @@
 pub const BuildRunOptions = struct {
     interface_json: []const u8 = "",
+    extension_api_json: []const u8 = "",
     output_dir: []const u8 = "",
     interface_import: []const u8 = "godot_interface",
     member_initialization: MemberInitialization = .none,
+    builtin_build_conf: BuiltinBuildConf = .float_64,
     strip_deprecation: bool = false,
     run_step_name: []const u8 = "gen",
     casez: *std.Build.Module,
@@ -29,9 +31,11 @@ pub fn buildRun(b: *std.Build, opt: BuildRunOptions) void {
     const bindgen_run = b.addRunArtifact(bindgen);
     bindgen_run.expectExitCode(0);
     bindgen_run.addArg(b.fmt("--interface_json={s}", .{opt.interface_json}));
+    bindgen_run.addArg(b.fmt("--extension_api_json={s}", .{opt.extension_api_json}));
     bindgen_run.addArg(b.fmt("--output_dir={s}", .{opt.output_dir}));
     bindgen_run.addArg(b.fmt("--interface_import={s}", .{opt.interface_import}));
     bindgen_run.addArg(b.fmt("--member_initialization={s}", .{@tagName(opt.member_initialization)}));
+    bindgen_run.addArg(b.fmt("--builtin_build_conf={s}", .{@tagName(opt.builtin_build_conf)}));
     bindgen_run.addArg(b.fmt("--strip_deprecation={}", .{opt.strip_deprecation}));
     bindgen_run.setCwd(b.path("."));
     bindgen_run.addPassthruArgs();
@@ -59,3 +63,4 @@ pub fn buildTest(b: *std.Build, opt: BuildTestOptions) void {
 const std = @import("std");
 
 pub const MemberInitialization = @import("../bindgen/Options.zig").MemberInitialization;
+pub const BuiltinBuildConf = @import("../bindgen/Options.zig").BuiltinBuildConf;

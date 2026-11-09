@@ -3,6 +3,7 @@
 
 test {
     _ = @import("Options.zig");
+    _ = @import("ExtensionApiJson.zig");
     _ = @import("gen/Registry.zig");
     _ = @import("gen/common.zig");
     _ = @import("gen/enum.zig");
@@ -11,4 +12,5 @@ test {
     _ = @import("gen/structure.zig");
     _ = @import("gen/function.zig");
     _ = @import("gen/interface.zig");
+    _ = @import("gen/builtin.zig");
 }

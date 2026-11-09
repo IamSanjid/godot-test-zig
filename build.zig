@@ -33,6 +33,16 @@ pub fn build(b: *std.Build) !void {
         "gdext_interface_json",
         "Path to the GDExtension interface json file.",
     ) orelse "gd_interface/gdextension_interface.json";
+    const gdext_extension_api_json = b.option(
+        []const u8,
+        "gdext_extension_api_json",
+        "Path to the Godot extension_api.json file.",
+    ) orelse "gd_interface/extension_api.json";
+    const gdext_builtin_build_conf = b.option(
+        bindgen.BuiltinBuildConf,
+        "gdext_builtin_build_conf",
+        "Builtin class layout build configuration.",
+    ) orelse .float_64;
     const gdext_bindgen_output_dir = b.option(
         []const u8,
         "gdext_bindgen_output_dir",
@@ -66,8 +76,11 @@ pub fn build(b: *std.Build) !void {
 
     bindgen.buildRun(b, .{
         .interface_json = gdext_interface_json,
+        .extension_api_json = gdext_extension_api_json,
         .output_dir = gdext_bindgen_output_dir,
+        .interface_import = gdext_interface_import,
         .member_initialization = gdext_member_init,
+        .builtin_build_conf = gdext_builtin_build_conf,
         .strip_deprecation = gdext_strip_deprecation,
         .casez = casez,
     });

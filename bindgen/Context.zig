@@ -1,6 +1,7 @@
 arena: Allocator,
 io: Io,
 interface_json: InterfaceJson, // content
+extension_api_json: ExtensionApiJson,
 interface_wrapper: Io.File,
 
 const Context = @This();
@@ -18,6 +19,16 @@ pub fn init(arena: Allocator, io: Io, options: Options) !Context {
         interface_json_bytes;
     const interface_json_parsed = try InterfaceJson.parse(arena, json_bytes);
 
+    const extension_api_bytes = Io.Dir.cwd().readFileAlloc(io, options.extension_api_json, arena, .unlimited) catch |err| {
+        std.log.err("Failed to read extension api json file: {}", .{err});
+        return err;
+    };
+    const extension_api_json_bytes = if (std.mem.startsWith(u8, extension_api_bytes, "\xEF\xBB\xBF"))
+        extension_api_bytes[3..]
+    else
+        extension_api_bytes;
+    const extension_api_json_parsed = try ExtensionApiJson.parse(arena, extension_api_json_bytes);
+
     Io.Dir.cwd().createDirPath(io, options.output_dir) catch |err| {
         std.log.err("Failed to create output directory `{s}`: {}", .{ options.output_dir, err });
         return err;
@@ -33,6 +44,7 @@ pub fn init(arena: Allocator, io: Io, options: Options) !Context {
         .arena = arena,
         .io = io,
         .interface_json = interface_json_parsed.value,
+        .extension_api_json = extension_api_json_parsed.value,
         .interface_wrapper = interface_wrapper,
     };
 }
@@ -47,3 +59,4 @@ const Io = std.Io;
 
 const Options = @import("Options.zig");
 const InterfaceJson = @import("InterfaceJson.zig");
+const ExtensionApiJson = @import("ExtensionApiJson.zig");
