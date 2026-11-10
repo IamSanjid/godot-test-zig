@@ -5,7 +5,7 @@ pub fn generate(
     io: Io,
     api: ExtensionApiJson,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
 ) !void {
     const utility_dir = try std.fs.path.join(arena, &.{ options.output_dir, "utility" });
     Io.Dir.cwd().createDirPath(io, utility_dir) catch |err| {
@@ -44,7 +44,7 @@ fn writeCategory(
     io: Io,
     api: ExtensionApiJson,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     category: []const u8,
 ) !void {
     const file_name = try names.snake(arena, category);
@@ -113,7 +113,7 @@ fn writeAggregator(
 fn writeFunction(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     function: ExtensionApiJson.UtilityFunction,
 ) !void {
     try docs.write(writer, arena, function.description, 0, "///");
@@ -223,43 +223,12 @@ fn writeFunction(
 
 fn resolveType(
     writer: *Io.Writer,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: ClassResolver.TypeContext,
+    context: class_resolver.TypeContext,
 ) !void {
-    const resolved = try resolver.resolve(raw, context);
-    if (resolved.import_class) |class_name| {
-        const info = resolver.get(class_name) orelse {
-            try writer.writeAll(resolved.zig);
-            return;
-        };
-        switch (resolved.kind) {
-            .class_ptr => {
-                if (std.mem.startsWith(u8, resolved.zig, "?*")) try writer.writeAll("?*") else try writer.writeAll("*");
-                try writeClassRef(writer, info);
-                return;
-            },
-            .@"enum" => {
-                try writeClassRef(writer, info);
-                const dot = std.mem.lastIndexOfScalar(u8, resolved.zig, '.') orelse {
-                    return;
-                };
-                try writer.writeAll(resolved.zig[dot..]);
-                return;
-            },
-            else => {},
-        }
-    }
+    const resolved = try resolver.resolveFor(raw, context, .utility_file);
     try writer.writeAll(resolved.zig);
-}
-
-fn writeClassRef(writer: *Io.Writer, info: *const ClassResolver.Info) !void {
-    try writer.writeAll("classes.");
-    if (info.class.api_type) |api_type| {
-        try common.writeIdent(writer, .snake, api_type);
-        try writer.writeAll(".");
-    }
-    try names.writeRawIdent(writer, info.class.name);
 }
 
 const std = @import("std");
@@ -270,6 +239,6 @@ const common = @import("common.zig");
 const custom_code = @import("custom.zig");
 const docs = @import("docs.zig");
 const names = @import("names.zig");
-const ClassResolver = @import("ClassResolver.zig");
+const class_resolver = @import("class_resolver.zig");
 const ExtensionApiJson = @import("../ExtensionApiJson.zig");
 const Options = @import("../Options.zig");

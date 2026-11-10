@@ -21,7 +21,7 @@ test {
     _ = @import("gen/global.zig");
     _ = @import("gen/defaults.zig");
     _ = @import("gen/custom.zig");
-    _ = @import("gen/ClassResolver.zig");
+    _ = @import("gen/class_resolver.zig");
     _ = @import("gen/class.zig");
     _ = @import("gen/singleton.zig");
     _ = @import("gen/native.zig");

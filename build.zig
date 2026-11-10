@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) !void {
         "This will be used for the godot interface module name when imported by the bindings.",
     ) orelse "godot_interface";
     const gdext_member_init = b.option(
-        MemberInitialization,
+        bindgen.MemberInitialization,
         "gdext_member_init",
         "Member initialization for gdextension interface extern structs.",
     ) orelse .zero;
@@ -82,9 +82,13 @@ pub fn build(b: *std.Build) !void {
         .member_initialization = gdext_member_init,
         .builtin_build_conf = gdext_builtin_build_conf,
         .strip_deprecation = gdext_strip_deprecation,
+        .parent_step = b.step("bindgen", "Generate godot bindings"),
         .casez = casez,
     });
-    bindgen.buildTest(b, .{ .casez = casez });
+    bindgen.buildTest(b, .{
+        .parent_step = b.step("test-bindgen", "Run bindgen unit tests"),
+        .casez = casez,
+    });
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "entry_point", entry_point);
@@ -159,4 +163,3 @@ const findFiles = ff.findFiles;
 pub const AddFilesOptions = ff.Options;
 
 const bindgen = @import("build/bindgen.zig");
-const MemberInitialization = bindgen.MemberInitialization;

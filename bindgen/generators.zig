@@ -74,15 +74,16 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
     try custom_code.writeRaw(writer, interface_custom.namespace_code);
     try writer.writeAll("\n");
 
-    try builtin_gen.generate(arena, io, context.extension_api_json, options);
+    const builtin_registry = try builtin_catalog.BuiltinCatalog.init(arena, io, context.extension_api_json, options);
+    const real_name = types.realTypeName(options.builtin_build_conf);
+    const resolver = try class_resolver.ClassResolver.init(arena, context.extension_api_json, real_name, &builtin_registry);
+    try builtin_gen.generate(arena, io, context.extension_api_json, options, &builtin_registry, &resolver);
     try global_gen.generate(arena, io, context.extension_api_json, options);
 
-    const real_name = types.realTypeName(options.builtin_build_conf);
-    const class_resolver = try ClassResolver.Resolver.init(arena, context.extension_api_json, real_name);
-    try class_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
-    try singleton_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
-    try native_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
-    try utility_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
+    try class_gen.generate(arena, io, context.extension_api_json, options, &resolver);
+    try singleton_gen.generate(arena, io, context.extension_api_json, options, &resolver);
+    try native_gen.generate(arena, io, context.extension_api_json, options, &resolver);
+    try utility_gen.generate(arena, io, context.extension_api_json, options, &resolver);
 
     try writer.print("const gdi = @import(\"{s}\");\n", .{options.interface_import});
 }
@@ -117,6 +118,7 @@ const class_gen = @import("gen/class.zig");
 const singleton_gen = @import("gen/singleton.zig");
 const native_gen = @import("gen/native.zig");
 const utility_gen = @import("gen/utility.zig");
-const ClassResolver = @import("gen/ClassResolver.zig");
+const class_resolver = @import("gen/class_resolver.zig");
 const types = @import("gen/types.zig");
+const builtin_catalog = @import("gen/builtin_catalog.zig");
 const custom_code = @import("gen/custom.zig");

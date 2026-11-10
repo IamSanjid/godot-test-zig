@@ -5,7 +5,7 @@ pub fn generate(
     io: Io,
     api: ExtensionApiJson,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
 ) !void {
     const path = try std.fs.path.join(arena, &.{ options.output_dir, "native.zig" });
     const file = Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
@@ -88,7 +88,7 @@ fn parseMember(input: []const u8) ?Member {
 fn writeNativeType(
     writer: *Io.Writer,
     api: ExtensionApiJson,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     raw_type: []const u8,
     pointer: bool,
     real_name: []const u8,
@@ -132,12 +132,12 @@ fn writeNativeType(
     try names.writeRawIdent(writer, raw_type);
 }
 
-fn writeClassRef(writer: *Io.Writer, info: *const ClassResolver.Info) !void {
+fn writeClassRef(writer: *Io.Writer, info: *const class_resolver.Info) !void {
     try writer.writeAll("*");
     try classesClassRef(writer, info);
 }
 
-fn classesClassRef(writer: *Io.Writer, info: *const ClassResolver.Info) !void {
+fn classesClassRef(writer: *Io.Writer, info: *const class_resolver.Info) !void {
     try writer.writeAll("classes.");
     if (info.class.api_type) |api_type| {
         try common.writeIdent(writer, .snake, api_type);
@@ -192,6 +192,6 @@ const common = @import("common.zig");
 const custom_code = @import("custom.zig");
 const names = @import("names.zig");
 const types = @import("types.zig");
-const ClassResolver = @import("ClassResolver.zig");
+const class_resolver = @import("class_resolver.zig");
 const ExtensionApiJson = @import("../ExtensionApiJson.zig");
 const Options = @import("../Options.zig");

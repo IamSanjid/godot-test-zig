@@ -9,7 +9,7 @@ pub fn generate(
     io: Io,
     api: ExtensionApiJson,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
 ) !void {
     const classes_dir = try std.fs.path.join(arena, &.{ options.output_dir, "classes" });
     Io.Dir.cwd().createDirPath(io, classes_dir) catch |err| {
@@ -56,7 +56,7 @@ fn writeApiAggregator(
     arena: Allocator,
     io: Io,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     api_type: []const u8,
 ) !void {
     var entries: [4096]AggregatorEntry = undefined;
@@ -105,7 +105,7 @@ fn writeRootAggregator(
     arena: Allocator,
     io: Io,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
 ) !void {
     var api_types: [16][]const u8 = undefined;
     var api_count: usize = 0;
@@ -200,8 +200,8 @@ fn customDeclaresFunction(code: []const u8, name: []const u8) bool {
 fn loadClassCustom(
     arena: Allocator,
     io: Io,
-    resolver: *const ClassResolver.Resolver,
-    info: *const ClassResolver.Info,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
 ) !custom_code.Sections {
     const relative_path = try resolver.path(arena, info);
     const own = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
@@ -247,8 +247,8 @@ fn emitClass(
     io: Io,
     api: ExtensionApiJson,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
-    info: *const ClassResolver.Info,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
 ) !void {
     const class = info.class;
     const singleton = isSingleton(api, class.name);
@@ -285,6 +285,8 @@ fn emitClass(
         try names.writeRawIdent(writer, resolver.zigClassName(base_name));
         try writer.writeAll(";\n\n");
         try imports.add(base_name);
+    } else {
+        try writer.writeAll("    pub const Extends = void;\n\n");
     }
 
     try writeClassConstants(writer, arena, resolver, info);
@@ -373,9 +375,9 @@ fn isSingleton(api: ExtensionApiJson, name: []const u8) bool {
 fn writeVirtualStruct(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
-    info: *const ClassResolver.Info,
+    info: *const class_resolver.Info,
     real_name: []const u8,
     sections: custom_code.Sections,
     imports: *ImportSet,
@@ -390,9 +392,9 @@ fn writeVirtualStruct(
 fn writeVirtualGroup(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
-    info: *const ClassResolver.Info,
+    info: *const class_resolver.Info,
     real_name: []const u8,
     sections: custom_code.Sections,
     imports: *ImportSet,
@@ -437,12 +439,12 @@ fn writeVirtualGroup(
 fn writeClassConstants(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
-    info: *const ClassResolver.Info,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
 ) !void {
     var seen: [512][]const u8 = undefined;
     var seen_count: usize = 0;
-    var current: ?*const ClassResolver.Info = info;
+    var current: ?*const class_resolver.Info = info;
     while (current) |class_info| {
         for (class_info.class.constants) |constant| {
             if (hasMethodName(seen[0..seen_count], constant.name)) continue;
@@ -460,8 +462,8 @@ fn writeClassConstants(
 fn writeClassSignals(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
-    info: *const ClassResolver.Info,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
     real_name: []const u8,
     class: *const ExtensionApiJson.Class,
     sections: custom_code.Sections,
@@ -469,7 +471,7 @@ fn writeClassSignals(
 ) !void {
     var seen: [2048][]const u8 = undefined;
     var seen_count: usize = 0;
-    var current: ?*const ClassResolver.Info = info;
+    var current: ?*const class_resolver.Info = info;
     while (current) |class_info| {
         for (class_info.class.signals) |signal| {
             if (hasMethodName(seen[0..seen_count], signal.name)) continue;
@@ -484,7 +486,7 @@ fn writeClassSignals(
 fn writeClassSignal(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
     signal: ExtensionApiJson.ClassSignal,
     real_name: []const u8,
@@ -546,14 +548,14 @@ fn writeClassSignal(
 fn writeClassProperties(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
-    info: *const ClassResolver.Info,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
     real_name: []const u8,
     sections: custom_code.Sections,
     imports: *ImportSet,
 ) !void {
     var has_any = false;
-    var current: ?*const ClassResolver.Info = info;
+    var current: ?*const class_resolver.Info = info;
     while (current) |class_info| {
         if (class_info.class.properties.len != 0) {
             has_any = true;
@@ -583,7 +585,7 @@ fn writeClassProperties(
 fn writeClassProperty(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     property: ExtensionApiJson.ClassProperty,
     real_name: []const u8,
     sections: custom_code.Sections,
@@ -636,7 +638,7 @@ fn writeClassEnum(writer: *Io.Writer, arena: Allocator, global_enum: ExtensionAp
 fn writeOwnMethod(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
     method: *const ExtensionApiJson.ClassMethod,
     real_name: []const u8,
@@ -822,7 +824,7 @@ fn writeOwnMethod(
 fn writeVarargMethod(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
     method: *const ExtensionApiJson.ClassMethod,
     real_name: []const u8,
@@ -960,7 +962,7 @@ fn writeVarargMethod(
 fn writeForwardedMethod(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
     base: *const ExtensionApiJson.Class,
     method: *const ExtensionApiJson.ClassMethod,
@@ -1038,7 +1040,7 @@ fn writeForwardedMethod(
 fn writeForwardedVarargMethod(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     class: *const ExtensionApiJson.Class,
     base: *const ExtensionApiJson.Class,
     method: *const ExtensionApiJson.ClassMethod,
@@ -1088,7 +1090,7 @@ fn writeForwardedVarargMethod(
 fn writeOptions(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     method: *const ExtensionApiJson.ClassMethod,
     method_pascal: []const u8,
     real_name: []const u8,
@@ -1114,7 +1116,7 @@ fn writeOptions(
 
 fn writeDefaultValue(
     writer: *Io.Writer,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     raw_type: []const u8,
     default_value: []const u8,
 ) !bool {
@@ -1183,9 +1185,9 @@ fn hasMethodName(names_list: []const []const u8, name: []const u8) bool {
 
 fn resolveWrite(
     writer: *Io.Writer,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: ClassResolver.TypeContext,
+    context: class_resolver.TypeContext,
     real_name: []const u8,
 ) !void {
     _ = real_name;
@@ -1195,7 +1197,7 @@ fn resolveWrite(
 
 fn addImport(
     imports: *ImportSet,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
 ) !void {
     if (resolver.get(raw)) |info| try imports.add(info.class.name);
@@ -1203,9 +1205,9 @@ fn addImport(
 
 fn addImportResolved(
     imports: *ImportSet,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: ClassResolver.TypeContext,
+    context: class_resolver.TypeContext,
 ) !void {
     const resolved = try resolver.resolve(raw, context);
     if (resolved.import_class) |name| try imports.add(name);
@@ -1230,8 +1232,8 @@ const ImportSet = struct {
 fn writeImports(
     writer: *Io.Writer,
     arena: Allocator,
-    resolver: *const ClassResolver.Resolver,
-    info: *const ClassResolver.Info,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
     imports: *const ImportSet,
 ) !void {
     const prefix = try resolver.rootPrefix(arena, info);
@@ -1267,7 +1269,7 @@ const defaults = @import("defaults.zig");
 const enum_emit = @import("enum_emit.zig");
 const names = @import("names.zig");
 const types = @import("types.zig");
-const ClassResolver = @import("ClassResolver.zig");
+const class_resolver = @import("class_resolver.zig");
 const class_templates = @import("class_templates.zig");
 const ExtensionApiJson = @import("../ExtensionApiJson.zig");
 const Options = @import("../Options.zig");

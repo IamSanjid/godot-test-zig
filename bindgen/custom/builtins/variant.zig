@@ -13,7 +13,7 @@ const Data = extern union {
     node_path: NodePath,
     object: extern struct {
         id: native.ObjectID,
-        object: *Object,
+        object: *classes.core.Object,
     },
     packed_byte_array: ?*anyopaque,
     packed_color_array: ?*anyopaque,

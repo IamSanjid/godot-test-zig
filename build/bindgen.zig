@@ -6,12 +6,12 @@ pub const BuildRunOptions = struct {
     member_initialization: MemberInitialization = .none,
     builtin_build_conf: BuiltinBuildConf = .float_64,
     strip_deprecation: bool = false,
-    run_step_name: []const u8 = "gen",
+    parent_step: *std.Build.Step,
     casez: *std.Build.Module,
 };
 
 pub const BuildTestOptions = struct {
-    test_step_name: []const u8 = "test-bindgen",
+    parent_step: *std.Build.Step,
     casez: *std.Build.Module,
 };
 
@@ -40,8 +40,7 @@ pub fn buildRun(b: *std.Build, opt: BuildRunOptions) void {
     bindgen_run.setCwd(b.path("."));
     bindgen_run.addPassthruArgs();
 
-    const bindgen_step = b.step(opt.run_step_name, "Generate godot bindings");
-    bindgen_step.dependOn(&bindgen_run.step);
+    opt.parent_step.dependOn(&bindgen_run.step);
 }
 
 pub fn buildTest(b: *std.Build, opt: BuildTestOptions) void {
@@ -56,8 +55,7 @@ pub fn buildTest(b: *std.Build, opt: BuildTestOptions) void {
         }),
     });
 
-    const bindgen_test_step = b.step(opt.test_step_name, "Run bindgen unit tests");
-    bindgen_test_step.dependOn(&b.addRunArtifact(bindgen_tests).step);
+    opt.parent_step.dependOn(&b.addRunArtifact(bindgen_tests).step);
 }
 
 const std = @import("std");

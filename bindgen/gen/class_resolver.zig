@@ -1,5 +1,12 @@
 //! Class metadata index, inheritance chain, and API type resolution.
 
+pub const Scope = enum {
+    class_file,
+    builtin_file,
+    utility_file,
+    native_file,
+};
+
 pub const TypeContext = enum {
     argument,
     return_value,
@@ -21,6 +28,8 @@ pub const ResolvedType = struct {
     /// Class whose module must be imported, if any.
     import_class: ?[]const u8 = null,
     import_native: bool = false,
+    import_enums: bool = false,
+    use_classes: bool = false,
     is_bitfield: bool = false,
 };
 
@@ -40,14 +49,15 @@ const Rename = struct {
     alias: []const u8,
 };
 
-pub const Resolver = struct {
+pub const ClassResolver = struct {
     api: ExtensionApiJson,
     arena: Allocator,
     infos: []Info,
     real_type: []const u8,
     renames: []const Rename,
+    builtins: *const builtin_catalog.BuiltinCatalog,
 
-    pub fn init(arena: Allocator, api: ExtensionApiJson, real_type: []const u8) !Resolver {
+    pub fn init(arena: Allocator, api: ExtensionApiJson, real_type: []const u8, builtins: *const builtin_catalog.BuiltinCatalog) !ClassResolver {
         const infos = try arena.alloc(Info, api.classes.len);
         for (api.classes, 0..) |class, index| {
             const class_copy = try arena.create(ExtensionApiJson.Class);
@@ -91,33 +101,34 @@ pub const Resolver = struct {
             .infos = infos,
             .real_type = real_type,
             .renames = try buildRenames(arena, api),
+            .builtins = builtins,
         };
     }
 
-    pub fn zigClassName(self: Resolver, name: []const u8) []const u8 {
+    pub fn zigClassName(self: ClassResolver, name: []const u8) []const u8 {
         for (self.renames) |rename| {
             if (std.mem.eql(u8, rename.name, name)) return rename.alias;
         }
         return name;
     }
 
-    pub fn get(self: Resolver, name: []const u8) ?*const Info {
+    pub fn get(self: ClassResolver, name: []const u8) ?*const Info {
         return if (indexOf(self.infos, name)) |index| &self.infos[index] else null;
     }
 
-    pub fn baseInfo(self: Resolver, info: *const Info) ?*const Info {
+    pub fn baseInfo(self: ClassResolver, info: *const Info) ?*const Info {
         const base_index = info.base orelse return null;
         return &self.infos[base_index];
     }
 
-    pub fn isNative(self: Resolver, name: []const u8) bool {
+    pub fn isNative(self: ClassResolver, name: []const u8) bool {
         for (self.api.native_structures) |structure| {
             if (std.mem.eql(u8, structure.name, name)) return true;
         }
         return false;
     }
 
-    pub fn virtualName(self: Resolver, info: *const Info, raw: []const u8) []const u8 {
+    pub fn virtualName(self: ClassResolver, info: *const Info, raw: []const u8) []const u8 {
         _ = self;
         for (info.virtual_names) |entry| {
             if (std.mem.eql(u8, entry.raw, raw)) return entry.zig;
@@ -125,12 +136,12 @@ pub const Resolver = struct {
         return raw;
     }
 
-    pub fn path(self: Resolver, arena: Allocator, info: *const Info) ![]const u8 {
+    pub fn path(self: ClassResolver, arena: Allocator, info: *const Info) ![]const u8 {
         _ = self;
         return classPath(arena, info.class, "classes");
     }
 
-    pub fn relativeClassImport(self: Resolver, arena: Allocator, from: *const Info, to: *const Info) ![]const u8 {
+    pub fn relativeClassImport(self: ClassResolver, arena: Allocator, from: *const Info, to: *const Info) ![]const u8 {
         _ = self;
         const from_api = from.class.api_type;
         const to_api = to.class.api_type;
@@ -151,13 +162,17 @@ pub const Resolver = struct {
         return std.fmt.allocPrint(arena, "../{s}/{s}.zig", .{ to_api.?, to_file });
     }
 
-    pub fn rootPrefix(self: Resolver, arena: Allocator, info: *const Info) ![]const u8 {
+    pub fn rootPrefix(self: ClassResolver, arena: Allocator, info: *const Info) ![]const u8 {
         _ = self;
         _ = arena;
         return if (info.class.api_type == null) "../" else "../../";
     }
 
-    pub fn resolve(self: Resolver, raw: []const u8, context: TypeContext) !ResolvedType {
+    pub fn resolve(self: ClassResolver, raw: []const u8, context: TypeContext) !ResolvedType {
+        return self.resolveFor(raw, context, .class_file);
+    }
+
+    pub fn resolveFor(self: ClassResolver, raw: []const u8, context: TypeContext, scope: Scope) !ResolvedType {
         var name = std.mem.trim(u8, raw, " ");
         if (std.mem.startsWith(u8, name, "const ")) name = std.mem.trim(u8, name["const ".len..], " ");
 
@@ -169,11 +184,7 @@ pub const Resolver = struct {
 
         if (pointer_depth != 0) {
             if (self.get(name)) |info| {
-                const zig = if (context == .return_value)
-                    try std.fmt.allocPrint(self.arena, "?*{s}", .{self.zigClassName(info.class.name)})
-                else
-                    try std.fmt.allocPrint(self.arena, "*{s}", .{self.zigClassName(info.class.name)});
-                return .{ .kind = .class_ptr, .zig = zig, .import_class = info.class.name };
+                return self.classPointer(scope, info, context);
             }
             if (self.isNative(name)) {
                 const zig = if (context == .return_value)
@@ -207,32 +218,76 @@ pub const Resolver = struct {
             return .{ .kind = .primitive, .zig = "bool" };
         }
         if (std.mem.eql(u8, name, "Variant")) {
-            return .{ .kind = .variant, .zig = "builtins.Variant" };
+            return .{ .kind = .variant, .zig = try self.builtinRef(scope, "Variant") };
         }
         if (std.mem.startsWith(u8, name, "typedarray::")) {
-            return .{ .kind = .builtin, .zig = "builtins.Array" };
+            return .{ .kind = .builtin, .zig = try self.builtinRef(scope, "Array") };
         }
         if (std.mem.startsWith(u8, name, "typeddictionary::")) {
-            return .{ .kind = .builtin, .zig = "builtins.Dictionary" };
+            return .{ .kind = .builtin, .zig = try self.builtinRef(scope, "Dictionary") };
         }
         if (std.mem.startsWith(u8, name, "enum::") or std.mem.startsWith(u8, name, "bitfield::")) {
-            return self.resolveEnum(name, context);
+            return self.resolveEnum(name, context, scope);
         }
         if (self.get(name)) |info| {
+            return self.classPointer(scope, info, context);
+        }
+        if (self.builtins.isGenerated(name)) {
+            return .{ .kind = .builtin, .zig = try self.builtinRef(scope, name) };
+        }
+        std.log.err("Unresolved type: {s}", .{raw});
+        return error.UnresolvedType;
+    }
+
+    fn builtinRef(self: ClassResolver, scope: Scope, name: []const u8) ![]const u8 {
+        if (scope == .builtin_file) return name;
+        return std.fmt.allocPrint(self.arena, "builtins.{s}", .{name});
+    }
+
+    fn zigClassPath(self: ClassResolver, info: *const Info) ![]const u8 {
+        if (info.class.api_type) |api_type| {
+            return std.fmt.allocPrint(self.arena, "classes.{s}.{s}", .{ api_type, info.class.name });
+        }
+        return std.fmt.allocPrint(self.arena, "classes.{s}", .{info.class.name});
+    }
+
+    fn classPointer(self: ClassResolver, scope: Scope, info: *const Info, context: TypeContext) !ResolvedType {
+        if (scope == .class_file) {
             const zig = if (context == .return_value)
                 try std.fmt.allocPrint(self.arena, "?*{s}", .{self.zigClassName(info.class.name)})
             else
                 try std.fmt.allocPrint(self.arena, "*{s}", .{self.zigClassName(info.class.name)});
             return .{ .kind = .class_ptr, .zig = zig, .import_class = info.class.name };
         }
-        if (isBuiltin(self.api, name)) {
-            return .{ .kind = .builtin, .zig = try std.fmt.allocPrint(self.arena, "builtins.{s}", .{name}) };
-        }
-        std.log.err("Unresolved type: {s}", .{raw});
-        return error.UnresolvedType;
+
+        const class_path = try self.zigClassPath(info);
+        const zig = if (context == .return_value)
+            try std.fmt.allocPrint(self.arena, "?*{s}", .{class_path})
+        else
+            try std.fmt.allocPrint(self.arena, "*{s}", .{class_path});
+        return .{ .kind = .class_ptr, .zig = zig, .use_classes = true };
     }
 
-    fn resolveEnum(self: Resolver, raw: []const u8, context: TypeContext) !ResolvedType {
+    fn classEnum(self: ClassResolver, scope: Scope, info: *const Info, enum_name: []const u8, is_bitfield: bool) !ResolvedType {
+        if (scope == .class_file) {
+            return .{
+                .kind = .@"enum",
+                .zig = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ self.zigClassName(info.class.name), enum_name }),
+                .import_class = info.class.name,
+                .is_bitfield = is_bitfield,
+            };
+        }
+
+        const class_path = try self.zigClassPath(info);
+        return .{
+            .kind = .@"enum",
+            .zig = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ class_path, enum_name }),
+            .use_classes = true,
+            .is_bitfield = is_bitfield,
+        };
+    }
+
+    fn resolveEnum(self: ClassResolver, raw: []const u8, context: TypeContext, scope: Scope) !ResolvedType {
         _ = context;
         const rest = if (std.mem.startsWith(u8, raw, "enum::")) raw["enum::".len..] else raw["bitfield::".len..];
 
@@ -242,8 +297,7 @@ pub const Resolver = struct {
             if (self.get(class_name)) |info| {
                 for (info.class.enums) |class_enum| {
                     if (std.mem.eql(u8, class_enum.name, enum_name)) {
-                        const zig = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ self.zigClassName(class_name), enum_name });
-                        return .{ .kind = .@"enum", .zig = zig, .import_class = class_name, .is_bitfield = class_enum.is_bitfield };
+                        return self.classEnum(scope, info, enum_name, class_enum.is_bitfield);
                     }
                 }
             }
@@ -251,9 +305,13 @@ pub const Resolver = struct {
                 if (!std.mem.eql(u8, builtin.name, class_name)) continue;
                 for (builtin.enums) |builtin_enum| {
                     if (std.mem.eql(u8, builtin_enum.name, enum_name)) {
+                        const zig = if (scope == .builtin_file)
+                            try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ class_name, enum_name })
+                        else
+                            try std.fmt.allocPrint(self.arena, "builtins.{s}.{s}", .{ class_name, enum_name });
                         return .{
                             .kind = .@"enum",
-                            .zig = try std.fmt.allocPrint(self.arena, "builtins.{s}.{s}", .{ class_name, enum_name }),
+                            .zig = zig,
                             .is_bitfield = builtin_enum.is_bitfield,
                         };
                     }
@@ -267,6 +325,7 @@ pub const Resolver = struct {
                 return .{
                     .kind = .@"enum",
                     .zig = try std.fmt.allocPrint(self.arena, "enums.{s}", .{zig_name}),
+                    .import_enums = true,
                     .is_bitfield = global_enum.is_bitfield,
                 };
             }
@@ -538,13 +597,6 @@ fn buildRenames(arena: Allocator, api: ExtensionApiJson) ![]const Rename {
     return renames[0..rename_count];
 }
 
-fn isBuiltin(api: ExtensionApiJson, name: []const u8) bool {
-    for (api.builtin_classes) |builtin| {
-        if (std.mem.eql(u8, builtin.name, name)) return true;
-    }
-    return std.mem.eql(u8, name, "Variant") or std.mem.eql(u8, name, "Object");
-}
-
 fn primitivePointerType(name: []const u8) ?[]const u8 {
     const primitives = [_]struct { name: []const u8, zig: []const u8 }{
         .{ .name = "bool", .zig = "bool" },
@@ -575,3 +627,4 @@ const Allocator = std.mem.Allocator;
 const names = @import("names.zig");
 const types = @import("types.zig");
 const ExtensionApiJson = @import("../ExtensionApiJson.zig");
+const builtin_catalog = @import("builtin_catalog.zig");

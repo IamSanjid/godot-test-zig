@@ -5,7 +5,7 @@ pub fn generate(
     io: Io,
     api: ExtensionApiJson,
     options: Options,
-    resolver: *const ClassResolver.Resolver,
+    resolver: *const class_resolver.ClassResolver,
 ) !void {
     const path = try std.fs.path.join(arena, &.{ options.output_dir, "singletons.zig" });
     const file = Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
@@ -74,6 +74,6 @@ const Io = std.Io;
 const common = @import("common.zig");
 const custom_code = @import("custom.zig");
 const names = @import("names.zig");
-const ClassResolver = @import("ClassResolver.zig");
+const class_resolver = @import("class_resolver.zig");
 const ExtensionApiJson = @import("../ExtensionApiJson.zig");
 const Options = @import("../Options.zig");
