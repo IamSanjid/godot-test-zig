@@ -37,3 +37,4 @@ the `src/godot/bindings` for internal classes and their methods + op will try to
 Also will expose a comptime fn to check the layout(field offsets + size).
 
 "bindings" are a completely different module, it doesn't depend on anything else.
+we will write codegen which is similar to "bindings" mainly which will wrap the bindings into our "auto" godot convention, extends, auto casting to Variant etc..

@@ -114,12 +114,11 @@ pub fn build(b: *std.Build) !void {
         .linkage = .dynamic,
     });
 
-    const install = b.addInstallFileWithDir(
-        lib.getEmittedBin(),
-        .{ .custom = install_dir },
-        lib.out_filename,
-    );
-    b.default_step.dependOn(&install.step);
+    const install = b.addInstallArtifact(lib, .{
+        .dest_dir = .{ .override = .{ .custom = install_dir } },
+        .pdb_dir = .{ .override = .{ .custom = install_dir } },
+    });
+    b.getInstallStep().dependOn(&install.step);
 }
 
 pub fn scanClassesToRegister(b: *std.Build, sub_path: []const u8, options: AddFilesOptions) !std.ArrayList([]const u8) {

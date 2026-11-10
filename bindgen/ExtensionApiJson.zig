@@ -1,9 +1,15 @@
 //! Parsed `extension_api.json` schema, limited to the builtin-class data the
 //! bindgen needs. Unknown fields are ignored so newer Godot dumps still parse.
 
-builtin_class_sizes: []const BuildConfigurationSizes,
-builtin_class_member_offsets: []const BuildConfigurationOffsets,
-builtin_classes: []const BuiltinClass,
+builtin_class_sizes: []const BuildConfigurationSizes = &.{},
+builtin_class_member_offsets: []const BuildConfigurationOffsets = &.{},
+builtin_classes: []const BuiltinClass = &.{},
+classes: []const Class = &.{},
+singletons: []const Singleton = &.{},
+native_structures: []const NativeStructure = &.{},
+utility_functions: []const UtilityFunction = &.{},
+global_constants: []const GlobalConstant = &.{},
+global_enums: []const GlobalEnum = &.{},
 
 const ExtensionApiJson = @This();
 
@@ -48,6 +54,7 @@ pub const BuiltinClass = struct {
     description: ?[]const u8 = null,
     members: []const Member = &.{},
     methods: []const Method = &.{},
+    enums: []const GlobalEnum = &.{},
     constructors: []const Constructor = &.{},
     operators: []const Operator = &.{},
 };
@@ -65,6 +72,7 @@ pub const Method = struct {
     is_const: bool = false,
     is_static: bool = false,
     hash: u32 = 0,
+    hash_compatibility: []const u32 = &.{},
     arguments: []const Argument = &.{},
     description: ?[]const u8 = null,
 };
@@ -73,6 +81,7 @@ pub const Argument = struct {
     name: []const u8 = "",
     type: []const u8,
     default_value: ?[]const u8 = null,
+    meta: ?[]const u8 = null,
 };
 
 pub const Constructor = struct {
@@ -86,6 +95,100 @@ pub const Operator = struct {
     right_type: ?[]const u8 = null,
     return_type: []const u8,
     description: ?[]const u8 = null,
+};
+
+pub const GlobalConstant = struct {
+    name: []const u8,
+    value: i128,
+    is_bitfield: bool = false,
+    description: ?[]const u8 = null,
+};
+
+pub const GlobalEnum = struct {
+    name: []const u8,
+    is_bitfield: bool = false,
+    values: []const GlobalEnumValue = &.{},
+};
+
+pub const GlobalEnumValue = struct {
+    name: []const u8,
+    value: i64,
+    description: ?[]const u8 = null,
+};
+
+pub const Class = struct {
+    name: []const u8,
+    api_type: ?[]const u8 = null,
+    is_refcounted: bool = false,
+    is_instantiable: bool = false,
+    inherits: ?[]const u8 = null,
+    brief_description: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+    methods: []const ClassMethod = &.{},
+    enums: []const GlobalEnum = &.{},
+    constants: []const ClassConstant = &.{},
+    signals: []const ClassSignal = &.{},
+    properties: []const ClassProperty = &.{},
+};
+
+pub const Singleton = struct {
+    name: []const u8,
+    type: []const u8,
+};
+
+pub const NativeStructure = struct {
+    name: []const u8,
+    format: []const u8,
+};
+
+pub const UtilityFunction = struct {
+    name: []const u8,
+    return_type: ?[]const u8 = null,
+    category: []const u8,
+    is_vararg: bool = false,
+    hash: u32 = 0,
+    hash_compatibility: []const u32 = &.{},
+    arguments: []const Argument = &.{},
+    description: ?[]const u8 = null,
+};
+
+pub const ClassConstant = struct {
+    name: []const u8,
+    value: i64,
+    description: ?[]const u8 = null,
+};
+
+pub const ClassSignal = struct {
+    name: []const u8,
+    arguments: []const Argument = &.{},
+    description: ?[]const u8 = null,
+};
+
+pub const ClassProperty = struct {
+    type: []const u8,
+    name: []const u8,
+    setter: ?[]const u8 = null,
+    getter: ?[]const u8 = null,
+    index: ?i64 = null,
+    description: ?[]const u8 = null,
+};
+
+pub const ClassMethod = struct {
+    name: []const u8,
+    is_const: bool = false,
+    is_vararg: bool = false,
+    is_static: bool = false,
+    is_virtual: bool = false,
+    is_required: bool = false,
+    hash: u32 = 0,
+    hash_compatibility: []const u32 = &.{},
+    return_value: ?ReturnValue = null,
+    arguments: []const Argument = &.{},
+    description: ?[]const u8 = null,
+};
+
+pub const ReturnValue = struct {
+    type: []const u8,
 };
 
 pub fn parse(gpa: Allocator, bytes: []const u8) !json.Parsed(ExtensionApiJson) {

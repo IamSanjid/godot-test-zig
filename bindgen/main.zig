@@ -11,10 +11,16 @@ pub fn main(init: std.process.Init) !void {
         context.interface_json.types.len,
         context.interface_json.interface.len,
     });
-    std.debug.print("Parsed extension API JSON: builtin classes: {}, sizes configs: {}, offset configs: {}\n", .{
+    std.debug.print("Parsed extension API JSON: builtin classes: {}, classes: {}, singletons: {}, native: {}, utility: {}, sizes configs: {}, offset configs: {}, constants: {}, enums: {}\n", .{
         context.extension_api_json.builtin_classes.len,
+        context.extension_api_json.classes.len,
+        context.extension_api_json.singletons.len,
+        context.extension_api_json.native_structures.len,
+        context.extension_api_json.utility_functions.len,
         context.extension_api_json.builtin_class_sizes.len,
         context.extension_api_json.builtin_class_member_offsets.len,
+        context.extension_api_json.global_constants.len,
+        context.extension_api_json.global_enums.len,
     });
 
     try generators.generateInterfaceBindings(&context, options);

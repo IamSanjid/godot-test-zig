@@ -1,3 +1,4 @@
+// @struct StringName
 pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) StringName {
     const S = struct {
         const key = str;
@@ -10,9 +11,10 @@ pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) Strin
     dispatcher.dispatch(.string_name_new_with_latin1_chars, .{
         @as(interface.UninitializedStringNamePtr, @ptrCast(&S.value)),
         @as([*c]const u8, @ptrCast(str.ptr)),
-        1,
+        true,
     });
     S.init = true;
 
     return S.value;
 }
+// @struct_end StringName

@@ -2,8 +2,6 @@
 //! regular enums (a Zig enum backed by the translated C enum) and bitfields
 //! (a packed struct with one field per flag).
 
-const extra_prefixes = [_][]const u8{ "ERROR_", "FLAGS_", "FLAG_", "INITIALIZATION_" };
-
 /// Bitfields are emitted as `packed struct(gdi.<name>)`; every GDExtension
 /// flags enum uses a 32-bit C enum as backing type.
 const bitfield_width: u7 = 32;
@@ -24,7 +22,7 @@ pub fn emit(arena: Allocator, writer: *Io.Writer, registry: Registry, t: Interfa
 }
 
 fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: InterfaceJson.EnumType) !void {
-    const prefix_len = commonPrefixLen(e);
+    const prefix_len = enum_utils.commonPrefixLen(e.values);
     for (e.values) |value| {
         if (value.value < 0) {
             std.log.err("enum {s}: negative value for {s}", .{ raw_name, value.name });
@@ -41,7 +39,7 @@ fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: 
             continue;
         }
 
-        const variant = variantName(value.name, prefix_len);
+        const variant = enum_utils.variantName(value.name, prefix_len);
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    ");
         try common.writeIdent(writer, .snake, variant);
@@ -52,7 +50,7 @@ fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: 
     for (e.values, 0..) |value, index| {
         if (!isDuplicate(e.values, index)) continue;
 
-        const variant = variantName(value.name, prefix_len);
+        const variant = enum_utils.variantName(value.name, prefix_len);
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    pub const ");
         try common.writeIdent(writer, .snake, variant);
@@ -76,7 +74,7 @@ fn emitBitfield(
     raw_name: []const u8,
     e: InterfaceJson.EnumType,
 ) !void {
-    const prefix_len = commonPrefixLen(e);
+    const prefix_len = enum_utils.commonPrefixLen(e.values);
 
     const bits = try arena.alloc(Bit, e.values.len);
     defer arena.free(bits);
@@ -119,7 +117,7 @@ fn emitBitfield(
         }
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    ");
-        try common.writeIdent(writer, .snake, variantName(value.name, prefix_len));
+        try common.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
         try writer.writeAll(": bool = false,\n");
         next = @as(u7, bit.pos) + 1;
     }
@@ -141,7 +139,7 @@ fn emitBitfield(
 
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    pub const ");
-        try common.writeIdent(writer, .snake, variantName(value.name, prefix_len));
+        try common.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
         try writer.print(": @This() = @bitCast(gdi.{s});\n", .{value.name});
     }
 
@@ -157,31 +155,6 @@ fn isDuplicate(values: []const InterfaceJson.EnumValue, index: usize) bool {
         if (previous.value == values[index].value) return true;
     }
     return false;
-}
-
-/// Strips the prefix shared by every value and one of the well-known Godot
-/// prefixes that is too generic to strip as a common prefix.
-fn variantName(name: []const u8, prefix_len: usize) []const u8 {
-    var rest = name[prefix_len..];
-    for (extra_prefixes) |prefix| {
-        if (rest.len > prefix.len and std.mem.startsWith(u8, rest, prefix)) {
-            rest = rest[prefix.len..];
-            break;
-        }
-    }
-    return rest;
-}
-
-fn commonPrefixLen(e: InterfaceJson.EnumType) usize {
-    if (e.values.len == 0) return 0;
-
-    var len = e.values[0].name.len;
-    for (e.values[1..]) |value| {
-        len = std.mem.indexOfDiff(u8, e.values[0].name[0..len], value.name) orelse len;
-    }
-    // Only strip complete words; a partial prefix would leave a fragment.
-    while (len > 0 and e.values[0].name[len - 1] != '_') len -= 1;
-    return len;
 }
 
 test "plain enums keep aliases for duplicate values" {
@@ -264,3 +237,4 @@ const Io = std.Io;
 const InterfaceJson = @import("../InterfaceJson.zig");
 const Registry = @import("Registry.zig");
 const common = @import("common.zig");
+const enum_utils = @import("enum_utils.zig");

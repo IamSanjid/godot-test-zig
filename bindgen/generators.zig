@@ -5,7 +5,8 @@
 //! 2. structs and function typedefs, in interface-JSON order,
 //! 3. the `ProcsTag`/`ProcsTypes` interface declarations.
 //! 4. one file per builtin class under `output_dir/builtins/`.
-//!
+//! 5. global constants (`constants.zig`) and enums (`enums.zig`).
+//! 6. class bindings under `output_dir/classes/`.//!
 //! Structs/functions are emitted last because they are the bulk of the file and
 //! reading the low-level typedefs first makes the generated wrapper easier to
 //! navigate. Declaration order does not matter in Zig containers.
@@ -69,8 +70,19 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
 
     try interface_gen.emit(writer, registry, interface_json.interface, options.strip_deprecation);
     try writer.writeAll("\n");
+    const interface_custom = (try custom_code.readForOutput(arena, io, "interface.zig")) orelse custom_code.Sections{};
+    try custom_code.writeRaw(writer, interface_custom.namespace_code);
+    try writer.writeAll("\n");
 
     try builtin_gen.generate(arena, io, context.extension_api_json, options);
+    try global_gen.generate(arena, io, context.extension_api_json, options);
+
+    const real_name = types.realTypeName(options.builtin_build_conf);
+    const class_resolver = try ClassResolver.Resolver.init(arena, context.extension_api_json, real_name);
+    try class_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
+    try singleton_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
+    try native_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
+    try utility_gen.generate(arena, io, context.extension_api_json, options, &class_resolver);
 
     try writer.print("const gdi = @import(\"{s}\");\n", .{options.interface_import});
 }
@@ -100,3 +112,11 @@ const structure_gen = @import("gen/structure.zig");
 const function_gen = @import("gen/function.zig");
 const interface_gen = @import("gen/interface.zig");
 const builtin_gen = @import("gen/builtin.zig");
+const global_gen = @import("gen/global.zig");
+const class_gen = @import("gen/class.zig");
+const singleton_gen = @import("gen/singleton.zig");
+const native_gen = @import("gen/native.zig");
+const utility_gen = @import("gen/utility.zig");
+const ClassResolver = @import("gen/ClassResolver.zig");
+const types = @import("gen/types.zig");
+const custom_code = @import("gen/custom.zig");

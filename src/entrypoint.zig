@@ -26,6 +26,7 @@ fn init(
     } else {
         std.log.debug("Value allocated: {*} with: {}", .{ value, value.* });
     }
+
     return true;
 }
 
