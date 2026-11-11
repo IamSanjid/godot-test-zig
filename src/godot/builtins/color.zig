@@ -15,6 +15,20 @@ pub const Color = extern struct {
     const Self = @This();
     const C = constants.single;
 
+    pub inline fn toBinding(self: *const Self) bindings.builtins.Color {
+        return @as(*const bindings.builtins.Color, @ptrCast(self)).*;
+    }
+
+    pub inline fn fromBinding(v: anytype) Self {
+        const V = @TypeOf(v);
+        return switch (V) {
+            *bindings.builtins.Color => @as(*const Self, @ptrCast(v)).*,
+            *const bindings.builtins.Color => @as(*const Self, @ptrCast(v)).*,
+            bindings.builtins.Color => @as(*const Self, @ptrCast(&v)).*,
+            else => @compileError("Expected bindings.builtins.Color by value or a pointer to it, found: " ++ @typeName(V)),
+        };
+    }
+
     pub fn init(r: f32, g: f32, b: f32, a: f32) Self {
         return .{ .r = r, .g = g, .b = b, .a = a };
     }
@@ -613,5 +627,6 @@ test "Color constants" {
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const constants = @import("constants.zig");
 const ok_color = @import("ok_color.zig");

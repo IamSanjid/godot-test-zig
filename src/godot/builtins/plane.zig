@@ -13,6 +13,20 @@ pub fn PlaneOf(comptime Real: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Plane {
+            return @as(*const bindings.builtins.Plane, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Plane => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Plane => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Plane => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Plane by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub const planeYZ: Self = .{ .normal = .{ .x = 1, .y = 0, .z = 0 }, .d = 0 };
         pub const planeXZ: Self = .{ .normal = .{ .x = 0, .y = 1, .z = 0 }, .d = 0 };
         pub const planeXY: Self = .{ .normal = .{ .x = 0, .y = 0, .z = 1 }, .d = 0 };
@@ -160,8 +174,8 @@ pub const double = struct {
     pub const Plane = PlaneOf(f64);
 };
 
-/// Default single-precision alias, replaceable by a build-configuration module.
-pub const Plane = single.Plane;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Plane = precision.Plane;
 
 test "Plane component members" {
     const P = single.Plane;
@@ -252,6 +266,7 @@ test "Plane double precision" {
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vector = @import("vector.zig");
 const basis = @import("basis.zig");
 const constants = @import("constants.zig");

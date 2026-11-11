@@ -17,6 +17,20 @@ pub fn Transform3dOf(comptime Real: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Transform3D {
+            return @as(*const bindings.builtins.Transform3D, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Transform3D => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Transform3D => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Transform3D => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Transform3D by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub const identity: Self = .{ .basis = B.identity, .origin = .zero };
         pub const flipX: Self = .{ .basis = B.flipX, .origin = .zero };
         pub const flipY: Self = .{ .basis = B.flipY, .origin = .zero };
@@ -194,8 +208,8 @@ pub const double = struct {
     pub const Transform3D = Transform3dOf(f64);
 };
 
-/// Default single-precision alias, replaceable by a build-configuration module.
-pub const Transform3D = single.Transform3D;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Transform3D = precision.Transform3D;
 
 test "Transform3D layout" {
     try std.testing.expectEqual(@as(usize, 48), @sizeOf(single.Transform3D));
@@ -296,6 +310,7 @@ fn setComponent(value: anytype, index: usize, new_value: @TypeOf(value.x)) void 
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vector = @import("vector.zig");
 const basis = @import("basis.zig");
 const aabb = @import("aabb.zig");

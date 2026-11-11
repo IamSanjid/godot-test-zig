@@ -5,14 +5,7 @@
 //! until the Quaternion builtin exists. Operators are exposed as named methods
 //! (`mul`, `xform`) since Zig does not provide user-defined operator overloading.
 
-pub const EulerOrder = enum(u3) {
-    xyz,
-    xzy,
-    yxz,
-    yzx,
-    zxy,
-    zyx,
-};
+pub const EulerOrder = bindings.enums.EulerOrder;
 
 pub fn BasisOf(comptime Real: type) type {
     const V3 = vec.Vector(Real, 3);
@@ -22,6 +15,20 @@ pub fn BasisOf(comptime Real: type) type {
         rows: [3]V3 = .{ .zero, .zero, .zero },
 
         const Self = @This();
+
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Basis {
+            return @as(*const bindings.builtins.Basis, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Basis => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Basis => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Basis => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Basis by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
 
         pub const identity: Self = .{ .rows = .{
             .{ .x = 1, .y = 0, .z = 0 },
@@ -515,8 +522,8 @@ pub const double = struct {
     pub const Basis = BasisOf(f64);
 };
 
-/// Default single-precision alias, replaceable by a build-configuration module.
-pub const Basis = single.Basis;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Basis = precision.Basis;
 
 test "Basis column members" {
     const B = single.Basis;
@@ -634,6 +641,7 @@ fn setComponent(value: anytype, index: usize, new_value: @TypeOf(value.x)) void 
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vec = @import("vector.zig");
 const quaternion = @import("quaternion.zig");
 const constants = @import("constants.zig");

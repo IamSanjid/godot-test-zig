@@ -358,6 +358,20 @@ pub fn AabbOf(comptime Real: type) type {
             setComponent(&point, axis, if (component(direction, axis) >= 0) component(self.position, axis) else component(end, axis));
             return point;
         }
+
+        pub inline fn toBinding(self: *const Self) bindings.builtins.AABB {
+            return @as(*const bindings.builtins.AABB, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.AABB => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.AABB => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.AABB => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.AABB by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
     };
 }
 
@@ -387,9 +401,8 @@ pub const double = struct {
     pub const AABB = AabbOf(f64);
 };
 
-/// Default single-precision alias. As with `vector.zig`, precision selection can
-/// be exported from a build-configuration-aware module later.
-pub const AABB = single.AABB;
+const precision = if (bindings.is_double_precision) double else single;
+pub const AABB = precision.AABB;
 
 test "AABB end member" {
     const Box = single.AABB;
@@ -510,3 +523,5 @@ test "double precision AABB" {
 const std = @import("std");
 const vector = @import("vector.zig");
 const plane = @import("plane.zig");
+
+const bindings = @import("bindings");

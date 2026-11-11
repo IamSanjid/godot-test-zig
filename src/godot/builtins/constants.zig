@@ -41,16 +41,16 @@ pub fn For(comptime Real: type) type {
     return if (Real == f64) double else single;
 }
 
-/// Single-precision defaults.
-pub const cmp_epsilon = single.cmp_epsilon;
-pub const cmp_epsilon_squared = single.cmp_epsilon_squared;
-pub const unit_epsilon = single.unit_epsilon;
-pub const normalize_tolerance = single.normalize_tolerance;
-pub const point_in_plane_epsilon = single.point_in_plane_epsilon;
-pub const euler_epsilon = single.euler_epsilon;
-pub const ray_epsilon = single.ray_epsilon;
-pub const color_byte_max = single.color_byte_max;
-pub const color_word_max = single.color_word_max;
+const precision = if (@import("bindings").is_double_precision) double else single;
+pub const cmp_epsilon = precision.cmp_epsilon;
+pub const cmp_epsilon_squared = precision.cmp_epsilon_squared;
+pub const unit_epsilon = precision.unit_epsilon;
+pub const normalize_tolerance = precision.normalize_tolerance;
+pub const point_in_plane_epsilon = precision.point_in_plane_epsilon;
+pub const euler_epsilon = precision.euler_epsilon;
+pub const ray_epsilon = precision.ray_epsilon;
+pub const color_byte_max = precision.color_byte_max;
+pub const color_word_max = precision.color_word_max;
 
 test "precision-selected constants" {
     try std.testing.expectEqual(@as(f64, 0.001), single.unit_epsilon);

@@ -1,11 +1,4 @@
-comptime {
-    @export(&init, .{
-        .name = build_options.entry_point,
-        .linkage = .strong,
-    });
-}
-
-fn init(
+export fn test_zig_init(
     get_proc_address: gdi.InterfaceGetProcAddress,
     library: gdi.ClassLibraryPtr,
     initialization: *gdi.Initialization,
@@ -32,6 +25,5 @@ fn init(
 
 const std = @import("std");
 
-const build_options = @import("build_options");
-const godot = @import("godot/godot.zig");
+const godot = @import("godot");
 const gdi = godot.bindings.interface;

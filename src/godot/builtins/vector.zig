@@ -129,6 +129,9 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
             pub const reflect = if (is_float) H.reflect else @compileError("Vector.reflect requires a float vector");
             pub const cross = if (is_float) H.cross2 else @compileError("Vector.cross requires a float vector");
             pub const fromAngle = if (is_float) H.fromAngle2 else @compileError("Vector.fromAngle requires a float vector");
+
+            pub const toBinding = H.toBinding;
+            pub const fromBinding = H.fromBinding;
         },
 
         3 => extern struct {
@@ -143,6 +146,11 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
             pub const is_float = t_is_float;
             pub const dimensions = dimension;
             pub const VecType = Vec;
+
+            pub const Axis = if (is_float)
+                bindings.builtins.Vector3.Axis
+            else
+                bindings.builtins.Vector3i.Axis;
 
             pub fn asVector(self: Self) Vec {
                 return .{ self.x, self.y, self.z };
@@ -241,6 +249,9 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
             pub const reflect = if (is_float) H.reflect else @compileError("Vector.reflect requires a float vector");
             pub const octahedronEncode = if (is_float) H.octahedronEncode3 else @compileError("Vector.octahedronEncode requires a float vector");
             pub const octahedronDecode = if (is_float) H.octahedronDecode3 else @compileError("Vector.octahedronDecode requires a float vector");
+
+            pub const toBinding = H.toBinding;
+            pub const fromBinding = H.fromBinding;
         },
 
         4 => extern struct {
@@ -325,6 +336,9 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
             pub const posmod = if (is_float) H.posmod else @compileError("Vector.posmod requires a float vector");
             pub const posmodv = if (is_float) H.posmodv else @compileError("Vector.posmodv requires a float vector");
             pub const dot = if (is_float) H.dot else @compileError("Vector.dot requires a float vector");
+
+            pub const toBinding = H.toBinding;
+            pub const fromBinding = H.fromBinding;
         },
 
         else => unreachable,
@@ -903,6 +917,25 @@ fn Helpers(comptime Self: type) type {
             if (a == b) return true;
             return @abs(a - b) < tolerance;
         }
+
+        const BindingT = switch (Dim) {
+            2 => if (IsFloat) bindings.builtins.Vector2 else bindings.builtins.Vector2i,
+            3 => if (IsFloat) bindings.builtins.Vector3 else bindings.builtins.Vector3i,
+            4 => if (IsFloat) bindings.builtins.Vector4 else bindings.builtins.Vector4i,
+            else => @compileError("Unsupported dimension."),
+        };
+
+        pub const toBinding = struct {
+            fn f(self: *const Self) BindingT {
+                return @as(*const BindingT, @ptrCast(self)).*;
+            }
+        }.f;
+
+        pub const fromBinding = struct {
+            fn f(v: BindingT) Self {
+                return @as(*const Self, @ptrCast(v)).*;
+            }
+        }.f;
     };
 }
 
@@ -943,16 +976,15 @@ pub const double = struct {
     pub const Vector4i = IntVector4;
 };
 
-/// Default (single precision) aliases. Use `double.Vector2`, etc. when
-/// targeting a double-precision Godot build.
-pub const real_t = single.real_t;
-pub const Basis = single.Basis;
-pub const Vector2 = single.Vector2;
-pub const Vector2i = single.Vector2i;
-pub const Vector3 = single.Vector3;
-pub const Vector3i = single.Vector3i;
-pub const Vector4 = single.Vector4;
-pub const Vector4i = single.Vector4i;
+const precision = if (bindings.is_double_precision) double else single;
+pub const real_t = precision.real_t;
+pub const Basis = precision.Basis;
+pub const Vector2 = precision.Vector2;
+pub const Vector2i = precision.Vector2i;
+pub const Vector3 = precision.Vector3;
+pub const Vector3i = precision.Vector3i;
+pub const Vector4 = precision.Vector4;
+pub const Vector4i = precision.Vector4i;
 
 test "vector constants match the engine" {
     try std.testing.expectEqual(single.Vector2{ .x = 0, .y = 0 }, single.Vector2.zero);
@@ -1344,3 +1376,5 @@ test "all Vector4i methods compile" {
 const std = @import("std");
 const basis_mod = @import("basis.zig");
 const constants = @import("constants.zig");
+
+const bindings = @import("bindings");

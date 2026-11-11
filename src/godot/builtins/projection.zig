@@ -21,6 +21,20 @@ pub fn ProjectionOf(comptime Real: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Projection {
+            return @as(*const bindings.builtins.Projection, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Projection => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Projection => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Projection => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Projection by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub const Planes = enum(u3) {
             near,
             far,
@@ -577,8 +591,8 @@ pub const double = struct {
     pub const Projection = ProjectionOf(f64);
 };
 
-/// Default single-precision alias, replaceable by a build-configuration module.
-pub const Projection = single.Projection;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Projection = precision.Projection;
 
 test "Projection member aliases" {
     const P = single.Projection;
@@ -709,6 +723,7 @@ test "Projection double precision" {
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vector = @import("vector.zig");
 const aabb = @import("aabb.zig");
 const plane = @import("plane.zig");

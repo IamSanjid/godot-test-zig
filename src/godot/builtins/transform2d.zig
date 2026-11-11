@@ -16,6 +16,20 @@ pub fn Transform2dOf(comptime Real: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Transform2D {
+            return @as(*const bindings.builtins.Transform2D, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Transform2D => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Transform2D => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Transform2D => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Transform2D by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub const identity: Self = .{};
         pub const flipX: Self = .{ .columns = .{
             .{ .x = -1, .y = 0 },
@@ -296,8 +310,8 @@ pub const double = struct {
     pub const Transform2D = Transform2dOf(f64);
 };
 
-/// Default single-precision alias, replaceable by a build-configuration module.
-pub const Transform2D = single.Transform2D;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Transform2D = precision.Transform2D;
 
 test "Transform2D member aliases" {
     const T = single.Transform2D;
@@ -380,5 +394,6 @@ test "Transform2D double precision" {
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vector = @import("vector.zig");
 const constants = @import("constants.zig");

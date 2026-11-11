@@ -106,8 +106,11 @@ const Child = std.meta.Child;
 
 pub const builtins = @import("builtins/builtins.zig");
 pub const classes = @import("classes/classes.zig");
+pub const constants = @import("constants.zig");
 pub const enums = @import("enums.zig");
 pub const interface = @import("interface.zig");
 pub const native = @import("native.zig");
 pub const singletons = @import("singletons.zig");
 pub const utility = @import("utility/utility.zig");
+
+pub const is_double_precision = @sizeOf(builtins.Variant) == 40;

@@ -4,3 +4,11 @@ zig-out/
 src/godot/bindings/*
 # We need this for exposing and direct access through `godot.bindgen` instead of our "auto" layer.
 !src/godot/bindings/bindings.zig
+# These are codegen glue code for bindings and the auto dispatcher
+src/godot/builtins/generated/*.zig
+src/godot/classes/
+src/godot/utility/
+src/godot/constants.zig
+src/godot/enums.zig
+src/godot/native.zig
+src/godot/singletons.zig

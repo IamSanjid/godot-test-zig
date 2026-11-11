@@ -16,6 +16,20 @@ pub fn QuaternionOf(comptime Real: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Quaternion {
+            return @as(*const bindings.builtins.Quaternion, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Quaternion => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Quaternion => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Quaternion => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Quaternion by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub const identity: Self = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
 
         pub fn init(x: Real, y: Real, z: Real, w: Real) Self {
@@ -421,8 +435,8 @@ pub const double = struct {
     pub const Quaternion = QuaternionOf(f64);
 };
 
-/// Default single-precision alias, replaceable by a build-configuration module.
-pub const Quaternion = single.Quaternion;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Quaternion = precision.Quaternion;
 
 test "Quaternion layout" {
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(single.Quaternion));
@@ -520,5 +534,6 @@ fn component(value: anytype, index: usize) @TypeOf(value.x) {
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vector = @import("vector.zig");
 const constants = @import("constants.zig");

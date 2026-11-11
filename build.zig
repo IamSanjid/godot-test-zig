@@ -8,11 +8,7 @@ pub const InitializationLevel = enum(u32) {
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    const entry_point = b.option(
-        []const u8,
-        "entry_point",
-        "Entry point for the library",
-    ) orelse (@tagName(build_zon.name) ++ "_gd_ext_init");
+
     const minimum_initialization_level: InitializationLevel = b.option(
         InitializationLevel,
         "minimum_initialization_level",
@@ -39,22 +35,27 @@ pub fn build(b: *std.Build) !void {
         "Path to the Godot extension_api.json file.",
     ) orelse "gd_interface/extension_api.json";
     const gdext_builtin_build_conf = b.option(
-        bindgen.BuiltinBuildConf,
+        generator.BuiltinBuildConf,
         "gdext_builtin_build_conf",
         "Builtin class layout build configuration.",
     ) orelse .float_64;
     const gdext_bindgen_output_dir = b.option(
         []const u8,
         "gdext_bindgen_output_dir",
-        "Path to the output directory for generated files.",
+        "Path to the output directory for generated bindings.",
     ) orelse "src/godot/bindings";
+    const gdext_codegen_output_dir = b.option(
+        []const u8,
+        "gdext_codegen_output_dir",
+        "Path to the output directory for the codegen layer.",
+    ) orelse "src/godot";
     const gdext_interface_import = b.option(
         []const u8,
         "gdext_interface_import",
         "This will be used for the godot interface module name when imported by the bindings.",
     ) orelse "godot_interface";
     const gdext_member_init = b.option(
-        bindgen.MemberInitialization,
+        generator.MemberInitialization,
         "gdext_member_init",
         "Member initialization for gdextension interface extern structs.",
     ) orelse .zero;
@@ -73,25 +74,47 @@ pub fn build(b: *std.Build) !void {
     });
 
     const casez = b.dependency("casez", .{}).module("casez");
+    const generator_executable = generator.buildGenerator(b, casez);
 
-    bindgen.buildRun(b, .{
+    const bindgen_opt: generator.RunBindgenOptions = .{
+        .api = .{
+            .extension_api_json = gdext_extension_api_json,
+            .builtin_build_conf = gdext_builtin_build_conf,
+            .member_initialization = gdext_member_init,
+            .strip_deprecation = gdext_strip_deprecation,
+        },
+        .generator = generator_executable,
         .interface_json = gdext_interface_json,
-        .extension_api_json = gdext_extension_api_json,
         .output_dir = gdext_bindgen_output_dir,
         .interface_import = gdext_interface_import,
-        .member_initialization = gdext_member_init,
-        .builtin_build_conf = gdext_builtin_build_conf,
-        .strip_deprecation = gdext_strip_deprecation,
-        .parent_step = b.step("bindgen", "Generate godot bindings"),
-        .casez = casez,
-    });
-    bindgen.buildTest(b, .{
-        .parent_step = b.step("test-bindgen", "Run bindgen unit tests"),
-        .casez = casez,
-    });
+    };
+    const run_bindgen = generator.runBindgen(b, bindgen_opt);
+    const bindgen_step = b.step("bindgen", "Generate godot bindings");
+    bindgen_step.dependOn(&run_bindgen.step);
+
+    const codegen_opt: generator.RunCodegenOptions = .{
+        .api = .{
+            .extension_api_json = gdext_extension_api_json,
+            .builtin_build_conf = gdext_builtin_build_conf,
+            .member_initialization = gdext_member_init,
+            .strip_deprecation = gdext_strip_deprecation,
+        },
+        .generator = generator_executable,
+        .output_dir = gdext_codegen_output_dir,
+    };
+    const run_codegen = generator.runCodegen(b, codegen_opt);
+    const codegen_step = b.step("codegen", "Generate the automatic-dispatch codegen layer");
+    codegen_step.dependOn(&run_codegen.step);
+
+    const run_all = generator.runAll(b, .{ .bindgen = bindgen_opt, .codegen = codegen_opt });
+    const gen_step = b.step("gen", "Generate bindings, then the automatic-dispatch codegen layer");
+    gen_step.dependOn(&run_all.step);
+
+    const test_run = generator.buildAndRunTests(b, .{ .casez = casez });
+    const test_generator_step = b.step("test-generator", "Run all generator unit tests");
+    test_generator_step.dependOn(&test_run.step);
 
     const build_options = b.addOptions();
-    build_options.addOption([]const u8, "entry_point", entry_point);
     build_options.addOption(InitializationLevel, "minimum_initialization_level", minimum_initialization_level);
     build_options.addOption(struct { os_tag: std.Target.Os.Tag }, "target", .{ .os_tag = target.result.os.tag });
 
@@ -104,13 +127,22 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const godot = b.createModule(.{
+        .root_source_file = b.path("src/godot/godot.zig"),
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options.createModule() },
+            .{ .name = "bindings", .module = bindings },
+        },
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lib = b.addLibrary(.{
         .name = @tagName(build_zon.name),
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/entrypoint.zig"),
             .imports = &.{
-                .{ .name = "build_options", .module = build_options.createModule() },
-                .{ .name = "bindings", .module = bindings },
+                .{ .name = "godot", .module = godot },
             },
             .target = target,
             .optimize = optimize,
@@ -162,4 +194,4 @@ const ff = @import("build/find_files.zig");
 const findFiles = ff.findFiles;
 pub const AddFilesOptions = ff.Options;
 
-const bindgen = @import("build/bindgen.zig");
+const generator = @import("build/generator.zig");

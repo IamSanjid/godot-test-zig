@@ -20,6 +20,20 @@ pub fn Rect2Of(comptime Real: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Rect2 {
+            return @as(*const bindings.builtins.Rect2, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Rect2 => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Rect2 => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Rect2 => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Rect2 by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub fn init(position: V2, size: V2) Self {
             return .{ .position = position, .size = size };
         }
@@ -172,6 +186,20 @@ pub fn Rect2iOf(comptime T: type) type {
 
         const Self = @This();
 
+        pub inline fn toBinding(self: *const Self) bindings.builtins.Rect2i {
+            return @as(*const bindings.builtins.Rect2i, @ptrCast(self)).*;
+        }
+
+        pub inline fn fromBinding(v: anytype) Self {
+            const V = @TypeOf(v);
+            return switch (V) {
+                *bindings.builtins.Rect2i => @as(*const Self, @ptrCast(v)).*,
+                *const bindings.builtins.Rect2i => @as(*const Self, @ptrCast(v)).*,
+                bindings.builtins.Rect2i => @as(*const Self, @ptrCast(&v)).*,
+                else => @compileError("Expected bindings.builtins.Rect2i by value or a pointer to it, found: " ++ @typeName(V)),
+            };
+        }
+
         pub fn init(position: V2, size: V2) Self {
             return .{ .position = position, .size = size };
         }
@@ -313,8 +341,8 @@ pub const double = struct {
     pub const Rect2i = IntRect2;
 };
 
-/// Default single-precision aliases, replaceable by a build-configuration module.
-pub const Rect2 = single.Rect2;
+const precision = if (bindings.is_double_precision) double else single;
+pub const Rect2 = precision.Rect2;
 pub const Rect2i = IntRect2;
 
 test "Rect2 end member" {
@@ -438,4 +466,5 @@ test "Rect2 double precision" {
 }
 
 const std = @import("std");
+const bindings = @import("bindings");
 const vector = @import("vector.zig");
