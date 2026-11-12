@@ -15,7 +15,11 @@ compatibility first, then the codegen-facing convenience types.
 | class pointer | `?*BindingClass` return, `*BindingClass` arg | `?*Class` return, `*Class` arg |
 | builtin | binding builtin extern struct | codegen builtin extern struct |
 | normal enum | binding enum alias | codegen/binding enum alias |
-| bitfield | packed struct with `u32` or `u64` backing | same alias |
+| bitfield | bitpack struct with translated C backing (or `u32`/`u64` for API bitfields) | same alias |
+
+GDExtension interface flag bitfields keep the translated C backing type and use
+`@bitSizeOf(gdi.<type>)` for final padding. API bitfields choose `u32` or `u64`
+from their highest used bit.
 | native struct | `bindings.native.X` | `native.X` alias |
 | `Object` | class pointer | class pointer |
 | `typedarray::T` | `Array` | `Array` |

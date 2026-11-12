@@ -89,7 +89,7 @@ fn writeBitfield(
     try writeIndent(writer, indent);
     try writer.writeAll("pub const ");
     try names.writeIdent(writer, .pascal, global_enum.name);
-    try writer.print(" = packed struct(u{d}) {{\n", .{backing_bits});
+    try writer.print(" = bitpack struct(u{d}) {{\n", .{backing_bits});
 
     var next: u7 = 0;
     var pad_index: usize = 0;
@@ -162,7 +162,7 @@ test "bitfield selects a backing integer wide enough for its values" {
     defer aw.deinit();
     try write(&aw.writer, arena, global, 0);
     const output = aw.writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "packed struct(u64)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "bitpack struct(u64)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "_pad0: u34") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "@as(u64, 7)") != null);
 }

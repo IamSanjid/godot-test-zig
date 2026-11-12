@@ -1,11 +1,10 @@
 //! Emitters for the two enum flavors used by the GDExtension interface:
 //! regular enums (a Zig enum backed by the translated C enum) and bitfields
-//! (a packed struct with one field per flag).
+//! (a bitpack struct with one field per flag).
 
-/// Bitfields are emitted as `packed struct(gdi.<name>)`; every GDExtension
-/// flags enum uses a 32-bit C enum as backing type.
-const bitfield_width: u7 = 32;
-
+/// Bitfields are emitted as `bitpack struct(gdi.<name>)`. The final padding is
+/// expressed with `@bitSizeOf` so it follows the translated C backing type
+/// instead of assuming a host/target integer width.
 pub fn emit(arena: Allocator, writer: *Io.Writer, registry: Registry, t: InterfaceJson.TypeDecl) !void {
     std.debug.assert(t.data == .@"enum");
     const e = t.data.@"enum";
@@ -90,10 +89,6 @@ fn emitBitfield(
         const unsigned: u64 = @intCast(value.value);
         if (unsigned != 0 and std.math.isPowerOfTwo(unsigned) and (seen & unsigned) == 0) {
             const pos: u6 = @intCast(@ctz(unsigned));
-            if (pos >= bitfield_width) {
-                std.log.err("bitfield {s}: {s} does not fit in a {d}-bit backing type", .{ raw_name, value.name, bitfield_width });
-                return error.BitfieldTooWide;
-            }
             seen |= unsigned;
             bits[bit_count] = .{ .pos = pos, .index = index };
             bit_count += 1;
@@ -103,7 +98,7 @@ fn emitBitfield(
     }
     std.mem.sort(Bit, bits[0..bit_count], {}, bitLessThan);
 
-    try writer.print("pub const {s} = packed struct(gdi.{s}) {{\n", .{ zig_name, raw_name });
+    try writer.print("pub const {s} = bitpack struct(gdi.{s}) {{\n", .{ zig_name, raw_name });
 
     // Fill gaps between flags with padding, then pad out to the backing
     // integer's width (Zig requires the fields to cover it exactly).
@@ -121,8 +116,8 @@ fn emitBitfield(
         try writer.writeAll(": bool = false,\n");
         next = @as(u7, bit.pos) + 1;
     }
-    if (next < bitfield_width) {
-        try writer.print("    _pad{d}: u{d} = 0,\n", .{ pad_index, bitfield_width - next });
+    if (next < 64) {
+        try writer.print("    _pad{d}: @Int(.unsigned, @bitSizeOf(gdi.{s}) - {d}) = 0,\n", .{ pad_index, raw_name, next });
     }
 
     // Everything that is not a single, previously unclaimed bit is exposed as
@@ -213,7 +208,7 @@ test "bitfields pad gaps and expose aliases" {
     try emit(arena_state.allocator(), &aw.writer, registry, types[0]);
 
     try std.testing.expectEqualStrings(
-        \\pub const ClassMethodFlags = packed struct(gdi.GDExtensionClassMethodFlags) {
+        \\pub const ClassMethodFlags = bitpack struct(gdi.GDExtensionClassMethodFlags) {
         \\    normal: bool = false,
         \\    editor: bool = false,
         \\    @"const": bool = false,
@@ -222,7 +217,7 @@ test "bitfields pad gaps and expose aliases" {
         \\    static: bool = false,
         \\    _pad0: u1 = 0,
         \\    virtual_required: bool = false,
-        \\    _pad1: u24 = 0,
+        \\    _pad1: @Int(.unsigned, @bitSizeOf(gdi.GDExtensionClassMethodFlags) - 8) = 0,
         \\
         \\    pub const default: @This() = @bitCast(gdi.GDEXTENSION_METHOD_FLAGS_DEFAULT);
         \\};

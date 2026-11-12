@@ -68,6 +68,11 @@ steps depend on the returned runs.
 Generator run steps use inherited stdio so successful diagnostics on stderr do
 not become build failures; only a non-zero exit code fails the step.
 
+The executable is built for the host. `translate-c` is also built for the host,
+while its translated header module is built for the requested target. Bindgen
+output imports that target-configured module rather than re-hosting the translated
+header. Cross-target installs do not request a Windows PDB on non-Windows targets.
+
 Root steps:
 
 ```text

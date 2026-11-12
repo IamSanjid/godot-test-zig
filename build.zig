@@ -65,7 +65,9 @@ pub fn build(b: *std.Build) !void {
         "Stip all the deprecated extension interface.",
     ) orelse false;
 
-    const translate_c = b.dependency("translate_c", .{});
+    // translate-c runs on the build host; the generated module is still
+    // configured for the requested target by Translator.init.
+    const translate_c = b.dependency("translate_c", .{ .target = b.graph.host });
     const godot_interface: Translator = .init(translate_c, .{
         .c_source_file = gdext_interface_header,
         .target = target,
@@ -153,7 +155,10 @@ pub fn build(b: *std.Build) !void {
 
     const install = b.addInstallArtifact(lib, .{
         .dest_dir = .{ .override = .{ .custom = install_dir } },
-        .pdb_dir = .{ .override = .{ .custom = install_dir } },
+        .pdb_dir = if (target.result.os.tag == .windows)
+            .{ .override = .{ .custom = install_dir } }
+        else
+            .disabled,
     });
     b.getInstallStep().dependOn(&install.step);
 }

@@ -24,6 +24,9 @@
 - Variant `asObject` / `asCallable` / `asInt` via pointer casts
 - codegen varargs convert library-supplied codegen Variants to binding Variants;
   bindgen assembles the final engine pointer array
+- host-targeted generator/translate-c with target-configured translated interface
+  module; non-Windows installs skip PDB installation
+- Zig `bitpack struct` emission with target-aware interface bitfield padding
 
 ## Validation
 

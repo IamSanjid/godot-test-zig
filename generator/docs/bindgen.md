@@ -79,6 +79,8 @@ builtins implement their own.
 - Nontrivial results are initialized before ptrcall.
 - Normal enum ptrcall slots are `i64`; bitfield slots use their actual backing
   width.
+- GDExtension interface flag bitfields use the translated C backing type, with
+  final padding derived from `@bitSizeOf`; API bitfields use `u32`/`u64`.
 - Default literals use cached `String.fromComptimeLatin1` /
   `StringName.fromComptimeLatin1` where applicable and avoid deinitializing
   cached values.
