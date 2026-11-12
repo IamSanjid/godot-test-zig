@@ -179,6 +179,8 @@ fn emitClass(
     templates: *const template_mod.Set,
 ) !void {
     const class = info.class;
+    const ancestry = try buildAncestry(arena, resolver, info);
+    const active_templates = try templates.*.filtered(arena, .class, class.name, ancestry);
     const singleton = isSingleton(api, class.name);
     const custom_relative = try resolver.path(arena, info);
     const custom = (try custom_code.read(arena, io, custom_relative)) orelse custom_code.Sections{};
@@ -230,6 +232,7 @@ fn emitClass(
     var emitted_count: usize = 0;
     var emitted_code_names: [4096][]const u8 = undefined;
     var emitted_code_count: usize = 0;
+    var emitted_static: [4096]bool = undefined;
     var replacement_used: [64]bool = @splat(false);
 
     for (class.methods) |*method| {
@@ -244,7 +247,7 @@ fn emitClass(
                     false,
                     &imports,
                     &custom,
-                    templates,
+                    &active_templates,
                     &replacement_used,
                     binding_class_path,
                 );
@@ -252,6 +255,7 @@ fn emitClass(
                 emitted_names[emitted_count] = method.name;
                 emitted_count += 1;
                 emitted_code_names[emitted_code_count] = code_name;
+                emitted_static[emitted_code_count] = method.is_static;
                 emitted_code_count += 1;
             }
             continue;
@@ -268,7 +272,7 @@ fn emitClass(
                 null,
                 &imports,
                 &custom,
-                templates,
+                &active_templates,
                 &replacement_used,
                 binding_class_path,
             );
@@ -283,7 +287,7 @@ fn emitClass(
                 null,
                 &imports,
                 &custom,
-                templates,
+                &active_templates,
                 &replacement_used,
                 binding_class_path,
             );
@@ -291,6 +295,7 @@ fn emitClass(
         emitted_names[emitted_count] = method.name;
         emitted_count += 1;
         emitted_code_names[emitted_code_count] = code_name;
+        emitted_static[emitted_code_count] = method.is_static;
         emitted_code_count += 1;
     }
 
@@ -310,7 +315,7 @@ fn emitClass(
                     true,
                     &imports,
                     &custom,
-                    templates,
+                    &active_templates,
                     &replacement_used,
                     binding_class_path,
                 );
@@ -318,6 +323,7 @@ fn emitClass(
                 emitted_names[emitted_count] = method.name;
                 emitted_count += 1;
                 emitted_code_names[emitted_code_count] = code_name;
+                emitted_static[emitted_code_count] = method.is_static;
                 emitted_code_count += 1;
                 continue;
             }
@@ -333,7 +339,7 @@ fn emitClass(
                     null,
                     &imports,
                     &custom,
-                    templates,
+                    &active_templates,
                     &replacement_used,
                     binding_class_path,
                 );
@@ -348,7 +354,7 @@ fn emitClass(
                     null,
                     &imports,
                     &custom,
-                    templates,
+                    &active_templates,
                     &replacement_used,
                     binding_class_path,
                 );
@@ -356,12 +362,13 @@ fn emitClass(
             emitted_names[emitted_count] = method.name;
             emitted_count += 1;
             emitted_code_names[emitted_code_count] = code_name;
+            emitted_static[emitted_code_count] = method.is_static;
             emitted_code_count += 1;
         }
         base_info = resolver.baseInfo(base);
     }
 
-    for (templates.list(.class)) |template| {
+    for (active_templates.list(.class)) |template| {
         if (template.kind != .method) continue;
         if (hasMethodName(emitted_code_names[0..emitted_code_count], template.method)) {
             std.log.err("Duplicate template class method `{s}` in {s}", .{ template.method, class.name });
@@ -393,6 +400,16 @@ fn emitClass(
         }
     }
 
+    try function_metadata.write(
+        writer,
+        &emitted_code_names,
+        &emitted_static,
+        emitted_count,
+        class_name,
+        false,
+        4,
+    );
+
     try writer.writeAll("};\n\n");
     try writeImports(writer, arena, resolver, info, &imports, options);
     try custom_code.writeRaw(writer, custom.imports);
@@ -403,6 +420,20 @@ fn isSingleton(api: ExtensionApiJson, name: []const u8) bool {
         if (std.mem.eql(u8, singleton.type, name)) return true;
     }
     return false;
+}
+
+fn buildAncestry(
+    arena: Allocator,
+    resolver: *const ClassResolver,
+    info: *const Info,
+) ![]const []const u8 {
+    var ancestor_names: std.ArrayList([]const u8) = .empty;
+    var current: ?*const Info = info;
+    while (current) |entry| {
+        try ancestor_names.append(arena, entry.class.name);
+        current = resolver.baseInfo(entry);
+    }
+    return ancestor_names.items;
 }
 
 fn writeConstruct(writer: *Io.Writer, class: *const ExtensionApiJson.Class, resolver: *const ClassResolver) !void {
@@ -985,11 +1016,22 @@ fn writeOptions(
     try writer.writeAll("Options = struct {\n");
     for (method.arguments) |argument| {
         if (argument.default_value == null) continue;
+        const default_value = argument.default_value.?;
+        const inline_default = defaults.canInlineDefault(argument.type, default_value);
         try writer.writeAll("        ");
         try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(": ?");
+        try writer.writeAll(": ");
+        if (!inline_default) try writer.writeAll("?");
         try writeCodegenType(writer, resolver, imports, argument.type, .argument);
-        try writer.writeAll(" = null,\n");
+        if (inline_default) {
+            try writer.writeAll(" = ");
+            if (!try type_mapping.writeDefaultValue(writer, resolver, argument.type, default_value, .class_file)) {
+                return error.UnsupportedInlineDefault;
+            }
+        } else {
+            try writer.writeAll(" = null");
+        }
+        try writer.writeAll(",\n");
     }
     try writer.writeAll("\n        pub inline fn toBinding(self: @This()) ");
     try type_mapping.writeBindingClassPath(writer, info.class);
@@ -997,18 +1039,27 @@ fn writeOptions(
     try writer.writeAll("            return .{\n");
     for (method.arguments) |argument| {
         if (argument.default_value == null) continue;
+        const default_value = argument.default_value.?;
+        const inline_default = defaults.canInlineDefault(argument.type, default_value);
         try writer.writeAll("                .");
         try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(" = if (self.");
-        try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(") |value| ");
-        const resolved = try type_mapping.resolve(resolver, argument.type, .argument);
-        try type_mapping.writeOptionValue(writer, resolved, "value");
-        try writer.writeAll(" else null,\n");
-        try accountImports(imports, resolved);
+        try writer.writeAll(" = ");
+        if (inline_default) {
+            const resolved = try type_mapping.resolve(resolver, argument.type, .argument);
+            try type_mapping.writeSelfOptionValue(writer, arena, resolved, argument.name);
+            try writer.writeAll(",\n");
+            try accountImports(imports, resolved);
+        } else {
+            try writer.writeAll("if (self.");
+            try names.writeMemberIdent(writer, argument.name);
+            try writer.writeAll(") |value| ");
+            const resolved = try type_mapping.resolve(resolver, argument.type, .argument);
+            try type_mapping.writeOptionValue(writer, resolved, "value");
+            try writer.writeAll(" else null,\n");
+            try accountImports(imports, resolved);
+        }
     }
     try writer.writeAll("            };\n        }\n    };\n\n");
-    _ = arena;
 }
 
 fn writeCodegenType(
@@ -1090,9 +1141,11 @@ const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
 const docs = @import("../model/docs.zig");
+const defaults = @import("../model/defaults.zig");
 const names = @import("../model/names.zig");
 const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
 const custom_code = @import("custom.zig");
+const function_metadata = @import("function_metadata.zig");
 const overrides = @import("overrides.zig");
 const template_mod = @import("templates.zig");
 const type_mapping = @import("type_mapping.zig");

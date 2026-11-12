@@ -35,6 +35,32 @@ pub fn ProjectionOf(comptime Real: type) type {
             };
         }
 
+        pub inline fn bindingCall(
+            self: *Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+            const func = auto.FunctionOf(generated_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallConst(
+            self: *const Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+            const func = auto.FunctionOf(generated_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallStatic(
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_namespace.StaticFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+            const func = auto.FunctionOf(generated_namespace, method);
+            return @call(.auto, func, args);
+        }
+
         pub const Planes = enum(u3) {
             near,
             far,
@@ -724,6 +750,8 @@ test "Projection double precision" {
 
 const std = @import("std");
 const bindings = @import("bindings");
+const auto = @import("../auto/auto.zig");
+const generated_namespace = @import("generated/projection.zig");
 const vector = @import("vector.zig");
 const aabb = @import("aabb.zig");
 const plane = @import("plane.zig");

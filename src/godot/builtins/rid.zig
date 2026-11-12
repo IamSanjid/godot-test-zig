@@ -23,6 +23,32 @@ pub const RID = extern struct {
         };
     }
 
+    pub inline fn bindingCall(
+        self: *Self,
+        comptime method: @EnumLiteral(),
+        args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
+    ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+        const func = auto.FunctionOf(generated_namespace, method);
+        return @call(.auto, func, .{self} ++ args);
+    }
+
+    pub inline fn bindingCallConst(
+        self: *const Self,
+        comptime method: @EnumLiteral(),
+        args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
+    ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+        const func = auto.FunctionOf(generated_namespace, method);
+        return @call(.auto, func, .{self} ++ args);
+    }
+
+    pub inline fn bindingCallStatic(
+        comptime method: @EnumLiteral(),
+        args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_namespace.StaticFunctions, method)),
+    ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+        const func = auto.FunctionOf(generated_namespace, method);
+        return @call(.auto, func, args);
+    }
+
     pub fn init(id: u64) Self {
         return .{ .id = id };
     }
@@ -51,3 +77,5 @@ test "RID layout and validity" {
 
 const std = @import("std");
 const bindings = @import("bindings");
+const auto = @import("../auto/auto.zig");
+const generated_namespace = @import("generated/rid.zig");

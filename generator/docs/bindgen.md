@@ -82,6 +82,9 @@ builtins implement their own.
 - Default literals use cached `String.fromComptimeLatin1` /
   `StringName.fromComptimeLatin1` where applicable and avoid deinitializing
   cached values.
+- Compile-time-safe option defaults (primitives, enums, bitfields, Color/Vector/
+  Rect types) are non-optional fields and are passed in place. Runtime-owned
+  defaults remain optional and are reconstructed by bindgen.
 - Class names, enum names and API type paths are deterministic.
 
 ## Known bindgen caveats

@@ -36,3 +36,31 @@ pub inline fn fromUtf8(str: []const u8) StringName {
     return result;
 }
 // @method_end fromUtf8
+
+// @method fromType
+
+pub fn fromType(comptime T: type) StringName {
+    return fromTypeName(typeShortName(T));
+}
+// @method_end fromType
+
+// @method fromTypeName
+
+pub fn fromTypeName(comptime name: []const u8) StringName {
+    const converted = comptime casez.comptimeConvert(.pascal, name);
+    return fromComptimeLatin1(converted);
+}
+// @method_end fromTypeName
+
+// @method typeShortName
+
+fn typeShortName(comptime T: type) [:0]const u8 {
+    const full = @typeName(T);
+    const pos = std.mem.lastIndexOfScalar(u8, full, '.') orelse return full;
+    return full[pos + 1 ..];
+}
+// @method_end typeShortName
+
+// @imports
+const casez = @import("casez");
+// @imports_end

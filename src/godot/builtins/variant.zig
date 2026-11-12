@@ -173,6 +173,11 @@ pub const Variant = extern struct {
         assert(self.tag == .object);
         return self.data.object.object;
     }
+
+    pub fn asVector2(self: *const Variant) Vector2 {
+        assert(self.tag == .vector2);
+        return self.data.vector2;
+    }
 };
 
 comptime {

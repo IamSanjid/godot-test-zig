@@ -34,6 +34,32 @@ pub fn Rect2Of(comptime Real: type) type {
             };
         }
 
+        pub inline fn bindingCall(
+            self: *Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_rect2_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_rect2_namespace, method)) {
+            const func = auto.FunctionOf(generated_rect2_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallConst(
+            self: *const Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_rect2_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_rect2_namespace, method)) {
+            const func = auto.FunctionOf(generated_rect2_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallStatic(
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_rect2_namespace.StaticFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_rect2_namespace, method)) {
+            const func = auto.FunctionOf(generated_rect2_namespace, method);
+            return @call(.auto, func, args);
+        }
+
         pub fn init(position: V2, size: V2) Self {
             return .{ .position = position, .size = size };
         }
@@ -198,6 +224,32 @@ pub fn Rect2iOf(comptime T: type) type {
                 bindings.builtins.Rect2i => @as(*const Self, @ptrCast(&v)).*,
                 else => @compileError("Expected bindings.builtins.Rect2i by value or a pointer to it, found: " ++ @typeName(V)),
             };
+        }
+
+        pub inline fn bindingCall(
+            self: *Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_rect2i_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_rect2i_namespace, method)) {
+            const func = auto.FunctionOf(generated_rect2i_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallConst(
+            self: *const Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_rect2i_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_rect2i_namespace, method)) {
+            const func = auto.FunctionOf(generated_rect2i_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallStatic(
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_rect2i_namespace.StaticFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_rect2i_namespace, method)) {
+            const func = auto.FunctionOf(generated_rect2i_namespace, method);
+            return @call(.auto, func, args);
         }
 
         pub fn init(position: V2, size: V2) Self {
@@ -467,4 +519,7 @@ test "Rect2 double precision" {
 
 const std = @import("std");
 const bindings = @import("bindings");
+const auto = @import("../auto/auto.zig");
+const generated_rect2_namespace = @import("generated/rect2.zig");
+const generated_rect2i_namespace = @import("generated/rect2i.zig");
 const vector = @import("vector.zig");

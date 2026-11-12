@@ -132,6 +132,7 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options.createModule() },
             .{ .name = "bindings", .module = bindings },
+            .{ .name = "casez", .module = casez },
         },
         .target = target,
         .optimize = optimize,

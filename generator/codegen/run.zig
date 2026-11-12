@@ -28,6 +28,7 @@ pub fn run(arena: Allocator, io: Io, args: []const [:0]const u8) !void {
     const real_name = types.realTypeName(options.api.builtin_build_conf);
     const resolver = try ClassResolver.init(arena, api, real_name, builtin_names);
     const templates = try template_mod.Set.load(arena, io);
+    try templates.validate(api);
 
     try artifacts.generateGlobals(arena, io, api, options);
     try artifacts.generateNative(arena, io, api, options);

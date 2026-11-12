@@ -132,6 +132,9 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
 
             pub const toBinding = H.toBinding;
             pub const fromBinding = H.fromBinding;
+
+            pub const bindingCall = H.bindingCall;
+            pub const bindingCallConst = H.bindingCallConst;
         },
 
         3 => extern struct {
@@ -252,6 +255,9 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
 
             pub const toBinding = H.toBinding;
             pub const fromBinding = H.fromBinding;
+
+            pub const bindingCall = H.bindingCall;
+            pub const bindingCallConst = H.bindingCallConst;
         },
 
         4 => extern struct {
@@ -339,6 +345,9 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
 
             pub const toBinding = H.toBinding;
             pub const fromBinding = H.fromBinding;
+
+            pub const bindingCall = H.bindingCall;
+            pub const bindingCallConst = H.bindingCallConst;
         },
 
         else => unreachable,
@@ -925,17 +934,46 @@ fn Helpers(comptime Self: type) type {
             else => @compileError("Unsupported dimension."),
         };
 
-        pub const toBinding = struct {
-            fn f(self: *const Self) BindingT {
-                return @as(*const BindingT, @ptrCast(self)).*;
-            }
-        }.f;
+        const generated_namespace = switch (Dim) {
+            2 => if (IsFloat) @import("generated/vector2.zig") else @import("generated/vector2i.zig"),
+            3 => if (IsFloat) @import("generated/vector3.zig") else @import("generated/vector3i.zig"),
+            4 => if (IsFloat) @import("generated/vector4.zig") else @import("generated/vector4i.zig"),
+            else => @compileError("Unsupported dimension."),
+        };
 
-        pub const fromBinding = struct {
-            fn f(v: BindingT) Self {
-                return @as(*const Self, @ptrCast(v)).*;
-            }
-        }.f;
+        pub fn toBinding(self: *const Self) BindingT {
+            return @as(*const BindingT, @ptrCast(self)).*;
+        }
+
+        pub fn fromBinding(v: BindingT) Self {
+            return @as(*const Self, @ptrCast(&v)).*;
+        }
+
+        pub inline fn bindingCall(
+            self: *Self,
+            comptime function: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, function)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, function)) {
+            const func = auto.FunctionOf(generated_namespace, function);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallConst(
+            self: *const Self,
+            comptime function: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, function)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, function)) {
+            const func = auto.FunctionOf(generated_namespace, function);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallStatic(
+            comptime function: @EnumLiteral(),
+            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_namespace.StaticFunctions, function)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, function)) {
+            const func = auto.FunctionOf(generated_namespace, function);
+            return @call(.auto, func, args);
+        }
     };
 }
 
@@ -1374,7 +1412,10 @@ test "all Vector4i methods compile" {
 }
 
 const std = @import("std");
+
 const basis_mod = @import("basis.zig");
 const constants = @import("constants.zig");
+
+const auto = @import("../auto/auto.zig");
 
 const bindings = @import("bindings");

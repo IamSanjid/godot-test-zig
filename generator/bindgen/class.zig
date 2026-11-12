@@ -694,6 +694,7 @@ fn writeOwnMethod(
 
     for (method.arguments) |argument| {
         if (argument.default_value) |default_value| {
+            if (defaults.canInlineDefault(argument.type, default_value)) continue;
             const needs_deinit = defaults.needsDeinit(argument.type, default_value);
             try writer.writeAll(if (needs_deinit) "        var " else "        const ");
             try names.writePrefixedIdent(writer, "actual_", argument.name);
@@ -718,12 +719,21 @@ fn writeOwnMethod(
     try writer.print("        var args: [{d}]interface.ConstTypePtr = undefined;\n", .{method.arguments.len});
     for (method.arguments, 0..) |argument, index| {
         const has_default = argument.default_value != null;
+        const inline_default = if (argument.default_value) |default_value|
+            defaults.canInlineDefault(argument.type, default_value)
+        else
+            false;
         const resolved_argument = try resolver.resolve(argument.type, .argument);
         if (resolved_argument.kind == .@"enum") {
             if (resolved_argument.is_bitfield) {
                 try writer.print("        const arg{d}_slot: u{d} = @bitCast(", .{ index, resolved_argument.bitfield_bits });
                 if (has_default) {
-                    try names.writePrefixedIdent(writer, "actual_", argument.name);
+                    if (inline_default) {
+                        try writer.writeAll("opt.");
+                        try names.writeMemberIdent(writer, argument.name);
+                    } else {
+                        try names.writePrefixedIdent(writer, "actual_", argument.name);
+                    }
                 } else {
                     try names.writeArgName(writer, argument.name, 0);
                 }
@@ -732,7 +742,12 @@ fn writeOwnMethod(
             } else {
                 try writer.print("        const arg{d}_slot: i64 = @backingInt(", .{index});
                 if (has_default) {
-                    try names.writePrefixedIdent(writer, "actual_", argument.name);
+                    if (inline_default) {
+                        try writer.writeAll("opt.");
+                        try names.writeMemberIdent(writer, argument.name);
+                    } else {
+                        try names.writePrefixedIdent(writer, "actual_", argument.name);
+                    }
                 } else {
                     try names.writeArgName(writer, argument.name, 0);
                 }
@@ -742,7 +757,12 @@ fn writeOwnMethod(
         } else {
             try writer.print("        args[{d}] = @ptrCast(&", .{index});
             if (has_default) {
-                try names.writePrefixedIdent(writer, "actual_", argument.name);
+                if (inline_default) {
+                    try writer.writeAll("opt.");
+                    try names.writeMemberIdent(writer, argument.name);
+                } else {
+                    try names.writePrefixedIdent(writer, "actual_", argument.name);
+                }
             } else {
                 try names.writeArgName(writer, argument.name, 0);
             }
@@ -1114,12 +1134,23 @@ fn writeOptions(
     try writer.writeAll("Options = struct {\n");
     for (method.arguments) |argument| {
         if (argument.default_value == null) continue;
+        const default_value = argument.default_value.?;
+        const inline_default = defaults.canInlineDefault(argument.type, default_value);
         try writer.writeAll("        ");
         try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(": ?");
+        try writer.writeAll(": ");
+        if (!inline_default) try writer.writeAll("?");
         try resolveWrite(writer, resolver, argument.type, .argument, real_name);
         try addImportResolved(imports, resolver, argument.type, .argument);
-        try writer.writeAll(" = null,\n");
+        if (inline_default) {
+            try writer.writeAll(" = ");
+            if (!try writeDefaultValue(writer, resolver, argument.type, default_value)) {
+                return error.UnsupportedInlineDefault;
+            }
+        } else {
+            try writer.writeAll(" = null");
+        }
+        try writer.writeAll(",\n");
     }
     const options_type = try std.fmt.allocPrint(arena, "{s}Options", .{method_pascal});
     try custom_code.writeIndented(writer, sections.codeForStruct(options_type), 4);

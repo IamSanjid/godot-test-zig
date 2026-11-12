@@ -7,19 +7,28 @@ pub const Artifact = enum { class, builtin };
 
 pub const Kind = enum { replace, method };
 
+pub const TargetModifier = enum { exact, derived };
+
+pub const Target = struct {
+    name: []const u8,
+    modifier: TargetModifier = .exact,
+};
+
 pub const Template = struct {
     kind: Kind = .replace,
     method: []const u8,
     code: []const u8,
+    /// Source file, used for diagnostics.
+    source: []const u8 = "",
+    /// null means the template applies to every artifact.
+    targets: ?[]const Target = null,
 };
 
-/// The matcher is centralized so future `@template_for` / `@template_skip`
-/// filters can be added without changing renderers.
+/// The matcher is centralized so future filters can be added without changing
+/// renderers.
 pub const TemplateMatch = struct {
     artifact: Artifact,
     method: []const u8,
-    types: ?[]const []const u8 = null,
-    skip: ?[]const []const u8 = null,
 };
 
 pub const RenderContext = struct {
@@ -39,8 +48,8 @@ pub const Set = struct {
     pub fn load(arena: Allocator, io: Io) !Set {
         var classes: std.ArrayList(Template) = .empty;
         var builtins: std.ArrayList(Template) = .empty;
-        try loadDirectory(arena, io, "generator/codegen/custom/templates/classes", &classes);
-        try loadDirectory(arena, io, "generator/codegen/custom/templates/builtins", &builtins);
+        try loadDirectory(arena, io, "generator/codegen/custom/templates/classes", .class, &classes);
+        try loadDirectory(arena, io, "generator/codegen/custom/templates/builtins", .builtin, &builtins);
         return .{
             .classes = classes.items,
             .builtins = builtins.items,
@@ -54,6 +63,47 @@ pub const Set = struct {
         };
     }
 
+    /// Return the templates that apply to one concrete artifact type.
+    /// `ancestors` includes the type itself followed by its base types.
+    pub fn filtered(
+        self: Set,
+        arena: Allocator,
+        artifact: Artifact,
+        type_name: []const u8,
+        ancestors: []const []const u8,
+    ) !Set {
+        var items: std.ArrayList(Template) = .empty;
+        for (self.list(artifact)) |template| {
+            if (!matchesTarget(template, artifact, type_name, ancestors)) continue;
+            try items.append(arena, template);
+        }
+        return switch (artifact) {
+            .class => .{ .classes = items.items },
+            .builtin => .{ .builtins = items.items },
+        };
+    }
+
+    pub fn validate(self: Set, api: ExtensionApiJson) !void {
+        for (self.classes) |template| {
+            const targets = template.targets orelse continue;
+            for (targets) |target| {
+                if (!hasClass(api, target.name)) {
+                    std.log.err("Unknown @templates_for class target `{s}` in {s}", .{ target.name, template.source });
+                    return error.UnknownTemplateTarget;
+                }
+            }
+        }
+        for (self.builtins) |template| {
+            const targets = template.targets orelse continue;
+            for (targets) |target| {
+                if (!hasBuiltin(api, target.name) or types.isPrimitive(target.name)) {
+                    std.log.err("Unknown or non-generated @templates_for builtin target `{s}` in {s}", .{ target.name, template.source });
+                    return error.UnknownTemplateTarget;
+                }
+            }
+        }
+    }
+
     pub fn find(self: Set, match: TemplateMatch) ?Template {
         for (self.list(match.artifact)) |template| {
             if (template.kind != .replace) continue;
@@ -63,10 +113,43 @@ pub const Set = struct {
     }
 };
 
+fn matchesTarget(
+    template: Template,
+    artifact: Artifact,
+    type_name: []const u8,
+    ancestors: []const []const u8,
+) bool {
+    const targets = template.targets orelse return true;
+    for (targets) |target| {
+        if (std.mem.eql(u8, type_name, target.name)) return true;
+        if (artifact == .class and target.modifier == .derived) {
+            for (ancestors) |ancestor| {
+                if (std.mem.eql(u8, ancestor, target.name)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn hasClass(api: ExtensionApiJson, name: []const u8) bool {
+    for (api.classes) |class| {
+        if (std.mem.eql(u8, class.name, name)) return true;
+    }
+    return false;
+}
+
+fn hasBuiltin(api: ExtensionApiJson, name: []const u8) bool {
+    for (api.builtin_classes) |builtin| {
+        if (std.mem.eql(u8, builtin.name, name)) return true;
+    }
+    return false;
+}
+
 fn loadDirectory(
     arena: Allocator,
     io: Io,
     path: []const u8,
+    artifact: Artifact,
     out: *std.ArrayList(Template),
 ) !void {
     var dir = Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |err| switch (err) {
@@ -95,18 +178,40 @@ fn loadDirectory(
         const file_path = try std.fs.path.join(arena, &.{ path, name });
         const raw_input = try Io.Dir.cwd().readFileAlloc(io, file_path, arena, .unlimited);
         const raw = if (std.mem.startsWith(u8, raw_input, "\xEF\xBB\xBF")) raw_input[3..] else raw_input;
-        try parseFile(arena, raw, out);
+        try parseFile(arena, raw, file_path, artifact, out);
     }
 }
 
-fn parseFile(arena: Allocator, raw: []const u8, out: *std.ArrayList(Template)) !void {
+fn parseFile(
+    arena: Allocator,
+    raw: []const u8,
+    source: []const u8,
+    artifact: Artifact,
+    out: *std.ArrayList(Template),
+) !void {
     var mode: enum { none, replace, method } = .none;
     var current_name: []const u8 = "";
     var current_aw: Io.Writer.Allocating = undefined;
+    var current_targets: ?[]const Target = null;
+    var saw_templates_for = false;
+    var saw_template = false;
 
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \r");
+        const directive_prefix = "// @templates_for";
+        if (std.mem.startsWith(u8, trimmed, directive_prefix)) {
+            const rest = trimmed[directive_prefix.len..];
+            if (rest.len == 0 or rest[0] == ' ' or rest[0] == '\t') {
+                if (mode != .none) return error.TemplatesForInsideTemplate;
+                if (saw_template) return error.TemplatesForAfterTemplate;
+                if (saw_templates_for) return error.DuplicateTemplatesFor;
+                const targets_text = std.mem.trim(u8, rest, " \t");
+                current_targets = try parseTargets(arena, artifact, targets_text);
+                saw_templates_for = true;
+                continue;
+            }
+        }
         if (std.mem.startsWith(u8, trimmed, "// @template_end")) {
             const name = std.mem.trim(u8, trimmed["// @template_end".len..], " ");
             const kind: Kind = switch (mode) {
@@ -119,26 +224,34 @@ fn parseFile(arena: Allocator, raw: []const u8, out: *std.ArrayList(Template)) !
             for (out.items) |existing| {
                 if (std.mem.eql(u8, existing.method, current_name)) return error.DuplicateTemplate;
             }
-            try out.append(arena, .{ .kind = kind, .method = current_name, .code = code });
+            try out.append(arena, .{
+                .kind = kind,
+                .method = current_name,
+                .code = code,
+                .source = source,
+                .targets = current_targets,
+            });
             mode = .none;
             continue;
         }
         if (std.mem.startsWith(u8, trimmed, "// @template replace ")) {
             if (mode != .none) return error.UnclosedTemplate;
             const name = std.mem.trim(u8, trimmed["// @template replace ".len..], " ");
-            if (name.len == 0 or !std.zig.isValidId(name)) return error.InvalidTemplateMethod;
+            if (name.len == 0 or !names_mod.isValidMemberName(name)) return error.InvalidTemplateMethod;
             current_name = try arena.dupe(u8, name);
             current_aw = .init(arena);
             mode = .replace;
+            saw_template = true;
             continue;
         }
         if (std.mem.startsWith(u8, trimmed, "// @template method ")) {
             if (mode != .none) return error.UnclosedTemplate;
             const name = std.mem.trim(u8, trimmed["// @template method ".len..], " ");
-            if (name.len == 0 or !std.zig.isValidId(name)) return error.InvalidTemplateMethod;
+            if (name.len == 0 or !names_mod.isValidMemberName(name)) return error.InvalidTemplateMethod;
             current_name = try arena.dupe(u8, name);
             current_aw = .init(arena);
             mode = .method;
+            saw_template = true;
             continue;
         }
 
@@ -148,6 +261,51 @@ fn parseFile(arena: Allocator, raw: []const u8, out: *std.ArrayList(Template)) !
         }
     }
     if (mode != .none) return error.UnclosedTemplate;
+}
+
+fn parseTargets(
+    arena: Allocator,
+    artifact: Artifact,
+    text: []const u8,
+) !?[]const Target {
+    if (text.len == 0) return error.InvalidTemplateTarget;
+    if (std.mem.eql(u8, text, "*")) return null;
+
+    var targets: std.ArrayList(Target) = .empty;
+    var selectors = std.mem.splitScalar(u8, text, ',');
+    while (selectors.next()) |raw_selector| {
+        const selector = std.mem.trim(u8, raw_selector, " \t");
+        if (selector.len == 0) return error.InvalidTemplateTarget;
+
+        var type_name = selector;
+        var modifier: TargetModifier = .exact;
+        if (std.mem.indexOfScalar(u8, selector, ':')) |colon| {
+            type_name = std.mem.trim(u8, selector[0..colon], " \t");
+            const modifier_text = std.mem.trim(u8, selector[colon + 1 ..], " \t");
+            if (std.mem.eql(u8, modifier_text, "exact")) {
+                modifier = .exact;
+            } else if (std.mem.eql(u8, modifier_text, "derived")) {
+                modifier = .derived;
+            } else {
+                return error.InvalidTemplateModifier;
+            }
+        }
+        if (type_name.len == 0 or !std.zig.isValidId(type_name)) return error.InvalidTemplateTarget;
+        if (artifact == .builtin and modifier != .exact) return error.DerivedTargetOnBuiltin;
+
+        var duplicate = false;
+        for (targets.items) |existing| {
+            if (std.mem.eql(u8, existing.name, type_name) and existing.modifier == modifier) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            try targets.append(arena, .{ .name = try arena.dupe(u8, type_name), .modifier = modifier });
+        }
+    }
+    if (targets.items.len == 0) return error.InvalidTemplateTarget;
+    return targets.items;
 }
 
 pub fn render(arena: Allocator, template: Template, context: RenderContext) ![]const u8 {
@@ -194,6 +352,9 @@ fn placeholderValue(placeholder: []const u8, context: RenderContext) ![]const u8
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
+const names_mod = @import("../model/names.zig");
+const types = @import("../model/types.zig");
 
 test "template files parse and render placeholders" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -212,7 +373,7 @@ test "template files parse and render placeholders" {
         \\    _ = self;
         \\}
         \\// @template_end extra
-    , &list);
+    , "<test>", .class, &list);
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
     try std.testing.expectEqual(Kind.replace, list.items[0].kind);
     try std.testing.expectEqual(Kind.method, list.items[1].kind);
@@ -238,5 +399,74 @@ test "template duplicate methods are rejected" {
         \\// @template_end process
         \\// @template replace process
         \\// @template_end process
-    , &list));
+    , "<test>", .class, &list));
+}
+
+test "templates_for selects exact and derived classes" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var list: std.ArrayList(Template) = .empty;
+    try parseFile(arena,
+        \\// @templates_for Control, Node:derived
+        \\// @template replace process
+        \\// @template_end process
+    , "<test>", .class, &list);
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    try std.testing.expectEqual(@as(usize, 2), list.items[0].targets.?.len);
+
+    const set = Set{ .classes = list.items };
+    const control = try set.filtered(arena, .class, "Control", &.{ "Control", "Node", "Object" });
+    try std.testing.expectEqual(@as(usize, 1), control.classes.len);
+
+    const label = try set.filtered(arena, .class, "Label", &.{ "Label", "Control", "Node", "Object" });
+    try std.testing.expectEqual(@as(usize, 1), label.classes.len);
+
+    const object = try set.filtered(arena, .class, "Object", &.{"Object"});
+    try std.testing.expectEqual(@as(usize, 0), object.classes.len);
+}
+
+test "templates_for * selects every class" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var list: std.ArrayList(Template) = .empty;
+    try parseFile(arena,
+        \\// @templates_for *
+        \\// @template method extra
+        \\// @template_end extra
+    , "<test>", .class, &list);
+    try std.testing.expect(list.items[0].targets == null);
+
+    const set = Set{ .classes = list.items };
+    const filtered = try set.filtered(arena, .class, "Anything", &.{"Anything"});
+    try std.testing.expectEqual(@as(usize, 1), filtered.classes.len);
+}
+
+test "templates_for rejects derived builtins" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var list: std.ArrayList(Template) = .empty;
+    try std.testing.expectError(error.DerivedTargetOnBuiltin, parseFile(arena,
+        \\// @templates_for PackedByteArray:derived
+        \\// @template method extra
+        \\// @template_end extra
+    , "<test>", .builtin, &list));
+}
+
+test "keyword method names are accepted" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var list: std.ArrayList(Template) = .empty;
+    try parseFile(arena,
+        \\// @template replace align
+        \\// @template_end align
+    , "<test>", .class, &list);
+    try std.testing.expectEqualStrings("align", list.items[0].method);
 }

@@ -31,6 +31,32 @@ pub fn Transform3dOf(comptime Real: type) type {
             };
         }
 
+        pub inline fn bindingCall(
+            self: *Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+            const func = auto.FunctionOf(generated_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallConst(
+            self: *const Self,
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+            const func = auto.FunctionOf(generated_namespace, method);
+            return @call(.auto, func, .{self} ++ args);
+        }
+
+        pub inline fn bindingCallStatic(
+            comptime method: @EnumLiteral(),
+            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_namespace.StaticFunctions, method)),
+        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
+            const func = auto.FunctionOf(generated_namespace, method);
+            return @call(.auto, func, args);
+        }
+
         pub const identity: Self = .{ .basis = B.identity, .origin = .zero };
         pub const flipX: Self = .{ .basis = B.flipX, .origin = .zero };
         pub const flipY: Self = .{ .basis = B.flipY, .origin = .zero };
@@ -311,6 +337,8 @@ fn setComponent(value: anytype, index: usize, new_value: @TypeOf(value.x)) void 
 
 const std = @import("std");
 const bindings = @import("bindings");
+const auto = @import("../auto/auto.zig");
+const generated_namespace = @import("generated/transform3d.zig");
 const vector = @import("vector.zig");
 const basis = @import("basis.zig");
 const aabb = @import("aabb.zig");

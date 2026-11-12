@@ -7,14 +7,20 @@
   result initialization
 - bindgen interface/class/builtin/utility/global/native/singleton output
 - codegen classes, utility, generated builtins, constants/enums/native/singletons
+- hand-written builtins emit top-level function wrappers instead of duplicate
+  `extern struct` declarations
+- `MemberFunctions` / `StaticFunctions` metadata aliases generated functions
 - class/builtin/utility custom overlays
 - class/builtin template replacements and additions
+- `@templates_for` class/builtin targeting, including derived class selectors
 - relative runtime import from `<out_dir>/godot.zig`
 - warning-and-ignore behavior for unsupported artifact overlays
 - builtin enum doc inference, including `Basis.from_euler`'s `order`
 - correct bitfield backing width and ptrcall slots
 - virtual `self` constness and inherited optional virtual forwarding
 - cached String/StringName default literal handling
+- compile-time default options are inlined (primitives, enums, bitfields,
+  Color/Vector/Rect); runtime-owned defaults stay optional
 - Variant `asObject` / `asCallable` / `asInt` via pointer casts
 - codegen varargs convert library-supplied codegen Variants to binding Variants;
   bindgen assembles the final engine pointer array

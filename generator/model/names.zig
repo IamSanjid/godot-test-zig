@@ -59,6 +59,20 @@ pub fn writeRawIdent(writer: *Io.Writer, name: []const u8) !void {
     }
 }
 
+/// Whether `name` can be used as a generated member/function identifier.
+///
+/// Keywords and primitive type names are valid after `writeRawIdent` escapes
+/// them as `@"name"`.
+pub fn isValidMemberName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |c| {
+        if (c == '"' or c == '\\' or c == '\n' or c == '\r') return false;
+    }
+    if (std.zig.isValidId(name)) return true;
+    if (std.zig.Token.getKeyword(name) != null) return true;
+    return isPrimitiveName(name);
+}
+
 pub fn writeMemberIdent(writer: *Io.Writer, name: []const u8) !void {
     var buf: [160]u8 = undefined;
     var fixed: Io.Writer = .fixed(&buf);

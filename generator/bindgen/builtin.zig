@@ -414,11 +414,22 @@ fn writeMethod(
         try writer.writeAll("Options = struct {\n");
         for (method.arguments) |argument| {
             if (argument.default_value == null) continue;
+            const default_value = argument.default_value.?;
+            const inline_default = defaults.canInlineDefault(argument.type, default_value);
             try writer.writeAll("    ");
             try common.writeIdent(writer, .snake, argument.name);
-            try writer.writeAll(": ?");
+            try writer.writeAll(": ");
+            if (!inline_default) try writer.writeAll("?");
             try writeBuiltinType(writer, resolver, argument.type, .argument);
-            try writer.writeAll(" = null,\n");
+            if (inline_default) {
+                try writer.writeAll(" = ");
+                if (!try writeBuiltinDefault(writer, argument.type, default_value, real_name, resolver)) {
+                    return error.UnsupportedInlineDefault;
+                }
+            } else {
+                try writer.writeAll(" = null");
+            }
+            try writer.writeAll(",\n");
         }
         try writer.writeAll("};\n\n");
     }
@@ -453,6 +464,7 @@ fn writeMethod(
 
     for (method.arguments) |argument| {
         if (argument.default_value) |default_value| {
+            if (defaults.canInlineDefault(argument.type, default_value)) continue;
             const needs_deinit = defaults.needsDeinit(argument.type, default_value);
             try writer.writeAll(if (needs_deinit) "    var " else "    const ");
             try names.writePrefixedIdent(writer, "actual_", argument.name);
@@ -476,6 +488,11 @@ fn writeMethod(
 
     try writer.print("    var args: [{d}]interface.ConstTypePtr = undefined;\n", .{method.arguments.len});
     for (method.arguments, 0..) |argument, index| {
+        const has_default = argument.default_value != null;
+        const inline_default = if (argument.default_value) |default_value|
+            defaults.canInlineDefault(argument.type, default_value)
+        else
+            false;
         const resolved_argument = try resolver.resolveFor(argument.type, .argument, .builtin_file);
         if (resolved_argument.kind == .@"enum") {
             if (resolved_argument.is_bitfield) {
@@ -483,8 +500,13 @@ fn writeMethod(
             } else {
                 try writer.print("    const arg{d}_slot: i64 = @backingInt(", .{index});
             }
-            if (argument.default_value != null) {
-                try names.writePrefixedIdent(writer, "actual_", argument.name);
+            if (has_default) {
+                if (inline_default) {
+                    try writer.writeAll("opt.");
+                    try names.writeMemberIdent(writer, argument.name);
+                } else {
+                    try names.writePrefixedIdent(writer, "actual_", argument.name);
+                }
             } else {
                 try names.writeArgName(writer, argument.name, index);
             }
@@ -492,8 +514,13 @@ fn writeMethod(
             try writer.print("    args[{d}] = @ptrCast(&arg{d}_slot);\n", .{ index, index });
         } else {
             try writer.print("    args[{d}] = @ptrCast(&", .{index});
-            if (argument.default_value != null) {
-                try names.writePrefixedIdent(writer, "actual_", argument.name);
+            if (has_default) {
+                if (inline_default) {
+                    try writer.writeAll("opt.");
+                    try names.writeMemberIdent(writer, argument.name);
+                } else {
+                    try names.writePrefixedIdent(writer, "actual_", argument.name);
+                }
             } else {
                 try names.writeArgName(writer, argument.name, index);
             }

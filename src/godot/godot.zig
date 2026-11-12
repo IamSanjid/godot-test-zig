@@ -50,25 +50,25 @@ pub fn defaultInit(
     return true;
 }
 
-pub fn shortTypeName(comptime T: type) [:0]const u8 {
-    const full = @typeName(T);
-    // only look for '.' before any generic parameter list, e.g. "mod.List(mod.Foo)"
-    const head_end = std.mem.indexOfScalar(u8, full, '(') orelse full.len;
-    const dot = std.mem.lastIndexOfScalar(u8, full[0..head_end], '.') orelse return full;
-    return full[dot + 1 ..];
-}
-
 const TestNode = struct {
     pub const Extends = classes.core.Node;
 
     pub fn _ready(_: *const @This()) void {
         const value: u8 = 69;
-        const fmt = builtins.StringName.fromComptimeLatin1("[color=green]**Value**[/color]: %d %v");
+        const fmt = builtins.StringName.fromComptimeLatin1("[color=green]**Value**[/color]: %d %v %v %v");
         var array: builtins.Array = .init();
         defer array.deinit();
         array.append(.fromPtr(u8, &value));
         const vector: builtins.Vector2 = .{ .x = 69, .y = 420 };
+        const direction_to = vector.bindingCallConst(.directionTo, .{builtins.Vector2{ .x = 69, .y = 410 }});
+        const direction_to2 = vector.directionTo(builtins.Vector2{ .x = 69, .y = 430 });
         array.append(.fromPtr(builtins.Vector2, @as(*const builtins.Vector2, @ptrCast(&vector))));
+        array.append(.fromPtr(builtins.Vector2, @as(*const builtins.Vector2, @ptrCast(&direction_to))));
+        array.append(.fromPtr(builtins.Vector2, @as(*const builtins.Vector2, @ptrCast(&direction_to2))));
+
+        const value_from_array0 = array.indexConst(0).asInt();
+        std.log.debug("value_from_array0: {}", .{value_from_array0});
+
         const fmt1 = fmt.opModArray(&array);
         utility.general.printRich(
             .fromPtr(builtins.String, &fmt1),
@@ -80,18 +80,15 @@ const TestNode = struct {
 pub fn scannedClassesInitialize(p_userdata: ?*anyopaque, p_level: interface.InitializationLevel) callconv(.c) void {
     _ = p_userdata;
     if (p_level == .scene) {
-        const class_name: builtins.StringName = .fromComptimeLatin1(shortTypeName(TestNode));
-        const parent_class_name: builtins.StringName = .fromComptimeLatin1(shortTypeName(TestNode.Extends));
+        const class_name: builtins.StringName = .fromType(TestNode);
+        const parent_class_name: builtins.StringName = .fromType(TestNode.Extends);
         const class_info: interface.ClassCreationInfo6 = .{
             .is_exposed = true,
             .create_instance_func = &struct {
                 fn f(_: ?*anyopaque, p_notify_postinitialize: bool) callconv(.c) interface.ObjectPtr {
                     const base = TestNode.Extends.construct() orelse return null;
-                    const self = engine_allocator.create(TestNode) catch null;
-                    const p_class_name: builtins.StringName = .fromComptimeLatin1(shortTypeName(TestNode));
-                    dispatch(.object_set_instance, .{ base, &p_class_name, self });
-                    const binding_callbacks: interface.InstanceBindingCallbacks = .{};
-                    dispatch(.object_set_instance_binding, .{ base, library(), self, &binding_callbacks });
+                    const self = engine_allocator.create(TestNode) catch return null;
+                    base.setInstance(TestNode, self);
                     std.log.debug("created TestNode!", .{});
                     if (p_notify_postinitialize) {
                         base.notification(TestNode.Extends.notification_postinitialize, .{});
@@ -139,7 +136,7 @@ pub fn scannedClassesDeinitialize(p_userdata: ?*anyopaque, p_level: interface.In
 
     if (unreg) return;
     unreg = true;
-    const class_name: builtins.StringName = .fromComptimeLatin1(shortTypeName(TestNode));
+    const class_name: builtins.StringName = .fromType(TestNode);
     dispatch(.classdb_unregister_extension_class, .{ library(), &class_name });
 }
 
@@ -147,9 +144,12 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const build_options = @import("build_options");
+
 pub const bindings = @import("bindings");
 const interface = bindings.interface;
-// const bbuiltins = bindings.builtins;
+pub const DefaultDispatcher = bindings.Dispatcher(&.{});
+
+pub const auto = @import("auto/auto.zig");
 pub const builtins = @import("builtins/builtins.zig");
 pub const classes = @import("classes/classes.zig");
 pub const constants = @import("constants.zig");
@@ -157,5 +157,5 @@ pub const enums = @import("enums.zig");
 pub const native = @import("native.zig");
 pub const singletons = @import("singletons.zig");
 pub const utility = @import("utility/utility.zig");
-pub const DefaultDispatcher = bindings.Dispatcher(&.{});
+
 pub const engine_allocator = @import("heap.zig").engine_allocator;

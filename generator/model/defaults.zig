@@ -22,6 +22,41 @@ pub fn parseCall(value: []const u8) ?Call {
     return call;
 }
 
+/// Whether a default can be represented directly in an options struct.
+///
+/// This is deliberately narrower than "any default we can reconstruct":
+/// runtime-owned values (String, Array, ...), RID, and types whose codegen and
+/// binding field layouts differ stay optional.
+pub fn canInlineDefault(raw_type: []const u8, default_value: []const u8) bool {
+    if (std.mem.eql(u8, raw_type, "bool") or
+        std.mem.eql(u8, raw_type, "int") or
+        std.mem.eql(u8, raw_type, "float"))
+    {
+        return true;
+    }
+    if (std.mem.startsWith(u8, raw_type, "enum::") or std.mem.startsWith(u8, raw_type, "bitfield::")) {
+        return isInteger(default_value);
+    }
+    if (!isInlineMathType(raw_type)) return false;
+
+    var buf: [512]u8 = undefined;
+    var fixed: Io.Writer = .fixed(&buf);
+    _ = writeMathLiteral(&fixed, "", raw_type, default_value) catch return false;
+    return fixed.buffered().len != 0;
+}
+
+fn isInlineMathType(raw_type: []const u8) bool {
+    return std.mem.eql(u8, raw_type, "Color") or
+        std.mem.eql(u8, raw_type, "Vector2") or
+        std.mem.eql(u8, raw_type, "Vector2i") or
+        std.mem.eql(u8, raw_type, "Vector3") or
+        std.mem.eql(u8, raw_type, "Vector3i") or
+        std.mem.eql(u8, raw_type, "Vector4") or
+        std.mem.eql(u8, raw_type, "Vector4i") or
+        std.mem.eql(u8, raw_type, "Rect2") or
+        std.mem.eql(u8, raw_type, "Rect2i");
+}
+
 pub fn writeMathLiteral(writer: *Io.Writer, prefix: []const u8, raw_type: []const u8, value: []const u8) !bool {
     const call = parseCall(value) orelse return false;
     if (!std.mem.eql(u8, call.name, raw_type)) return false;
@@ -174,3 +209,17 @@ const Io = std.Io;
 
 const names = @import("names.zig");
 const result_init = @import("result_init.zig");
+
+test "inline default classification" {
+    try std.testing.expect(canInlineDefault("bool", "true"));
+    try std.testing.expect(canInlineDefault("int", "0"));
+    try std.testing.expect(canInlineDefault("float", "0.0"));
+    try std.testing.expect(canInlineDefault("enum::Node.InternalMode", "0"));
+    try std.testing.expect(canInlineDefault("bitfield::ResourceSaver.SaverFlags", "0"));
+    try std.testing.expect(canInlineDefault("Color", "Color(1, 1, 1, 1)"));
+    try std.testing.expect(canInlineDefault("Vector2", "Vector2(0, 0)"));
+    try std.testing.expect(canInlineDefault("Rect2", "Rect2(0, 0, 1, 1)"));
+    try std.testing.expect(!canInlineDefault("String", "&\"\""));
+    try std.testing.expect(!canInlineDefault("RID", "RID()"));
+    try std.testing.expect(!canInlineDefault("Transform2D", "Transform2D(1, 0, 0, 1, 0, 0)"));
+}

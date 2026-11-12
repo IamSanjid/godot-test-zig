@@ -155,7 +155,7 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
 }
 
 fn validateName(name: []const u8) !void {
-    if (name.len == 0 or !std.zig.isValidId(name)) return error.InvalidCustomMethod;
+    if (name.len == 0 or !names.isValidMemberName(name)) return error.InvalidCustomMethod;
 }
 
 fn appendUnique(
@@ -217,6 +217,7 @@ pub fn writeIndented(writer: *Io.Writer, code: []const u8, indent: usize) !void 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const names = @import("../model/names.zig");
 
 test "custom sections parse imports, replacements, and additions" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);

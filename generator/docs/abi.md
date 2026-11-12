@@ -69,10 +69,23 @@ Codegen converts returns at the binding boundary:
 
 ## Optional arguments and defaults
 
-Bindgen reconstructs default arguments into local `actual_*` values, then passes
-their addresses. Codegen does not reconstruct defaults: it passes an options
-struct whose `toBinding()` produces the binding options struct, and the binding
-method applies the defaults.
+Defaults that are compile-time values are stored directly in the options struct
+as non-optional fields: primitives, enums, bitfields, `Color`, `Vector2`/`2i`,
+`Vector3`/`3i`, `Vector4`/`4i`, `Rect2`, and `Rect2i`.
+
+Bindgen then uses `opt.field` in place instead of reconstructing an `actual_*`
+copy. Enum and bitfield fields are still converted to their ptrcall slots.
+
+Codegen keeps the same options shape and its `toBinding()` assigns those fields
+directly, calling `toBinding()` only for builtin values such as Color/Vector/Rect.
+
+Runtime-owned defaults (`String`, `StringName`, `NodePath`, `Array`,
+`Dictionary`, `Callable`, `Signal`, packed arrays, `Variant`, `RID`, class/native
+pointers) remain optional and are reconstructed by bindgen when needed.
+
+`Transform2D`/`Transform3D` defaults also remain optional. Their layouts are
+ABI-correct, but binding-facing fields (`x`/`y`/`origin`, `Basis.x/y/z`) and
+hand-written storage fields (`columns`, `Basis.rows`) are not spelled the same.
 
 Default ownership:
 

@@ -21,7 +21,7 @@ pub fn generate(
     const sizes = api.sizesFor(options.api.builtin_build_conf);
     const offsets = api.offsetsFor(options.api.builtin_build_conf);
     for (resolver.builtin_classes) |*class| {
-        if (isPrimitive(class.name)) continue;
+        if (types.isPrimitive(class.name)) continue;
         const size = if (sizes) |entries| findSize(entries, class.name) else null;
         const field_offsets = if (offsets) |entries| findOffsets(entries, class.name) else null;
         try emitBuiltin(arena, io, api, options, resolver, class, size, field_offsets, generated_dir, templates);
@@ -41,6 +41,7 @@ fn emitBuiltin(
     templates: *const template_mod.Set,
 ) !void {
     const file_name = try std.mem.concat(arena, u8, &.{ try names.snake(arena, class.name), ".zig" });
+    const active_templates = try templates.*.filtered(arena, .builtin, class.name, &.{});
     const custom_relative = try std.fmt.allocPrint(arena, "builtins/{s}", .{file_name});
     const custom_sections = (try custom_code.read(arena, io, custom_relative)) orelse custom_code.Sections{};
     const binding_builtin = try std.fmt.allocPrint(arena, "builtins.{s}", .{class.name});
@@ -65,8 +66,15 @@ fn emitBuiltin(
     if (class.brief_description != null or class.description != null) try writer.writeAll("\n");
 
     const real_name = types.realTypeName(options.api.builtin_build_conf);
-    try writeStruct(writer, arena, class, field_offsets, expected_size, real_name, &imports, resolver, options);
-    try writer.writeAll("\n");
+    const top_level = isHandwritten(class.name);
+    const self_type = if (top_level)
+        try std.fmt.allocPrint(arena, "builtins.{s}", .{class.name})
+    else
+        class.name;
+    if (!top_level) {
+        try writeStruct(writer, arena, class, field_offsets, expected_size, real_name, &imports, resolver, options);
+        try writer.writeAll("\n");
+    }
 
     for (class.enums) |class_enum| {
         try writer.writeAll("\n    pub const ");
@@ -80,6 +88,7 @@ fn emitBuiltin(
 
     var emitted_code_names: [512][]const u8 = undefined;
     var emitted_code_count: usize = 0;
+    var emitted_static: [512]bool = undefined;
     var replacement_used: [64]bool = @splat(false);
 
     for (class.methods) |method| {
@@ -94,9 +103,11 @@ fn emitBuiltin(
                 &imports,
                 options,
                 &custom_sections,
-                templates,
+                &active_templates,
                 &replacement_used,
                 binding_builtin,
+                top_level,
+                self_type,
             );
         } else {
             try writeMethod(
@@ -108,31 +119,35 @@ fn emitBuiltin(
                 &imports,
                 options,
                 &custom_sections,
-                templates,
+                &active_templates,
                 &replacement_used,
                 binding_builtin,
+                top_level,
+                self_type,
             );
         }
         emitted_code_names[emitted_code_count] = try names.camel(arena, method.name);
+        emitted_static[emitted_code_count] = method.is_static;
         emitted_code_count += 1;
     }
+    const method_count = emitted_code_count;
     for (class.constructors) |constructor| {
         try writer.writeAll("\n");
-        try writeConstructor(writer, arena, resolver, class, constructor, &imports);
+        try writeConstructor(writer, arena, resolver, class, constructor, &imports, top_level, self_type);
     }
     for (class.operators) |operator| {
         try writer.writeAll("\n");
-        try writeOperator(writer, arena, resolver, class, operator, &imports);
+        try writeOperator(writer, arena, resolver, class, operator, &imports, top_level, self_type);
     }
     if (class.has_destructor) {
         try writer.writeAll("\n    pub inline fn deinit(self: *");
-        try names.writeRawIdent(writer, class.name);
+        try writer.writeAll(self_type);
         try writer.writeAll(") void {\n        ");
         try type_mapping.writeBindingBuiltinPath(writer, class.name);
         try writer.writeAll(".deinit(@ptrCast(self), runtime.dispatcher());\n    }\n");
     }
 
-    for (templates.list(.builtin)) |template| {
+    for (active_templates.list(.builtin)) |template| {
         if (template.kind != .method) continue;
         if (hasName(emitted_code_names[0..emitted_code_count], template.method)) {
             std.log.err("Duplicate template builtin method `{s}` in {s}", .{ template.method, class.name });
@@ -141,7 +156,7 @@ fn emitBuiltin(
         const rendered = try template_mod.render(arena, template, .{
             .artifact = .builtin,
             .method = template.method,
-            .builtin_name = class.name,
+            .builtin_name = self_type,
             .binding_builtin = binding_builtin,
         });
         try custom_code.writeIndented(writer, rendered, 4);
@@ -163,10 +178,22 @@ fn emitBuiltin(
         }
     }
 
-    try writer.writeAll("};\n\n");
-    if (expected_size) |size| {
-        try writer.print("comptime {{\n    checkTypeLayout({s}, {d});\n}}\n\n", .{ class.name, size });
-        try writeLayoutCheck(writer, class, field_offsets);
+    try function_metadata.write(
+        writer,
+        &emitted_code_names,
+        &emitted_static,
+        method_count,
+        class.name,
+        top_level,
+        if (top_level) 0 else 4,
+    );
+
+    if (!top_level) {
+        try writer.writeAll("};\n\n");
+        if (expected_size) |size| {
+            try writer.print("comptime {{\n    checkTypeLayout({s}, {d});\n}}\n\n", .{ class.name, size });
+            try writeLayoutCheck(writer, class, field_offsets);
+        }
     }
     try writeImports(writer, arena, class, &imports, options);
     try custom_code.writeRaw(writer, custom_sections.imports);
@@ -240,7 +267,7 @@ fn writeMetaType(
     if (std.mem.eql(u8, meta, "int32")) return writer.writeAll("i32");
     if (std.mem.eql(u8, meta, "int64")) return writer.writeAll("i64");
     if (std.mem.eql(u8, meta, "bool")) return writer.writeAll("bool");
-    return writeType(writer, resolver, imports, meta, .argument, self_name);
+    return writeType(writer, resolver, imports, meta, .argument, self_name, false);
 }
 
 fn writeMethod(
@@ -255,6 +282,8 @@ fn writeMethod(
     templates: *const template_mod.Set,
     replacement_used: *[64]bool,
     binding_builtin: []const u8,
+    top_level: bool,
+    self_type: []const u8,
 ) !void {
     const method_pascal = try names.pascal(arena, method.name);
     var has_options = false;
@@ -262,14 +291,14 @@ fn writeMethod(
         if (argument.default_value != null) has_options = true;
     }
     if (has_options) {
-        try writeOptions(writer, arena, resolver, class, method, method_pascal, imports);
+        try writeOptions(writer, arena, resolver, class, method, method_pascal, imports, top_level);
     }
 
     const generated_name = try names.camel(arena, method.name);
     if (try overrides.write(writer, arena, custom_sections, templates, replacement_used, generated_name, .{
         .artifact = .builtin,
         .method = method.name,
-        .builtin_name = class.name,
+        .builtin_name = self_type,
         .binding_builtin = binding_builtin,
     }, 4)) return;
 
@@ -281,7 +310,7 @@ fn writeMethod(
     if (!method.is_static) {
         try writer.writeAll("self: ");
         try writer.writeAll(if (method.is_const) "*const " else "*");
-        try names.writeRawIdent(writer, class.name);
+        try writer.writeAll(self_type);
         first = false;
     }
     for (method.arguments) |argument| {
@@ -290,7 +319,7 @@ fn writeMethod(
         first = false;
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try writeType(writer, resolver, imports, argument.type, .argument, class.name);
+        try writeType(writer, resolver, imports, argument.type, .argument, class.name, top_level);
     }
     if (has_options) {
         if (!first) try writer.writeAll(", ");
@@ -301,7 +330,7 @@ fn writeMethod(
     }
     try writer.writeAll(") ");
     const resolved_return = try resolver.resolveFor(method.return_type, .return_value, .utility_file);
-    try writeResolvedType(writer, resolved_return, class.name);
+    try writeResolvedType(writer, resolved_return, class.name, top_level);
     try accountImports(imports, resolved_return);
     try writer.writeAll(" {\n");
 
@@ -338,7 +367,7 @@ fn writeMethod(
     try writer.writeAll(");\n");
     if (resolved_return.kind != .void) {
         try writer.writeAll("        return ");
-        try writeReturn(writer, resolved_return, "result", class.name);
+        try writeReturn(writer, resolved_return, "result", class.name, top_level);
         try writer.writeAll(";\n");
     }
     try writer.writeAll("    }\n");
@@ -357,12 +386,14 @@ fn writeVarargMethod(
     templates: *const template_mod.Set,
     replacement_used: *[64]bool,
     binding_builtin: []const u8,
+    top_level: bool,
+    self_type: []const u8,
 ) !void {
     const generated_name = try names.camel(arena, method.name);
     if (try overrides.write(writer, arena, custom_sections, templates, replacement_used, generated_name, .{
         .artifact = .builtin,
         .method = method.name,
-        .builtin_name = class.name,
+        .builtin_name = self_type,
         .binding_builtin = binding_builtin,
     }, 4)) return;
 
@@ -374,7 +405,7 @@ fn writeVarargMethod(
     if (!method.is_static) {
         try writer.writeAll("self: ");
         try writer.writeAll(if (method.is_const) "*const " else "*");
-        try names.writeRawIdent(writer, class.name);
+        try writer.writeAll(self_type);
         first = false;
     }
     for (method.arguments) |argument| {
@@ -382,12 +413,12 @@ fn writeVarargMethod(
         first = false;
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try writeType(writer, resolver, imports, argument.type, .argument, class.name);
+        try writeType(writer, resolver, imports, argument.type, .argument, class.name, top_level);
     }
     if (!first) try writer.writeAll(", ");
     try writer.writeAll("vargs: anytype) ");
     const resolved_return = try resolver.resolveFor(method.return_type, .return_value, .utility_file);
-    try writeResolvedType(writer, resolved_return, class.name);
+    try writeResolvedType(writer, resolved_return, class.name, top_level);
     try accountImports(imports, resolved_return);
     try writer.writeAll(" {\n");
     try writer.writeAll("        var args: [vargs.len]bindings.builtins.Variant = undefined;\n");
@@ -423,7 +454,7 @@ fn writeVarargMethod(
     try writer.writeAll("args);\n");
     if (resolved_return.kind != .void) {
         try writer.writeAll("        return ");
-        try writeReturn(writer, resolved_return, "result", class.name);
+        try writeReturn(writer, resolved_return, "result", class.name, top_level);
         try writer.writeAll(";\n");
     }
     try writer.writeAll("    }\n");
@@ -438,17 +469,29 @@ fn writeOptions(
     method: ExtensionApiJson.Method,
     method_pascal: []const u8,
     imports: *ImportSet,
+    top_level: bool,
 ) !void {
     try writer.writeAll("    pub const ");
     try writer.writeAll(method_pascal);
     try writer.writeAll("Options = struct {\n");
     for (method.arguments) |argument| {
         if (argument.default_value == null) continue;
+        const default_value = argument.default_value.?;
+        const inline_default = defaults.canInlineDefault(argument.type, default_value);
         try writer.writeAll("        ");
         try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(": ?");
-        try writeType(writer, resolver, imports, argument.type, .argument, class.name);
-        try writer.writeAll(" = null,\n");
+        try writer.writeAll(": ");
+        if (!inline_default) try writer.writeAll("?");
+        try writeType(writer, resolver, imports, argument.type, .argument, class.name, top_level);
+        if (inline_default) {
+            try writer.writeAll(" = ");
+            if (!try type_mapping.writeDefaultValue(writer, resolver, argument.type, default_value, .utility_file)) {
+                return error.UnsupportedInlineDefault;
+            }
+        } else {
+            try writer.writeAll(" = null");
+        }
+        try writer.writeAll(",\n");
     }
     try writer.writeAll("\n        pub inline fn toBinding(self: @This()) ");
     try type_mapping.writeBindingBuiltinPath(writer, class.name);
@@ -456,18 +499,27 @@ fn writeOptions(
     try writer.writeAll("            return .{\n");
     for (method.arguments) |argument| {
         if (argument.default_value == null) continue;
+        const default_value = argument.default_value.?;
+        const inline_default = defaults.canInlineDefault(argument.type, default_value);
         try writer.writeAll("                .");
         try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(" = if (self.");
-        try names.writeMemberIdent(writer, argument.name);
-        try writer.writeAll(") |value| ");
-        const resolved = try resolver.resolveFor(argument.type, .argument, .utility_file);
-        try type_mapping.writeOptionValue(writer, resolved, "value");
-        try writer.writeAll(" else null,\n");
-        try accountImports(imports, resolved);
+        try writer.writeAll(" = ");
+        if (inline_default) {
+            const resolved = try resolver.resolveFor(argument.type, .argument, .utility_file);
+            try type_mapping.writeSelfOptionValue(writer, arena, resolved, argument.name);
+            try writer.writeAll(",\n");
+            try accountImports(imports, resolved);
+        } else {
+            try writer.writeAll("if (self.");
+            try names.writeMemberIdent(writer, argument.name);
+            try writer.writeAll(") |value| ");
+            const resolved = try resolver.resolveFor(argument.type, .argument, .utility_file);
+            try type_mapping.writeOptionValue(writer, resolved, "value");
+            try writer.writeAll(" else null,\n");
+            try accountImports(imports, resolved);
+        }
     }
     try writer.writeAll("            };\n        }\n    };\n\n");
-    _ = arena;
 }
 
 fn writeConstructor(
@@ -477,6 +529,8 @@ fn writeConstructor(
     class: *const ExtensionApiJson.BuiltinClass,
     constructor: ExtensionApiJson.Constructor,
     imports: *ImportSet,
+    top_level: bool,
+    self_type: []const u8,
 ) !void {
     const name = try builtin_names.constructorName(arena, constructor);
     try docs.write(writer, arena, constructor.description, 4, "///");
@@ -489,10 +543,10 @@ fn writeConstructor(
         first = false;
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try writeType(writer, resolver, imports, argument.type, .argument, class.name);
+        try writeType(writer, resolver, imports, argument.type, .argument, class.name, top_level);
     }
     try writer.writeAll(") ");
-    try names.writeRawIdent(writer, class.name);
+    try writer.writeAll(self_type);
     try writer.writeAll(" {\n        const value = ");
     try type_mapping.writeBindingBuiltinPath(writer, class.name);
     try writer.writeAll(".");
@@ -506,7 +560,7 @@ fn writeConstructor(
     }
     try writer.writeAll(");\n");
     try writer.writeAll("        return ");
-    try names.writeRawIdent(writer, class.name);
+    try writer.writeAll(self_type);
     try writer.writeAll(".fromBinding(value);\n    }\n");
 }
 
@@ -517,20 +571,22 @@ fn writeOperator(
     class: *const ExtensionApiJson.BuiltinClass,
     operator: ExtensionApiJson.Operator,
     imports: *ImportSet,
+    top_level: bool,
+    self_type: []const u8,
 ) !void {
     const name = try builtin_names.operatorName(arena, operator);
     try docs.write(writer, arena, operator.description, 4, "///");
     try writer.writeAll("    pub inline fn ");
     try names.writeRawIdent(writer, name);
     try writer.writeAll("(self: *const ");
-    try names.writeRawIdent(writer, class.name);
+    try writer.writeAll(self_type);
     if (operator.right_type) |right_type| {
         try writer.writeAll(", rhs: *const ");
-        try writeType(writer, resolver, imports, right_type, .argument, class.name);
+        try writeType(writer, resolver, imports, right_type, .argument, class.name, top_level);
     }
     try writer.writeAll(") ");
     const resolved_return = try resolver.resolveFor(operator.return_type, .return_value, .utility_file);
-    try writeResolvedType(writer, resolved_return, class.name);
+    try writeResolvedType(writer, resolved_return, class.name, top_level);
     try accountImports(imports, resolved_return);
     try writer.writeAll(" {\n        const result = ");
     try type_mapping.writeBindingBuiltinPath(writer, class.name);
@@ -546,7 +602,7 @@ fn writeOperator(
         try accountImports(imports, resolved);
     }
     try writer.writeAll(");\n        return ");
-    try writeReturn(writer, resolved_return, "result", class.name);
+    try writeReturn(writer, resolved_return, "result", class.name, top_level);
     try writer.writeAll(";\n    }\n");
 }
 
@@ -557,13 +613,18 @@ fn writeType(
     raw: []const u8,
     context: type_mapping.TypeContext,
     self_name: []const u8,
+    top_level: bool,
 ) !void {
     const resolved = try resolver.resolveFor(raw, context, .utility_file);
-    try writeResolvedType(writer, resolved, self_name);
+    try writeResolvedType(writer, resolved, self_name, top_level);
     try accountImports(imports, resolved);
 }
 
-fn writeResolvedType(writer: *Io.Writer, resolved: type_mapping.ResolvedType, self_name: []const u8) !void {
+fn writeResolvedType(writer: *Io.Writer, resolved: type_mapping.ResolvedType, self_name: []const u8, top_level: bool) !void {
+    if (top_level) {
+        try writer.writeAll(resolved.zig);
+        return;
+    }
     if (std.mem.eql(u8, resolved.zig, "builtins.Variant")) {
         try writer.writeAll(resolved.zig);
         return;
@@ -587,7 +648,7 @@ fn isSelfType(name: []const u8, self_name: []const u8) bool {
         name[self_name.len] == '.';
 }
 
-fn writeReturn(writer: *Io.Writer, resolved: type_mapping.ResolvedType, expr: []const u8, self_name: []const u8) !void {
+fn writeReturn(writer: *Io.Writer, resolved: type_mapping.ResolvedType, expr: []const u8, self_name: []const u8, top_level: bool) !void {
     switch (resolved.kind) {
         .class_ptr => {
             if (std.mem.startsWith(u8, resolved.zig, "?*")) {
@@ -597,7 +658,7 @@ fn writeReturn(writer: *Io.Writer, resolved: type_mapping.ResolvedType, expr: []
             }
         },
         .builtin => {
-            if (std.mem.startsWith(u8, resolved.zig, "builtins.") and
+            if (!top_level and std.mem.startsWith(u8, resolved.zig, "builtins.") and
                 std.mem.eql(u8, resolved.zig["builtins.".len..], self_name))
             {
                 try writer.print("{s}.fromBinding({s})", .{ self_name, expr });
@@ -683,11 +744,36 @@ fn findMember(class: *const ExtensionApiJson.BuiltinClass, name: []const u8) ?Ex
     return null;
 }
 
-fn isPrimitive(name: []const u8) bool {
-    return std.mem.eql(u8, name, "Nil") or
-        std.mem.eql(u8, name, "bool") or
-        std.mem.eql(u8, name, "int") or
-        std.mem.eql(u8, name, "float");
+/// Builtins implemented by hand under `src/godot/builtins/`.
+///
+/// Their generated files contain top-level functions instead of an extern
+/// struct. All type references go through the hand-written aggregate so there is
+/// only one declaration of the type.
+const handwritten_builtins = [_][]const u8{
+    "AABB",
+    "Basis",
+    "Color",
+    "Plane",
+    "Projection",
+    "Quaternion",
+    "Rect2",
+    "Rect2i",
+    "RID",
+    "Transform2D",
+    "Transform3D",
+    "Vector2",
+    "Vector2i",
+    "Vector3",
+    "Vector3i",
+    "Vector4",
+    "Vector4i",
+};
+
+fn isHandwritten(name: []const u8) bool {
+    for (handwritten_builtins) |candidate| {
+        if (std.mem.eql(u8, candidate, name)) return true;
+    }
+    return false;
 }
 
 fn hasName(list: []const []const u8, name: []const u8) bool {
@@ -720,12 +806,14 @@ const Io = std.Io;
 
 const api_options = @import("../model/api_options.zig");
 const builtin_names = @import("../model/builtin_names.zig");
+const defaults = @import("../model/defaults.zig");
 const docs = @import("../model/docs.zig");
 const names = @import("../model/names.zig");
 const types = @import("../model/types.zig");
 const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
 const ClassResolver = @import("../model/resolver.zig").ClassResolver;
 const custom_code = @import("custom.zig");
+const function_metadata = @import("function_metadata.zig");
 const overrides = @import("overrides.zig");
 const template_mod = @import("templates.zig");
 const type_mapping = @import("type_mapping.zig");
