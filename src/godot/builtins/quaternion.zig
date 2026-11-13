@@ -9,6 +9,8 @@ pub fn QuaternionOf(comptime Real: type) type {
     const C = constants.For(Real);
 
     return extern struct {
+        pub const GodotClassName = "Quaternion";
+
         x: Real = 0,
         y: Real = 0,
         z: Real = 0,

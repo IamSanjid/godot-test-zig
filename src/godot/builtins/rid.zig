@@ -5,6 +5,8 @@
 //! layout is precision-independent, so this file defines the struct directly.
 
 pub const RID = extern struct {
+    pub const GodotClassName = "RID";
+
     id: u64 = 0,
 
     const Self = @This();

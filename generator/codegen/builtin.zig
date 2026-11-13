@@ -78,11 +78,11 @@ fn emitBuiltin(
 
     for (class.enums) |class_enum| {
         try writer.writeAll("\n    pub const ");
-        try names.writeIdent(writer, .pascal, class_enum.name);
+        try names.writeTypeName(writer, class_enum.name);
         try writer.writeAll(" = ");
         try type_mapping.writeBindingBuiltinPath(writer, class.name);
         try writer.writeAll(".");
-        try names.writeIdent(writer, .pascal, class_enum.name);
+        try names.writeTypeName(writer, class_enum.name);
         try writer.writeAll(";\n");
     }
 
@@ -214,6 +214,7 @@ fn writeStruct(
     try writer.writeAll("pub const ");
     try names.writeRawIdent(writer, class.name);
     try writer.writeAll(" = extern struct {\n");
+    try names.writeGodotClassName(writer, class.name);
 
     if (field_offsets) |members| {
         for (members) |member| {
@@ -304,7 +305,7 @@ fn writeMethod(
 
     try docs.write(writer, arena, method.description, 4, "///");
     try writer.writeAll("    pub inline fn ");
-    try names.writeIdent(writer, .camel, method.name);
+    try names.writeMethod(writer, method.name);
     try writer.writeAll("(");
     var first = true;
     if (!method.is_static) {
@@ -341,7 +342,7 @@ fn writeMethod(
     }
     try type_mapping.writeBindingBuiltinPath(writer, class.name);
     try writer.writeAll(".");
-    try names.writeIdent(writer, .camel, method.name);
+    try names.writeMethod(writer, method.name);
     try writer.writeAll("(");
     first = true;
     if (!method.is_static) {
@@ -399,7 +400,7 @@ fn writeVarargMethod(
 
     try docs.write(writer, arena, method.description, 4, "///");
     try writer.writeAll("    pub inline fn ");
-    try names.writeIdent(writer, .camel, method.name);
+    try names.writeMethod(writer, method.name);
     try writer.writeAll("(");
     var first = true;
     if (!method.is_static) {
@@ -433,7 +434,7 @@ fn writeVarargMethod(
     }
     try type_mapping.writeBindingBuiltinPath(writer, class.name);
     try writer.writeAll(".");
-    try names.writeIdent(writer, .camel, method.name);
+    try names.writeMethod(writer, method.name);
     try writer.writeAll("(");
     first = true;
     if (!method.is_static) {

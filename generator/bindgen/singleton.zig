@@ -51,7 +51,7 @@ pub fn generate(
         try names.writeRawIdent(writer, singleton.name);
         try writer.writeAll(" = Singleton(classes.");
         if (info.class.api_type) |api_type| {
-            try common.writeIdent(writer, .snake, api_type);
+            try common.writeFile(writer, api_type);
             try writer.writeAll(".");
         }
         try names.writeRawIdent(writer, info.class.name);

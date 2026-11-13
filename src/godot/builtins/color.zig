@@ -7,6 +7,8 @@
 //! are computed and exposed through Godot-style getter/setter pairs.
 
 pub const Color = extern struct {
+    pub const GodotClassName = "Color";
+
     r: f32 = 0,
     g: f32 = 0,
     b: f32 = 0,

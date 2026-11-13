@@ -1,4 +1,6 @@
 pub const Variant = extern struct {
+    pub const GodotClassName = "Variant";
+
     tag: interface.VariantType align(@alignOf(bindings.builtins.Variant)),
     data: Data align(@alignOf(bindings.builtins.Variant)),
 

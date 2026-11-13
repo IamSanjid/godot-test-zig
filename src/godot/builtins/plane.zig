@@ -8,6 +8,8 @@ pub fn PlaneOf(comptime Real: type) type {
     const C = constants.For(Real);
 
     return extern struct {
+        pub const GodotClassName = "Plane";
+
         normal: V3 = .zero,
         d: Real = 0,
 

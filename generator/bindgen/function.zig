@@ -13,7 +13,7 @@ pub fn emit(writer: *Io.Writer, registry: Registry, t: InterfaceJson.TypeDecl) !
     try writer.print("pub const {s} = ?*const fn(", .{zig_name});
     for (function.arguments, 0..) |argument, index| {
         if (argument.name) |name| {
-            try common.writeIdent(writer, .snake, name);
+            try common.writeArgument(writer, name);
             try writer.writeAll(": ");
         }
         try common.writeType(writer, registry, argument.type);

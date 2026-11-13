@@ -8,6 +8,8 @@ pub fn Transform2dOf(comptime Real: type) type {
     const C = constants.For(Real);
 
     return extern struct {
+        pub const GodotClassName = "Transform2D";
+
         columns: [3]V2 = .{
             .{ .x = 1, .y = 0 },
             .{ .x = 0, .y = 1 },

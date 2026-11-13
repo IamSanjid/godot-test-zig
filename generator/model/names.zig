@@ -1,52 +1,62 @@
 //! Shared identifier and file-name helpers for the generator.
 
-pub fn writeIdent(writer: *Io.Writer, comptime config: casez.Config, name: []const u8) !void {
-    if (name.len == 0) {
-        try writer.writeAll("_");
-        return;
-    }
+pub fn writeFile(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .file, name);
+}
 
-    var buf: [128]u8 = undefined;
-    var fixed: Io.Writer = .fixed(&buf);
-    casez.writeConvert(&fixed, config, name) catch |err| switch (err) {
-        error.NoSpaceLeft => return error.IdentifierTooLong,
-        else => return err,
-    };
+pub fn writeConstant(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .constant, name);
+}
 
-    // Trim before validating: a leading underscore can hide a Zig keyword
-    // (`_error` -> `error`), which would otherwise be emitted unquoted.
-    const converted = std.mem.trim(u8, fixed.buffered(), "_");
-    if (converted.len == 0) {
-        try writer.writeAll("_");
-        return;
-    }
-    for (converted) |c| {
-        if (c == '"' or c == '\\' or c == '\n' or c == '\r') return error.InvalidIdentifier;
-    }
-    if (std.zig.isValidId(converted)) {
-        try writer.writeAll(converted);
-    } else {
-        try writer.print("@\"{s}\"", .{converted});
-    }
+pub fn writeEnumVariant(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .enum_variant, name);
+}
+
+pub fn writeArgument(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .argument, name);
+}
+
+pub fn writeField(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .field, name);
+}
+
+pub fn writeProperty(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .property, name);
+}
+
+pub fn writeMethod(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .method, name);
+}
+
+pub fn writeFunc(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .func, name);
+}
+
+pub fn writeTypeName(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .type, name);
+}
+
+pub fn writeSignal(writer: *Io.Writer, name: []const u8) !void {
+    try writeConverted(writer, .zig, .signal, name);
 }
 
 pub fn snake(arena: Allocator, raw: []const u8) ![]const u8 {
-    return convert(arena, .snake, raw);
+    return convert(arena, .file, raw);
 }
 
 pub fn camel(arena: Allocator, raw: []const u8) ![]const u8 {
-    return convert(arena, .camel, raw);
+    return convert(arena, .method, raw);
 }
 
 pub fn pascal(arena: Allocator, raw: []const u8) ![]const u8 {
-    return convert(arena, .pascal, raw);
+    return convert(arena, .type, raw);
 }
 
 /// Name of the cached function-pointer variable for a method/operator.
 pub fn pointer(arena: Allocator, raw: []const u8) ![]const u8 {
     var buf: [160]u8 = undefined;
     var fixed: Io.Writer = .fixed(&buf);
-    try casez.writeConvert(&fixed, .camel, raw);
+    naming.writeConvert(&fixed, .zig, .method, raw) catch return error.IdentifierTooLong;
     try fixed.writeAll("_ptr");
     return arena.dupe(u8, fixed.buffered());
 }
@@ -76,7 +86,7 @@ pub fn isValidMemberName(name: []const u8) bool {
 pub fn writeMemberIdent(writer: *Io.Writer, name: []const u8) !void {
     var buf: [160]u8 = undefined;
     var fixed: Io.Writer = .fixed(&buf);
-    try casez.writeConvert(&fixed, .snake, name);
+    try naming.writeConvert(&fixed, .zig, .property, name);
     try writeRawIdent(writer, fixed.buffered());
 }
 
@@ -113,14 +123,14 @@ pub fn writePrefixedIdent(writer: *Io.Writer, prefix: []const u8, raw_name: []co
     var buf: [160]u8 = undefined;
     var fixed: Io.Writer = .fixed(&buf);
     try fixed.writeAll(prefix);
-    try casez.writeConvert(&fixed, .snake, raw_name);
+    try naming.writeConvert(&fixed, .zig, .argument, raw_name);
     try writeRawIdent(writer, fixed.buffered());
 }
 
 fn writeSnakeIdent(writer: *Io.Writer, raw_name: []const u8) !void {
     var buf: [160]u8 = undefined;
     var fixed: Io.Writer = .fixed(&buf);
-    try casez.writeConvert(&fixed, .snake, raw_name);
+    try naming.writeConvert(&fixed, .zig, .argument, raw_name);
     try writeRawIdent(writer, fixed.buffered());
 }
 
@@ -134,10 +144,55 @@ pub fn writeEscaped(writer: *Io.Writer, value: []const u8) !void {
     }
 }
 
-fn convert(arena: Allocator, comptime config: casez.Config, raw: []const u8) ![]const u8 {
+pub fn writeGodotClassName(writer: *Io.Writer, raw_name: []const u8) !void {
+    try writer.writeAll("    pub const GodotClassName = \"");
+    try writeEscaped(writer, raw_name);
+    try writer.writeAll("\";\n");
+}
+
+fn writeConverted(
+    writer: *Io.Writer,
+    comptime case: naming.Case,
+    comptime @"for": @EnumLiteral(),
+    name: []const u8,
+) !void {
+    if (name.len == 0) {
+        try writer.writeAll("_");
+        return;
+    }
+
+    var buf: [128]u8 = undefined;
+    var fixed: Io.Writer = .fixed(&buf);
+    naming.writeConvert(&fixed, case, @"for", name) catch |err| switch (err) {
+        error.NoSpaceLeft => return error.IdentifierTooLong,
+        else => return err,
+    };
+
+    // Trim before validating: a leading underscore can hide a Zig keyword
+    // (`_error` -> `error`), which would otherwise be emitted unquoted.
+    const converted = std.mem.trim(u8, fixed.buffered(), "_");
+    if (converted.len == 0) {
+        try writer.writeAll("_");
+        return;
+    }
+    for (converted) |c| {
+        if (c == '"' or c == '\\' or c == '\n' or c == '\r') return error.InvalidIdentifier;
+    }
+    if (std.zig.isValidId(converted)) {
+        try writer.writeAll(converted);
+    } else {
+        try writer.print("@\"{s}\"", .{converted});
+    }
+}
+
+fn convert(
+    arena: Allocator,
+    comptime @"for": @EnumLiteral(),
+    raw: []const u8,
+) ![]const u8 {
     var buf: [160]u8 = undefined;
     var fixed: Io.Writer = .fixed(&buf);
-    casez.writeConvert(&fixed, config, raw) catch return error.IdentifierTooLong;
+    naming.writeConvert(&fixed, .zig, @"for", raw) catch return error.IdentifierTooLong;
     return arena.dupe(u8, fixed.buffered());
 }
 
@@ -145,4 +200,4 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
-const casez = @import("casez");
+const naming = @import("naming");

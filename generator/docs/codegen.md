@@ -41,6 +41,9 @@ Codegen does not generate `builtins/builtins.zig` and does not write
   - classes: `../../builtins/builtins.zig`
   - utility: `../builtins/builtins.zig`
   - generated builtins: `../builtins.zig`
+- shared naming policy is available through the `naming` module; generated
+  classes/builtins expose `GodotClassName`, used by `StringName.fromType`, while
+  `StringName.fromUserType` keeps the user type name verbatim
 
 ## Classes
 

@@ -7,11 +7,11 @@ pub fn constructorName(arena: Allocator, constructor: ExtensionApiJson.Construct
     for (constructor.arguments, 0..) |argument, index| {
         if (std.mem.eql(u8, argument.name, "from")) {
             try fixed.writeAll("from");
-            casez.writeConvert(&fixed, .pascal, argument.type) catch return error.IdentifierTooLong;
+            naming.writeConvert(&fixed, .zig, .type, argument.type) catch return error.IdentifierTooLong;
             for (constructor.arguments, 0..) |other, other_index| {
                 if (other_index == index) continue;
                 const source = if (other.name.len != 0) other.name else other.type;
-                casez.writeConvert(&fixed, .pascal, source) catch return error.IdentifierTooLong;
+                naming.writeConvert(&fixed, .zig, .type, source) catch return error.IdentifierTooLong;
             }
             return arena.dupe(u8, fixed.buffered());
         }
@@ -23,7 +23,7 @@ pub fn constructorName(arena: Allocator, constructor: ExtensionApiJson.Construct
         try fixed.writeAll("init");
         for (constructor.arguments) |argument| {
             const source = if (argument.name.len != 0) argument.name else argument.type;
-            casez.writeConvert(&fixed, .pascal, source) catch return error.IdentifierTooLong;
+            naming.writeConvert(&fixed, .zig, .type, source) catch return error.IdentifierTooLong;
         }
     }
     return arena.dupe(u8, fixed.buffered());
@@ -91,6 +91,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
-const casez = @import("casez");
+const naming = @import("naming");
 const names = @import("names.zig");
 const ExtensionApiJson = @import("ExtensionApiJson.zig");

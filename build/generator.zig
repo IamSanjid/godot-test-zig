@@ -25,7 +25,7 @@ pub const RunAllOptions = struct {
 };
 
 pub const BuildTestOptions = struct {
-    casez: *std.Build.Module,
+    naming: *std.Build.Module,
 };
 
 pub fn runBindgen(b: *std.Build, opt: RunBindgenOptions) *std.Build.Step.Run {
@@ -86,7 +86,7 @@ pub fn buildAndRunTests(
             .target = b.graph.host,
             .root_source_file = b.path("generator/tests.zig"),
             .imports = &.{
-                .{ .name = "casez", .module = opt.casez },
+                .{ .name = "naming", .module = opt.naming },
             },
         }),
     });
@@ -95,7 +95,7 @@ pub fn buildAndRunTests(
     return run;
 }
 
-pub fn buildGenerator(b: *std.Build, casez: *std.Build.Module) *std.Build.Step.Compile {
+pub fn buildGenerator(b: *std.Build, naming: *std.Build.Module) *std.Build.Step.Compile {
     return b.addExecutable(.{
         .name = "generator",
         .root_module = b.createModule(.{
@@ -103,7 +103,7 @@ pub fn buildGenerator(b: *std.Build, casez: *std.Build.Module) *std.Build.Step.C
             .target = b.graph.host,
             .root_source_file = b.path("generator/main.zig"),
             .imports = &.{
-                .{ .name = "casez", .module = casez },
+                .{ .name = "naming", .module = naming },
             },
         }),
     });

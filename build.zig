@@ -76,7 +76,14 @@ pub fn build(b: *std.Build) !void {
     });
 
     const casez = b.dependency("casez", .{}).module("casez");
-    const generator_executable = generator.buildGenerator(b, casez);
+    const naming = b.createModule(.{
+        .root_source_file = b.path("src/godot/naming.zig"),
+        .imports = &.{
+            .{ .name = "casez", .module = casez },
+        },
+    });
+
+    const generator_executable = generator.buildGenerator(b, naming);
 
     const bindgen_opt: generator.RunBindgenOptions = .{
         .api = .{
@@ -112,7 +119,7 @@ pub fn build(b: *std.Build) !void {
     const gen_step = b.step("gen", "Generate bindings, then the automatic-dispatch codegen layer");
     gen_step.dependOn(&run_all.step);
 
-    const test_run = generator.buildAndRunTests(b, .{ .casez = casez });
+    const test_run = generator.buildAndRunTests(b, .{ .naming = naming });
     const test_generator_step = b.step("test-generator", "Run all generator unit tests");
     test_generator_step.dependOn(&test_run.step);
 
@@ -134,7 +141,7 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options.createModule() },
             .{ .name = "bindings", .module = bindings },
-            .{ .name = "casez", .module = casez },
+            .{ .name = "naming", .module = naming },
         },
         .target = target,
         .optimize = optimize,

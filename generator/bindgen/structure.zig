@@ -18,7 +18,7 @@ pub fn emit(
     for (structure.members) |member| {
         try common.writeDesc(writer, member.description, 4, 3);
         try writer.writeAll("    ");
-        try common.writeIdent(writer, .snake, member.name);
+        try common.writeField(writer, member.name);
         try writer.writeAll(": ");
         try common.writeType(writer, registry, member.type);
 

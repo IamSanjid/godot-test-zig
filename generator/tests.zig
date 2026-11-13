@@ -45,3 +45,25 @@ test {
     _ = @import("codegen/artifacts.zig");
     _ = @import("codegen/utility.zig");
 }
+
+test "shared naming policy" {
+    const std = @import("std");
+    try std.testing.expectEqualStrings(
+        "get_node",
+        comptime naming.comptimeConvert(.godot, .method, "getNode"),
+    );
+    try std.testing.expectEqualStrings(
+        "getNode",
+        comptime naming.comptimeConvert(.zig, .method, "get_node"),
+    );
+    try std.testing.expectEqualStrings(
+        "CONNECT_DEFERRED",
+        comptime naming.comptimeConvert(.godot, .enum_variant, "connect_deferred"),
+    );
+    try std.testing.expectEqualStrings(
+        "connect_deferred",
+        comptime naming.comptimeConvert(.zig, .enum_variant, "connect_deferred"),
+    );
+}
+
+const naming = @import("naming");

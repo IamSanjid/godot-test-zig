@@ -140,7 +140,7 @@ fn writeClassRef(writer: *Io.Writer, info: *const class_resolver.Info) !void {
 fn classesClassRef(writer: *Io.Writer, info: *const class_resolver.Info) !void {
     try writer.writeAll("classes.");
     if (info.class.api_type) |api_type| {
-        try common.writeIdent(writer, .snake, api_type);
+        try common.writeFile(writer, api_type);
         try writer.writeAll(".");
     }
     try names.writeRawIdent(writer, info.class.name);

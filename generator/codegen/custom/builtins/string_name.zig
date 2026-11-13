@@ -39,15 +39,30 @@ pub inline fn fromUtf8(str: []const u8) StringName {
 
 // @method fromType
 
+/// Uses the generated `GodotClassName` when available; otherwise falls back to
+/// Pascal conversion of the short Zig type name.
 pub fn fromType(comptime T: type) StringName {
+    if (@hasDecl(T, "GodotClassName")) {
+        return fromComptimeLatin1(T.GodotClassName);
+    }
     return fromTypeName(typeShortName(T));
 }
 // @method_end fromType
 
+// @method fromUserType
+
+/// Uses the user type's short name verbatim. No case conversion is applied.
+pub fn fromUserType(comptime T: type) StringName {
+    return fromComptimeLatin1(typeShortName(T));
+}
+// @method_end fromUserType
+
 // @method fromTypeName
 
+/// Pascal-converts a name without a generated `GodotClassName` annotation.
+/// Prefer `fromType` or `fromUserType` when the type is known.
 pub fn fromTypeName(comptime name: []const u8) StringName {
-    const converted = comptime casez.comptimeConvert(.pascal, name);
+    const converted = comptime naming.comptimeConvert(.godot, .type, name);
     return fromComptimeLatin1(converted);
 }
 // @method_end fromTypeName
@@ -62,5 +77,5 @@ fn typeShortName(comptime T: type) [:0]const u8 {
 // @method_end typeShortName
 
 // @imports
-const casez = @import("casez");
+const naming = @import("naming");
 // @imports_end

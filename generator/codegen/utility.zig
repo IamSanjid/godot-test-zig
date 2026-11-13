@@ -131,7 +131,7 @@ fn writeAggregator(
     for (categories) |category| {
         const file_name = try names.snake(arena, category);
         try writer.writeAll("pub const ");
-        try names.writeIdent(writer, .snake, category);
+        try names.writeFile(writer, category);
         try writer.print(" = @import(\"{s}.zig\");\n", .{file_name});
     }
 }
@@ -144,7 +144,7 @@ fn writeFunction(
 ) !void {
     try docs.write(writer, arena, function.description, 0, "///");
     try writer.writeAll("pub inline fn ");
-    try names.writeIdent(writer, .camel, function.name);
+    try names.writeFunc(writer, function.name);
     try writer.writeAll("(");
     for (function.arguments, 0..) |argument, index| {
         if (index != 0) try writer.writeAll(", ");
@@ -178,9 +178,9 @@ fn writeFunction(
         try writer.writeAll("    const result = ");
     }
     try writer.writeAll("bindings.utility.");
-    try names.writeIdent(writer, .snake, function.category);
+    try names.writeFile(writer, function.category);
     try writer.writeAll(".");
-    try names.writeIdent(writer, .camel, function.name);
+    try names.writeFunc(writer, function.name);
     try writer.writeAll("(runtime.dispatcher()");
     for (function.arguments, 0..) |argument, index| {
         try writer.writeAll(", ");

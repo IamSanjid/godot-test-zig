@@ -15,6 +15,8 @@ pub fn Rect2Of(comptime Real: type) type {
     const V2 = vector.Vector(Real, 2);
 
     return extern struct {
+        pub const GodotClassName = "Rect2";
+
         position: V2 = .zero,
         size: V2 = .zero,
 
@@ -207,6 +209,8 @@ pub fn Rect2iOf(comptime T: type) type {
     const V2 = vector.Vector(T, 2);
 
     return extern struct {
+        pub const GodotClassName = "Rect2i";
+
         position: V2 = .zero,
         size: V2 = .zero,
 

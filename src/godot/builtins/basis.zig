@@ -12,6 +12,8 @@ pub fn BasisOf(comptime Real: type) type {
     const C = constants.For(Real);
 
     return extern struct {
+        pub const GodotClassName = "Basis";
+
         rows: [3]V3 = .{ .zero, .zero, .zero },
 
         const Self = @This();

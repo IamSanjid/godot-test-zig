@@ -102,7 +102,7 @@ fn writeAggregator(
     for (categories) |category| {
         const file_name = try names.snake(arena, category);
         try writer.writeAll("pub const ");
-        try common.writeIdent(writer, .snake, category);
+        try common.writeFile(writer, category);
         try writer.print(" = @import(\"{s}.zig\");\n", .{file_name});
     }
 
@@ -118,7 +118,7 @@ fn writeFunction(
 ) !void {
     try docs.write(writer, arena, function.description, 0, "///");
     try writer.writeAll("pub fn ");
-    try common.writeIdent(writer, .camel, function.name);
+    try common.writeFunc(writer, function.name);
     try writer.writeAll("(dispatcher: anytype");
     for (function.arguments) |argument| {
         try writer.writeAll(", ");

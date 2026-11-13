@@ -12,6 +12,8 @@ pub fn ProjectionOf(comptime Real: type) type {
     const Plane = plane.PlaneOf(Real);
 
     return extern struct {
+        pub const GodotClassName = "Projection";
+
         columns: [4]V4 = .{
             .{ .x = 1, .y = 0, .z = 0, .w = 0 },
             .{ .x = 0, .y = 1, .z = 0, .w = 0 },

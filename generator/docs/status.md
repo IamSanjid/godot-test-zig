@@ -26,6 +26,8 @@
   bindgen assembles the final engine pointer array
 - host-targeted generator/translate-c with target-configured translated interface
   module; non-Windows installs skip PDB installation
+- shared `src/godot/naming.zig` policy for generator output and reflection;
+  generated classes/builtins expose `GodotClassName` for exact StringName lookup
 - Zig `bitpack struct` emission with target-aware interface bitfield padding
 
 ## Validation

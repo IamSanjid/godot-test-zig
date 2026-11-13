@@ -23,7 +23,7 @@ fn writePlain(
 
     try writeIndent(writer, indent);
     try writer.writeAll("pub const ");
-    try names.writeIdent(writer, .pascal, global_enum.name);
+    try names.writeTypeName(writer, global_enum.name);
     try writer.print(" = enum({s}) {{\n", .{if (negative) "i32" else "u32"});
 
     var alias_count: usize = 0;
@@ -34,7 +34,7 @@ fn writePlain(
         }
         try docs.write(writer, arena, value.description, indent + 4, "///");
         try writeIndent(writer, indent + 4);
-        try names.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
+        try names.writeConstant(writer, enum_utils.variantName(value.name, prefix_len));
         try writer.print(" = {d},\n", .{value.value});
     }
 
@@ -44,7 +44,7 @@ fn writePlain(
         try docs.write(writer, arena, value.description, indent + 4, "///");
         try writeIndent(writer, indent + 4);
         try writer.writeAll("pub const ");
-        try names.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
+        try names.writeConstant(writer, enum_utils.variantName(value.name, prefix_len));
         try writer.print(": @This() = @fromBackingInt(@intCast({d}));\n", .{value.value});
     }
 
@@ -88,7 +88,7 @@ fn writeBitfield(
 
     try writeIndent(writer, indent);
     try writer.writeAll("pub const ");
-    try names.writeIdent(writer, .pascal, global_enum.name);
+    try names.writeTypeName(writer, global_enum.name);
     try writer.print(" = bitpack struct(u{d}) {{\n", .{backing_bits});
 
     var next: u7 = 0;
@@ -102,7 +102,7 @@ fn writeBitfield(
         const value = global_enum.values[bit.index];
         try docs.write(writer, arena, value.description, indent + 4, "///");
         try writeIndent(writer, indent + 4);
-        try names.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
+        try names.writeConstant(writer, enum_utils.variantName(value.name, prefix_len));
         try writer.writeAll(": bool = false,\n");
         next = @as(u7, bit.pos) + 1;
     }
@@ -123,7 +123,7 @@ fn writeBitfield(
         try docs.write(writer, arena, value.description, indent + 4, "///");
         try writeIndent(writer, indent + 4);
         try writer.writeAll("pub const ");
-        try names.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
+        try names.writeConstant(writer, enum_utils.variantName(value.name, prefix_len));
         try writer.print(": @This() = @bitCast(@as(u{d}, {d}));\n", .{ backing_bits, value.value });
     }
 
@@ -172,6 +172,7 @@ const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
 const names = @import("names.zig");
+const naming = @import("naming");
 const docs = @import("docs.zig");
 const enum_utils = @import("enum_utils.zig");
 const ExtensionApiJson = @import("ExtensionApiJson.zig");

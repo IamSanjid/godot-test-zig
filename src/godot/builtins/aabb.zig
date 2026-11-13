@@ -11,6 +11,8 @@ pub fn AabbOf(comptime Real: type) type {
     const V3 = vector.Vector(Real, 3);
 
     return extern struct {
+        pub const GodotClassName = "AABB";
+
         position: V3 = .zero,
         size: V3 = .zero,
 

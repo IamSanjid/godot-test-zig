@@ -51,7 +51,7 @@ fn emitConstants(writer: *Io.Writer, arena: Allocator, api: ExtensionApiJson) !v
     for (api.global_constants) |constant| {
         try docs.write(writer, arena, constant.description, 0, "///");
         try writer.writeAll("pub const ");
-        try common.writeIdent(writer, .snake, constant.name);
+        try common.writeConstant(writer, constant.name);
         try writer.print(" = {d};\n", .{constant.value});
     }
 }

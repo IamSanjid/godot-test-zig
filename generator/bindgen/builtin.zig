@@ -222,6 +222,7 @@ fn writeStruct(
 ) !void {
     _ = api;
     try writer.print("pub const {s} = extern struct {{\n", .{class.name});
+    try names.writeGodotClassName(writer, class.name);
 
     if (field_offsets) |members| {
         for (members) |member| {
@@ -304,7 +305,7 @@ fn writeVarargMethod(
 
     try docs.write(writer, arena, method.description, 0, "///");
     try writer.writeAll("pub fn ");
-    try common.writeIdent(writer, .camel, method.name);
+    try common.writeMethod(writer, method.name);
     try writer.writeAll("(");
     if (!method.is_static) {
         try writer.writeAll("self: ");
@@ -417,7 +418,7 @@ fn writeMethod(
             const default_value = argument.default_value.?;
             const inline_default = defaults.canInlineDefault(argument.type, default_value);
             try writer.writeAll("    ");
-            try common.writeIdent(writer, .snake, argument.name);
+            try common.writeArgument(writer, argument.name);
             try writer.writeAll(": ");
             if (!inline_default) try writer.writeAll("?");
             try writeBuiltinType(writer, resolver, argument.type, .argument);
@@ -436,7 +437,7 @@ fn writeMethod(
 
     try docs.write(writer, arena, method.description, 0, "///");
     try writer.writeAll("pub fn ");
-    try common.writeIdent(writer, .camel, method.name);
+    try common.writeMethod(writer, method.name);
     try writer.writeAll("(");
     if (!method.is_static) {
         try writer.writeAll("self: ");

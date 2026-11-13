@@ -92,6 +92,26 @@ src/godot/bindings
 src/godot
 ```
 
+## Shared naming
+
+[src/godot/naming.zig](../src/godot/naming.zig) is the single naming policy used
+by the generator and runtime reflection. `naming.zig` preserves the generated
+bindgen/codegen spelling; `naming.godot` is for engine-facing method, property,
+signal, constant and enum-variant names. Godot enum values are ALL_CAPS engine
+constants, while generated Zig enum variants remain snake_case. Generated classes and generated builtins declare
+`GodotClassName`; `StringName.fromType` uses that exact value and only falls back
+to Pascal conversion for types without it. `StringName.fromUserType` uses the
+user type name verbatim.
+
+A single `naming` module is imported by both the host generator and the target
+`src/godot`; its target and optimize mode are inherited from each owning module.
+Use `naming.comptimeConvert(.godot, .method, name)`,
+`naming.allocConvert(.zig, .type, allocator, name)`, or
+`naming.writeConvert(writer, .zig, .type, name)` instead of importing `casez`
+directly. Generator writers are category-specific (`writeMethod`,
+`writeConstant`, `writeTypeName`, etc.) so the naming policy can evolve without
+changing every emitter.
+
 ## Non-negotiable boundaries
 
 - Codegen never overwrites `src/godot/bindings` or hand-written builtins.

@@ -6,7 +6,16 @@
 //! C type maps into Zig, otherwise the generated file ends up with a mix of
 //! `gdi.X` and wrapper types.
 
-pub const writeIdent = names.writeIdent;
+pub const writeFile = names.writeFile;
+pub const writeConstant = names.writeConstant;
+pub const writeEnumVariant = names.writeEnumVariant;
+pub const writeArgument = names.writeArgument;
+pub const writeField = names.writeField;
+pub const writeProperty = names.writeProperty;
+pub const writeMethod = names.writeMethod;
+pub const writeFunc = names.writeFunc;
+pub const writeTypeName = names.writeTypeName;
+pub const writeSignal = names.writeSignal;
 
 pub fn writeDesc(
     writer: *Io.Writer,

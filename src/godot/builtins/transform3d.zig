@@ -12,6 +12,8 @@ pub fn Transform3dOf(comptime Real: type) type {
     const Plane = plane.PlaneOf(Real);
 
     return extern struct {
+        pub const GodotClassName = "Transform3D";
+
         basis: B = .{},
         origin: V3 = .zero,
 

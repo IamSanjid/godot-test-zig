@@ -28,6 +28,8 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
 
     return switch (dimension) {
         2 => extern struct {
+            pub const GodotClassName = if (t_is_float) "Vector2" else "Vector2i";
+
             x: T,
             y: T,
 
@@ -138,6 +140,8 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
         },
 
         3 => extern struct {
+            pub const GodotClassName = if (t_is_float) "Vector3" else "Vector3i";
+
             x: T,
             y: T,
             z: T,
@@ -261,6 +265,8 @@ fn GenericVector(comptime T: type, comptime dimension: comptime_int, comptime t_
         },
 
         4 => extern struct {
+            pub const GodotClassName = if (t_is_float) "Vector4" else "Vector4i";
+
             x: T,
             y: T,
             z: T,

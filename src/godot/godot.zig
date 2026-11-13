@@ -149,6 +149,8 @@ pub const bindings = @import("bindings");
 const interface = bindings.interface;
 pub const DefaultDispatcher = bindings.Dispatcher(&.{});
 
+pub const naming = @import("naming");
+
 pub const auto = @import("auto/auto.zig");
 pub const builtins = @import("builtins/builtins.zig");
 pub const classes = @import("classes/classes.zig");

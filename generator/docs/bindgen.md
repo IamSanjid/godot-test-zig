@@ -88,6 +88,9 @@ builtins implement their own.
   Rect types) are non-optional fields and are passed in place. Runtime-owned
   defaults remain optional and are reconstructed by bindgen.
 - Class names, enum names and API type paths are deterministic.
+- Generated identifier spelling comes from `src/godot/naming.zig`.
+- Generated classes and builtins declare `GodotClassName`, preserving the exact
+  engine spelling for reflection.
 
 ## Known bindgen caveats
 

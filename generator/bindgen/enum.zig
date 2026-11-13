@@ -41,7 +41,7 @@ fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: 
         const variant = enum_utils.variantName(value.name, prefix_len);
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    ");
-        try common.writeIdent(writer, .snake, variant);
+        try common.writeEnumVariant(writer, variant);
         try writer.print(" = {d},\n", .{value.value});
     }
 
@@ -52,7 +52,7 @@ fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: 
         const variant = enum_utils.variantName(value.name, prefix_len);
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    pub const ");
-        try common.writeIdent(writer, .snake, variant);
+        try common.writeEnumVariant(writer, variant);
         try writer.print(": @This() = @fromBackingInt(@intCast({d}));\n", .{value.value});
     }
 
@@ -112,7 +112,7 @@ fn emitBitfield(
         }
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    ");
-        try common.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
+        try common.writeEnumVariant(writer, enum_utils.variantName(value.name, prefix_len));
         try writer.writeAll(": bool = false,\n");
         next = @as(u7, bit.pos) + 1;
     }
@@ -134,7 +134,7 @@ fn emitBitfield(
 
         try common.writeDesc(writer, value.description, 4, 3);
         try writer.writeAll("    pub const ");
-        try common.writeIdent(writer, .snake, enum_utils.variantName(value.name, prefix_len));
+        try common.writeEnumVariant(writer, enum_utils.variantName(value.name, prefix_len));
         try writer.print(": @This() = @bitCast(gdi.{s});\n", .{value.name});
     }
 
