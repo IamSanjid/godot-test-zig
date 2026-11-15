@@ -1,7 +1,8 @@
 // @struct String
 /// Creates a String from a comptime Latin-1 encoded C string.
 ///
-/// The string is treated as static and the result is cached per unique string.
+/// String has no static-buffer constructor, so this copies once and caches the
+/// result for the lifetime of the process. Do not deinitialize cached values.
 pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) String {
     const S = struct {
         const key = str;
@@ -18,6 +19,17 @@ pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) Strin
     S.init = true;
 
     return S.value;
+}
+
+/// Creates a String from a Latin-1 encoded C string.
+pub inline fn fromLatin1(dispatcher: anytype, str: []const u8) String {
+    var result: String = undefined;
+    dispatcher.dispatch(.string_new_with_latin1_chars_and_len, .{
+        @as(interface.UninitializedStringPtr, @ptrCast(&result)),
+        @as([*c]const u8, @ptrCast(str.ptr)),
+        @intCast(str.len),
+    });
+    return result;
 }
 
 /// Creates a String from a UTF-8 encoded C string with the given length.

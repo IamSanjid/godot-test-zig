@@ -1,7 +1,9 @@
 // @method fromComptimeLatin1
+
 /// Creates a String from a comptime Latin-1 encoded C string.
 ///
-/// The string is treated as static and the result is cached per unique string.
+/// String has no static-buffer constructor, so this copies once and caches the
+/// result for the lifetime of the process. Do not deinitialize cached values.
 pub fn fromComptimeLatin1(comptime str: [:0]const u8) String {
     const S = struct {
         const key = str;
@@ -20,6 +22,20 @@ pub fn fromComptimeLatin1(comptime str: [:0]const u8) String {
     return S.value;
 }
 // @method_end fromComptimeLatin1
+
+// @method fromLatin1
+
+/// Creates a String from a Latin-1 encoded C string.
+pub inline fn fromLatin1(str: []const u8) String {
+    var result: String = undefined;
+    runtime.dispatch(.string_new_with_latin1_chars_and_len, .{
+        @as(bindings.interface.UninitializedStringPtr, @ptrCast(&result)),
+        @as([*c]const u8, @ptrCast(str.ptr)),
+        @intCast(str.len),
+    });
+    return result;
+}
+// @method_end fromLatin1
 
 // @method fromUtf8
 

@@ -23,6 +23,20 @@ pub fn fromComptimeLatin1(comptime str: [:0]const u8) StringName {
 }
 // @method_end fromComptimeLatin1
 
+// @method fromLatin1
+
+/// Creates a StringName from a Latin-1 encoded C string.
+pub inline fn fromLatin1(str: [:0]const u8, is_static: bool) StringName {
+    var result: StringName = undefined;
+    runtime.dispatch(.string_name_new_with_latin1_chars, .{
+        @as(bindings.interface.UninitializedStringNamePtr, @ptrCast(&result)),
+        @as([*c]const u8, @ptrCast(str.ptr)),
+        is_static,
+    });
+    return result;
+}
+// @method_end fromLatin1
+
 // @method fromUtf8
 
 /// Creates a StringName from a UTF-8 encoded string.

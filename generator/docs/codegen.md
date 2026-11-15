@@ -52,7 +52,8 @@ Each class is a codegen-owned `opaque` type with:
 - `Extends` pointing at the codegen base class or `void`
 - class constants and enums as binding aliases
 - `construct()` for instantiable non-singletons
-- `Virtual.Required` / `Virtual.Optional` codegen-typed callbacks
+- `Virtual.Required` / `Virtual.Optional` codegen-typed callbacks, including
+  inherited virtuals
 - required virtuals metadata only; optional wrappers forward to bindings
 - codegen-typed signals with `connect` / `disconnect` / `isConnected`
 - a `Properties` namespace with codegen `Type`, getter, setter and index
@@ -71,6 +72,8 @@ Methods:
   are non-optional option fields and are converted directly
 - runtime-owned defaults stay optional and keep the `if (self.field) |value|`
   conversion path
+- caller-provided option values are borrowed; only defaults constructed by the
+  binding layer are deinitialized
 - varargs accept a tuple/array of codegen Variants from the library utility and
   convert each with `toBinding` into a binding Variant stack array
 
@@ -180,9 +183,10 @@ pub const StaticFunctions = struct {
 ```
 
 These alias the actual generated functions rather than storing standalone
-signature types, so reflection sees a real function value. Class `Virtual`
-metadata is unchanged; how consumers use these metadata entries is a library
-concern.
+signature types, so reflection sees a real function value. A class `Virtual`
+namespace includes its own virtuals and inherited virtuals; callback `self`
+types are the derived class. How consumers use these metadata entries is a
+library concern.
 
 Rules:
 
@@ -190,8 +194,9 @@ Rules:
 - `StaticFunctions` contains static methods.
 - Class constructors (`construct`) and builtin constructors are excluded.
 - Builtin destructors and operators are excluded.
-- Class `Virtual` metadata is unchanged; optional virtual wrappers are still
-  ordinary generated member functions and are included in `MemberFunctions`.
+- Class `Virtual` metadata includes inherited virtuals, with the child class as
+  the callback self type; optional virtual wrappers are still ordinary generated
+  member functions and are included in `MemberFunctions`.
 - Inherited methods appear in the derived class metadata because the wrappers
   exist on the derived class.
 - Metadata is generated after API method emission, so custom/template

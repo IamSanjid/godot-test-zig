@@ -66,7 +66,7 @@ tree; it becomes part of the generated file.
 
 Bindgen does not auto-generate `toBinding` / `fromBinding` for every builtin.
 Those are a codegen-facing concern. Some bindgen custom builtin files add
-specific helpers (`String`, `StringName`, `Variant`), while the codegen generated
+specific helpers (`String`, `StringName`, `NodePath`, `Variant`), while the codegen generated
 builtins get conversions from the codegen template and hand-written codegen
 builtins implement their own.
 
@@ -81,13 +81,19 @@ builtins implement their own.
   width.
 - GDExtension interface flag bitfields use the translated C backing type, with
   final padding derived from `@bitSizeOf`; API bitfields use `u32`/`u64`.
-- Default literals use cached `String.fromComptimeLatin1` /
-  `StringName.fromComptimeLatin1` where applicable and avoid deinitializing
-  cached values.
+- Default literals use cached `String.fromComptimeLatin1`,
+  `StringName.fromComptimeLatin1`, and `NodePath.fromComptimeLatin1` where
+  applicable and avoid deinitializing cached values. `NodePath` and `String`
+  caches are process-lifetime values because those types have no static-buffer
+  constructor.
 - Compile-time-safe option defaults (primitives, enums, bitfields, Color/Vector/
   Rect types) are non-optional fields and are passed in place. Runtime-owned
   defaults remain optional and are reconstructed by bindgen.
+- Only bindgen-constructed runtime defaults are deinitialized; caller-provided
+  option values stay caller-owned.
 - Class names, enum names and API type paths are deterministic.
+- Class `Virtual` metadata includes inherited virtuals, with the derived class as
+  the callback self type.
 - Generated identifier spelling comes from `src/godot/naming.zig`.
 - Generated classes and builtins declare `GodotClassName`, preserving the exact
   engine spelling for reflection.

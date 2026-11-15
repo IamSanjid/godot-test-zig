@@ -27,6 +27,8 @@ generator/
     ExtensionApiJson.zig
     InterfaceJson.zig
     names.zig
+    options.zig
+    virtuals.zig
     resolver.zig
     result_init.zig
     types.zig

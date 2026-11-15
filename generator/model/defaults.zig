@@ -114,6 +114,10 @@ pub fn writeStringLiteral(
     dispatcher: []const u8,
 ) !bool {
     if (std.mem.eql(u8, raw_type, "StringName")) {
+        if (isEmptyConstructor(raw_type, value)) {
+            try writer.print("{s}StringName.fromComptimeLatin1({s}, \"\")", .{ prefix, dispatcher });
+            return true;
+        }
         const contents = unquote(value) orelse return false;
         try writer.print("{s}StringName.fromComptimeLatin1({s}, \"", .{ prefix, dispatcher });
         try names.writeEscaped(writer, contents);
@@ -121,6 +125,10 @@ pub fn writeStringLiteral(
         return true;
     }
     if (std.mem.eql(u8, raw_type, "String")) {
+        if (isEmptyConstructor(raw_type, value)) {
+            try writer.print("{s}String.fromComptimeLatin1({s}, \"\")", .{ prefix, dispatcher });
+            return true;
+        }
         const contents = unquote(value) orelse return false;
         try writer.print("{s}String.fromComptimeLatin1({s}, \"", .{ prefix, dispatcher });
         try names.writeEscaped(writer, contents);
@@ -129,15 +137,16 @@ pub fn writeStringLiteral(
     }
     if (std.mem.eql(u8, raw_type, "NodePath")) {
         const call = parseCall(value) orelse return false;
-        if (!std.mem.eql(u8, call.name, "NodePath") or call.count != 1) return false;
-        const contents = unquote(call.args[0]) orelse return false;
-        if (contents.len == 0) {
-            try writer.print("{s}NodePath.init({s})", .{ prefix, dispatcher });
+        if (!std.mem.eql(u8, call.name, "NodePath")) return false;
+        if (call.count == 0) {
+            try writer.print("{s}NodePath.fromComptimeLatin1({s}, \"\")", .{ prefix, dispatcher });
             return true;
         }
-        try writer.print("{s}NodePath.fromString({s}, {s}String.fromComptimeLatin1({s}, \"", .{ prefix, dispatcher, prefix, dispatcher });
+        if (call.count != 1) return false;
+        const contents = unquote(call.args[0]) orelse return false;
+        try writer.print("{s}NodePath.fromComptimeLatin1({s}, \"", .{ prefix, dispatcher });
         try names.writeEscaped(writer, contents);
-        try writer.writeAll("\"))");
+        try writer.writeAll("\")");
         return true;
     }
     return false;
@@ -161,14 +170,29 @@ pub fn isEmptyConstructor(raw_type: []const u8, value: []const u8) bool {
 /// Whether a reconstructed default argument owns engine resources and must be
 /// deinitialized after the binding call.
 ///
-/// String/StringName literals are produced by the generated cached
-/// `fromComptimeLatin1`, so they must not be deinitialized. Empty
-/// `String()`/`StringName()` use `.init(dispatcher)` and do own a reference.
+/// `fromComptimeLatin1` String/StringName/NodePath values are process-lifetime
+/// caches and must not be deinitialized. Unsupported String/NodePath defaults
+/// fall back to `.init(dispatcher)` and do own a reference.
 pub fn needsDeinit(raw_type: []const u8, default_value: []const u8) bool {
     if (std.mem.eql(u8, raw_type, "StringName") or std.mem.eql(u8, raw_type, "String")) {
-        return isEmptyConstructor(raw_type, default_value);
+        return !isCachedStringDefault(raw_type, default_value);
+    }
+    if (std.mem.eql(u8, raw_type, "NodePath")) {
+        return !isCachedNodePathDefault(default_value);
     }
     return result_init.resultNeedsInit(raw_type);
+}
+
+fn isCachedStringDefault(raw_type: []const u8, default_value: []const u8) bool {
+    return unquote(default_value) != null or isEmptyConstructor(raw_type, default_value);
+}
+
+fn isCachedNodePathDefault(default_value: []const u8) bool {
+    const call = parseCall(default_value) orelse return false;
+    if (!std.mem.eql(u8, call.name, "NodePath")) return false;
+    if (call.count == 0) return true;
+    if (call.count != 1) return false;
+    return unquote(call.args[0]) != null;
 }
 
 pub fn writeEmptyContainer(writer: *Io.Writer, prefix: []const u8, raw_type: []const u8, value: []const u8, dispatcher: []const u8) !bool {
@@ -222,4 +246,13 @@ test "inline default classification" {
     try std.testing.expect(!canInlineDefault("String", "&\"\""));
     try std.testing.expect(!canInlineDefault("RID", "RID()"));
     try std.testing.expect(!canInlineDefault("Transform2D", "Transform2D(1, 0, 0, 1, 0, 0)"));
+
+    try std.testing.expect(!needsDeinit("String", "&\"hello\""));
+    try std.testing.expect(!needsDeinit("String", "String()"));
+    try std.testing.expect(needsDeinit("String", "String(\"hello\")"));
+    try std.testing.expect(!needsDeinit("StringName", "&\"hello\""));
+    try std.testing.expect(!needsDeinit("StringName", "StringName()"));
+    try std.testing.expect(!needsDeinit("NodePath", "NodePath()"));
+    try std.testing.expect(!needsDeinit("NodePath", "NodePath(\"Path/To/Node\")"));
+    try std.testing.expect(needsDeinit("NodePath", "NodePath.fromString(x)"));
 }

@@ -10,6 +10,8 @@
 - hand-written builtins emit top-level function wrappers instead of duplicate
   `extern struct` declarations
 - `MemberFunctions` / `StaticFunctions` metadata aliases generated functions
+- class `Virtual` metadata includes inherited virtuals with the derived class as
+  the callback self type; bindgen and codegen share virtual entry collection
 - class/builtin/utility custom overlays
 - class/builtin template replacements and additions
 - `@templates_for` class/builtin targeting, including derived class selectors
@@ -85,3 +87,25 @@ real use case appears. Utility templates are intentionally unsupported.
 
 Codegen does not emit class registration metadata or callback casting. That
 remains library-layer work.
+
+### Generated formatting
+
+Generated builtin files are not currently guaranteed to pass `zig fmt --check`
+because top-level comments/functions use indented emission. This is pre-existing
+and separate from correctness. Revisit if formatting generated output becomes a
+CI requirement.
+
+### Option rendering duplication
+
+Option-field selection and inline/optional classification are shared through
+`model/options.zig`; backend-specific type writing, default reconstruction and
+`toBinding` emission remain separate. A future refactor can share a full field
+renderer with callbacks, but keeping bindgen and codegen type/default logic
+separate is intentional.
+
+### StringName fallback
+
+`StringName.fromTypeName` remains a lossy Pascal fallback for names without a
+generated `GodotClassName`. Generated classes/builtins and hand-written builtins
+provide `GodotClassName`; use `StringName.fromType` or `fromUserType` for exact
+names.

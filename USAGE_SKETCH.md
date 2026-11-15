@@ -1,6 +1,9 @@
 Foo.zig:
 ```zig
-pub const Extends = godot.Sprit2D;
+some_value: OnReady(i32, .{ .call = .{ struct{ fn f() i32 { return 69; }.f, .{} } } }),
+some_node: OnReady(Node, .{ .node = "<path>" }),
+
+pub const Extends = godot.classes.core.Sprit2D;
 
 // will be converted into call-convention(.c) if it is not already,
 // for these type of "event" functions you should convert it to callconv(.c)

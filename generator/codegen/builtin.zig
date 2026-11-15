@@ -287,10 +287,7 @@ fn writeMethod(
     self_type: []const u8,
 ) !void {
     const method_pascal = try names.pascal(arena, method.name);
-    var has_options = false;
-    for (method.arguments) |argument| {
-        if (argument.default_value != null) has_options = true;
-    }
+    const has_options = option_fields.hasOptions(method.arguments);
     if (has_options) {
         try writeOptions(writer, arena, resolver, class, method, method_pascal, imports, top_level);
     }
@@ -475,10 +472,10 @@ fn writeOptions(
     try writer.writeAll("    pub const ");
     try writer.writeAll(method_pascal);
     try writer.writeAll("Options = struct {\n");
-    for (method.arguments) |argument| {
-        if (argument.default_value == null) continue;
-        const default_value = argument.default_value.?;
-        const inline_default = defaults.canInlineDefault(argument.type, default_value);
+    for (try option_fields.collect(arena, method.arguments)) |field| {
+        const argument = field.argument;
+        const default_value = field.default_value;
+        const inline_default = field.inline_default;
         try writer.writeAll("        ");
         try names.writeMemberIdent(writer, argument.name);
         try writer.writeAll(": ");
@@ -498,10 +495,9 @@ fn writeOptions(
     try type_mapping.writeBindingBuiltinPath(writer, class.name);
     try writer.print(".{s}Options {{\n", .{method_pascal});
     try writer.writeAll("            return .{\n");
-    for (method.arguments) |argument| {
-        if (argument.default_value == null) continue;
-        const default_value = argument.default_value.?;
-        const inline_default = defaults.canInlineDefault(argument.type, default_value);
+    for (try option_fields.collect(arena, method.arguments)) |field| {
+        const argument = field.argument;
+        const inline_default = field.inline_default;
         try writer.writeAll("                .");
         try names.writeMemberIdent(writer, argument.name);
         try writer.writeAll(" = ");
@@ -819,6 +815,7 @@ const overrides = @import("overrides.zig");
 const template_mod = @import("templates.zig");
 const type_mapping = @import("type_mapping.zig");
 const Options = @import("Options.zig");
+const option_fields = @import("../model/options.zig");
 
 test "codegen builtin renderer compiles" {
     _ = &generate;

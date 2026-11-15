@@ -511,15 +511,12 @@ fn writeVirtuals(
     info: *const Info,
     imports: *ImportSet,
 ) !void {
-    var has_virtual = false;
-    for (info.class.methods) |method| {
-        if (method.is_virtual) has_virtual = true;
-    }
-    if (!has_virtual) return;
+    const entries = try virtuals.collect(arena, resolver, info);
+    if (entries.len == 0) return;
 
     try writer.writeAll("    pub const Virtual = struct {\n");
-    try writeVirtualGroup(writer, arena, resolver, info, info, imports, true);
-    try writeVirtualGroup(writer, arena, resolver, info, info, imports, false);
+    try writeVirtualGroup(writer, arena, resolver, info, entries, imports, true);
+    try writeVirtualGroup(writer, arena, resolver, info, entries, imports, false);
     try writer.writeAll("    };\n\n");
 }
 
@@ -528,14 +525,15 @@ fn writeVirtualGroup(
     arena: Allocator,
     resolver: *const ClassResolver,
     info: *const Info,
-    owner: *const Info,
+    entries: []const virtuals.Entry,
     imports: *ImportSet,
     required: bool,
 ) !void {
     const group_name = if (required) "Required" else "Optional";
     try writer.print("        pub const {s} = struct {{\n", .{group_name});
-    for (owner.class.methods) |*method| {
-        if (!method.is_virtual or method.is_required != required) continue;
+    for (entries) |entry| {
+        if (entry.required != required) continue;
+        const method = entry.method;
         try docs.write(writer, arena, method.description, 12, "///");
         try writer.writeAll("            pub const ");
         try names.writeRawIdent(writer, resolver.virtualName(info, method.name));
@@ -564,7 +562,6 @@ fn writeVirtualGroup(
     }
     try writer.writeAll("        };\n\n");
 }
-
 fn writeSignals(
     writer: *Io.Writer,
     arena: Allocator,
@@ -716,10 +713,7 @@ fn writeMethod(
     binding_class_path: []const u8,
 ) !void {
     const method_pascal = try names.pascal(arena, method.name);
-    var has_options = false;
-    for (method.arguments) |argument| {
-        if (argument.default_value != null) has_options = true;
-    }
+    const has_options = option_fields.hasOptions(method.arguments);
     if (has_options and override_name == null and owner == info) {
         try writeOptions(writer, arena, resolver, info, method, method_pascal, imports);
     }
@@ -1016,10 +1010,10 @@ fn writeOptions(
     try writer.writeAll("    pub const ");
     try writer.writeAll(method_pascal);
     try writer.writeAll("Options = struct {\n");
-    for (method.arguments) |argument| {
-        if (argument.default_value == null) continue;
-        const default_value = argument.default_value.?;
-        const inline_default = defaults.canInlineDefault(argument.type, default_value);
+    for (try option_fields.collect(arena, method.arguments)) |field| {
+        const argument = field.argument;
+        const default_value = field.default_value;
+        const inline_default = field.inline_default;
         try writer.writeAll("        ");
         try names.writeMemberIdent(writer, argument.name);
         try writer.writeAll(": ");
@@ -1039,10 +1033,9 @@ fn writeOptions(
     try type_mapping.writeBindingClassPath(writer, info.class);
     try writer.print(".{s}Options {{\n", .{method_pascal});
     try writer.writeAll("            return .{\n");
-    for (method.arguments) |argument| {
-        if (argument.default_value == null) continue;
-        const default_value = argument.default_value.?;
-        const inline_default = defaults.canInlineDefault(argument.type, default_value);
+    for (try option_fields.collect(arena, method.arguments)) |field| {
+        const argument = field.argument;
+        const inline_default = field.inline_default;
         try writer.writeAll("                .");
         try names.writeMemberIdent(writer, argument.name);
         try writer.writeAll(" = ");
@@ -1155,6 +1148,8 @@ const resolver_mod = @import("../model/resolver.zig");
 const ClassResolver = resolver_mod.ClassResolver;
 const Info = resolver_mod.Info;
 const Options = @import("Options.zig");
+const option_fields = @import("../model/options.zig");
+const virtuals = @import("../model/virtuals.zig");
 
 test "codegen class renderer compiles" {
     _ = &generate;

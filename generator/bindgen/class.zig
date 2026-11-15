@@ -309,11 +309,7 @@ fn emitClass(
     var emitted_names: [4096][]const u8 = undefined;
     var emitted_count: usize = 0;
 
-    var has_virtual = false;
-    for (class.methods) |method| {
-        if (method.is_virtual) has_virtual = true;
-    }
-    if (has_virtual) try writeVirtualStruct(writer, arena, resolver, class, info, real_name, sections, &imports);
+    try writeVirtualStruct(writer, arena, resolver, info, real_name, sections, &imports);
 
     for (class.methods) |*method| {
         if (method.is_virtual) {
@@ -378,15 +374,17 @@ fn writeVirtualStruct(
     writer: *Io.Writer,
     arena: Allocator,
     resolver: *const class_resolver.ClassResolver,
-    class: *const ExtensionApiJson.Class,
     info: *const class_resolver.Info,
     real_name: []const u8,
     sections: custom_code.Sections,
     imports: *ImportSet,
 ) !void {
+    const entries = try virtuals.collect(arena, resolver, info);
+    if (entries.len == 0) return;
+
     try writer.writeAll("    pub const Virtual = struct {\n");
-    try writeVirtualGroup(writer, arena, resolver, class, info, real_name, sections, imports, true);
-    try writeVirtualGroup(writer, arena, resolver, class, info, real_name, sections, imports, false);
+    try writeVirtualGroup(writer, arena, resolver, info, real_name, sections, imports, entries, true);
+    try writeVirtualGroup(writer, arena, resolver, info, real_name, sections, imports, entries, false);
     try custom_code.writeIndented(writer, sections.codeForStruct("Virtual"), 4);
     try writer.writeAll("    };\n\n");
 }
@@ -395,17 +393,18 @@ fn writeVirtualGroup(
     writer: *Io.Writer,
     arena: Allocator,
     resolver: *const class_resolver.ClassResolver,
-    class: *const ExtensionApiJson.Class,
     info: *const class_resolver.Info,
     real_name: []const u8,
     sections: custom_code.Sections,
     imports: *ImportSet,
+    entries: []const virtuals.Entry,
     required: bool,
 ) !void {
     const group_name = if (required) "Required" else "Optional";
     try writer.print("        pub const {s} = struct {{\n", .{group_name});
-    for (class.methods) |*method| {
-        if (!method.is_virtual or method.is_required != required) continue;
+    for (entries) |entry| {
+        if (entry.required != required) continue;
+        const method = entry.method;
         try docs.write(writer, arena, method.description, 12, "///");
         try writer.writeAll("            pub const ");
         try names.writeRawIdent(writer, resolver.virtualName(info, method.name));
@@ -414,7 +413,7 @@ fn writeVirtualGroup(
         if (!method.is_static) {
             try writer.writeAll("self: *");
             if (method.is_const) try writer.writeAll("const ");
-            try names.writeRawIdent(writer, class.name);
+            try names.writeRawIdent(writer, info.class.name);
             first = false;
         }
         for (method.arguments) |argument| {
@@ -438,7 +437,6 @@ fn writeVirtualGroup(
     try custom_code.writeIndented(writer, group_code, 4);
     try writer.writeAll("        };\n\n");
 }
-
 fn writeClassConstants(
     writer: *Io.Writer,
     arena: Allocator,
@@ -651,10 +649,7 @@ fn writeOwnMethod(
 ) !void {
     const method_pascal = try names.pascal(arena, method.name);
 
-    var has_options = false;
-    for (method.arguments) |argument| {
-        if (argument.default_value != null) has_options = true;
-    }
+    const has_options = option_fields.hasOptions(method.arguments);
     if (has_options) try writeOptions(writer, arena, resolver, method, method_pascal, real_name, sections, imports);
 
     try docs.write(writer, arena, method.description, 4, "///");
@@ -711,7 +706,9 @@ fn writeOwnMethod(
                 });
             }
             if (needs_deinit) {
-                try writer.writeAll("        defer ");
+                try writer.writeAll("        defer if (opt.");
+                try names.writeMemberIdent(writer, argument.name);
+                try writer.writeAll(" == null) ");
                 try names.writePrefixedIdent(writer, "actual_", argument.name);
                 try writer.writeAll(".deinit(dispatcher);\n");
             }
@@ -1006,10 +1003,7 @@ fn writeForwardedMethod(
     imports: *ImportSet,
 ) !void {
     const method_pascal = try names.pascal(arena, method.name);
-    var has_options = false;
-    for (method.arguments) |argument| {
-        if (argument.default_value != null) has_options = true;
-    }
+    const has_options = option_fields.hasOptions(method.arguments);
 
     try docs.write(writer, arena, method.description, 4, "///");
     try writer.writeAll("    pub inline fn ");
@@ -1134,10 +1128,10 @@ fn writeOptions(
     try writer.writeAll("    pub const ");
     try writer.writeAll(method_pascal);
     try writer.writeAll("Options = struct {\n");
-    for (method.arguments) |argument| {
-        if (argument.default_value == null) continue;
-        const default_value = argument.default_value.?;
-        const inline_default = defaults.canInlineDefault(argument.type, default_value);
+    for (try option_fields.collect(arena, method.arguments)) |field| {
+        const argument = field.argument;
+        const default_value = field.default_value;
+        const inline_default = field.inline_default;
         try writer.writeAll("        ");
         try names.writeMemberIdent(writer, argument.name);
         try writer.writeAll(": ");
@@ -1319,3 +1313,5 @@ const class_resolver = @import("../model/resolver.zig");
 const class_templates = @import("class_templates.zig");
 const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
 const Options = @import("Options.zig");
+const option_fields = @import("../model/options.zig");
+const virtuals = @import("../model/virtuals.zig");

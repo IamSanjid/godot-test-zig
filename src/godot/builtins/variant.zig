@@ -17,7 +17,7 @@ pub const Variant = extern struct {
         nil: void,
         node_path: NodePath,
         object: extern struct {
-            id: native.ObjectID,
+            obj_id: native.ObjectID,
             object: *Object,
         },
         packed_byte_array: ?*anyopaque,
@@ -123,7 +123,7 @@ pub const Variant = extern struct {
                     .tag = .object,
                     .data = .{
                         .object = .{
-                            .id = @bitCast(classes.core.Object.getInstanceId(v)),
+                            .obj_id = .{ .id = @intCast(classes.core.Object.getInstanceId(v)) },
                             .object = v,
                         },
                     },

@@ -93,21 +93,41 @@ hand-written storage fields (`columns`, `Basis.rows`) are not spelled the same.
 
 Default ownership:
 
-- `String` / `StringName` literals use cached `fromComptimeLatin1`; do not
-  deinitialize the returned copy.
-- Empty `String()` / `StringName()` use `.init(dispatcher)` and are
-  deinitialized.
-- `NodePath`, `Array`, `Dictionary`, `Callable`, `Signal`, packed arrays, and
-  typed containers are deinitialized after the binding call when generated from
-  a default.
+- `String` / `StringName` / `NodePath` literals use cached `fromComptimeLatin1`
+  values and must not be deinitialized.
+- Empty `String()`, `StringName()`, and `NodePath()` also use cached
+  `fromComptimeLatin1` values and must not be deinitialized.
+- `Array`, `Dictionary`, `Callable`, `Signal`, packed arrays, and typed
+  containers are deinitialized after the binding call **only when bindgen
+  constructed the default itself**.
+- Caller-provided option values remain caller-owned; generated bindings do not
+  deinitialize them.
 - `Variant` defaults use `.nil()` and need no deinit.
 
-`String` and `NodePath` string literals are built from
-`String.fromComptimeLatin1`. Non-empty `NodePath` does:
+`String` has no static-buffer constructor, so `String.fromComptimeLatin1` copies
+once and caches the result for the process lifetime. `StringName` uses
+`is_static = true` and reuses the literal buffer. `NodePath` has no static
+constructor either, so `NodePath.fromComptimeLatin1` constructs one NodePath per
+unique literal and caches it for the process lifetime. Its temporary
+`String.fromLatin1` input is deinitialized immediately after construction because
+NodePath copies the parsed contents.
+
+`String.fromLatin1` is the owned runtime constructor for dynamic Latin-1 data.
+Cached values are intentionally never deinitialized.
+
+`String` and `NodePath` string literals are built from the cached constructors:
 
 ```zig
-NodePath.fromString(dispatcher, String.fromComptimeLatin1(dispatcher, "..."))
+String.fromComptimeLatin1(dispatcher, "...")
+NodePath.fromComptimeLatin1(dispatcher, "...")
 ```
+
+These caches are lazy process-lifetime globals and are not synchronized. Like
+the existing `StringName` cache, initialize them on a single thread before
+sharing them across threads.
+
+Returned `String`/`NodePath` values from engine calls are owned by the caller and
+still require deinit when the caller is done with them.
 
 ## Variant object access
 

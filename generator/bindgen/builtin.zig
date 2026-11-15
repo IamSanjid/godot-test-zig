@@ -405,18 +405,15 @@ fn writeMethod(
     _ = api;
     const method_pascal = try names.pascal(arena, method.name);
 
-    var has_options = false;
-    for (method.arguments) |argument| {
-        if (argument.default_value != null) has_options = true;
-    }
+    const has_options = option_fields.hasOptions(method.arguments);
     if (has_options) {
         try writer.writeAll("pub const ");
         try writer.writeAll(method_pascal);
         try writer.writeAll("Options = struct {\n");
-        for (method.arguments) |argument| {
-            if (argument.default_value == null) continue;
-            const default_value = argument.default_value.?;
-            const inline_default = defaults.canInlineDefault(argument.type, default_value);
+        for (try option_fields.collect(arena, method.arguments)) |field| {
+            const argument = field.argument;
+            const default_value = field.default_value;
+            const inline_default = field.inline_default;
             try writer.writeAll("    ");
             try common.writeArgument(writer, argument.name);
             try writer.writeAll(": ");
@@ -480,7 +477,9 @@ fn writeMethod(
                 });
             }
             if (needs_deinit) {
-                try writer.writeAll("    defer ");
+                try writer.writeAll("    defer if (opt.");
+                try names.writeMemberIdent(writer, argument.name);
+                try writer.writeAll(" == null) ");
                 try names.writePrefixedIdent(writer, "actual_", argument.name);
                 try writer.writeAll(".deinit(dispatcher);\n");
             }
@@ -803,3 +802,4 @@ const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
 const Options = @import("Options.zig");
 const class_resolver = @import("../model/resolver.zig");
 const builtin_catalog = @import("builtin_catalog.zig");
+const option_fields = @import("../model/options.zig");

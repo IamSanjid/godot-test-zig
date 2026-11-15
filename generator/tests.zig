@@ -8,6 +8,8 @@ test {
     _ = @import("model/InterfaceJson.zig");
     _ = @import("model/docs.zig");
     _ = @import("model/defaults.zig");
+    _ = @import("model/options.zig");
+    _ = @import("model/virtuals.zig");
     _ = @import("model/names.zig");
     _ = @import("model/types.zig");
     _ = @import("model/result_init.zig");
