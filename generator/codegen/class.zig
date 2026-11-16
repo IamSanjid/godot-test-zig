@@ -371,7 +371,7 @@ fn emitClass(
     }
 
     for (active_templates.list(.class)) |template| {
-        if (template.kind != .method) continue;
+        if (template.kind != .artifact) continue;
         if (hasMethodName(emitted_code_names[0..emitted_code_count], template.method)) {
             std.log.err("Duplicate template class method `{s}` in {s}", .{ template.method, class.name });
             return error.DuplicateTemplateMethod;

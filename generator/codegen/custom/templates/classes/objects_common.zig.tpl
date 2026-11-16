@@ -1,6 +1,18 @@
 // @templates_for Object:derived
 
-// @template method setInstance
+// @section artifact typeToken
+
+pub fn typeToken(comptime T: type) ?*anyopaque {
+    const token = &struct {
+        pub var _token: u8 = 34 + 35;
+        pub const TT = T;
+    }._token;
+    return token;
+}
+
+// @section_end artifact typeToken
+
+// @section artifact setInstance
 
 /// Bind an instance of an extension class to this engine class.
 pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
@@ -8,10 +20,7 @@ pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
         @compileError("T must extend {{Class}} or any of its derived classes, by declaring an `Extends` alias to the base class.");
     };
 
-    const token = comptime &struct {
-        pub var _token: u8 = 34 + 35;
-        pub const TT = T;
-    }._token;
+    const token = comptime typeToken(T);
     const class_name: builtins.StringName = .fromType(T);
     runtime.dispatch(.object_set_instance, .{ self, &class_name, instance });
     runtime.dispatch(.object_set_instance_binding, .{ self, token, instance, &struct {
@@ -32,4 +41,35 @@ pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
         }
     }.callbacks });
 }
-// @template_end setInstance
+
+// @section_end artifact setInstance
+
+// @section artifact asInstance
+
+/// Returns the registered instance of extension class T, or null if no binding exists.
+pub fn asInstance(self: *{{Class}}, comptime T: type) ?*T {
+    comptime std.debug.assert(runtime.auto.inheritsFrom(T, {{Class}}));
+    comptime std.debug.assert(runtime.auto.isNormalStruct(T));
+
+    const token = comptime typeToken(T);
+    const instance = runtime.dispatch(.object_get_instance_binding, .{self, token, null}) orelse return null;
+    return @ptrCast(@alignCast(instance));
+}
+
+// @section_end artifact asInstance
+
+// @section artifact upcast
+
+pub inline fn upcast(self: *{{Class}}, comptime T: type) *T {
+    if (!comptime runtime.auto.inheritsFrom({{Class}}, T)) @compileError("{{Class}} doesn't extend, " ++ @typeName(T));
+    return @ptrCast(self);
+}
+// @section_end artifact upcast
+
+// @section artifact downcast
+
+pub inline fn downcast(self: *{{Class}}, comptime T: type) ?*T {
+    return if (self.isClass(.fromType(T))) @ptrCast(self) else null;
+}
+
+// @section_end artifact downcast

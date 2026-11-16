@@ -10,6 +10,7 @@ pub fn generate(
     api: ExtensionApiJson,
     options: Options,
     resolver: *const class_resolver.ClassResolver,
+    templates: *const template_mod.Set,
 ) !void {
     const classes_dir = try std.fs.path.join(arena, &.{ options.output_dir, "classes" });
     Io.Dir.cwd().createDirPath(io, classes_dir) catch |err| {
@@ -25,7 +26,7 @@ pub fn generate(
                 return err;
             };
         }
-        try emitClass(arena, io, api, options, resolver, info);
+        try emitClass(arena, io, api, options, resolver, info, templates);
     }
 
     var seen_api_types: [16][]const u8 = undefined;
@@ -98,7 +99,7 @@ fn writeApiAggregator(
     }
     const relative_path = try std.fmt.allocPrint(arena, "classes/{s}/{s}.zig", .{ api_type, api_type });
     const sections = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
-    try custom_code.writeRaw(writer, sections.namespace_code);
+    try custom_code.writeRaw(writer, sections.imports);
 }
 
 fn writeRootAggregator(
@@ -169,7 +170,7 @@ fn writeRootAggregator(
         try writer.print("pub const {s} = {s}.{s};\n", .{ entry.type_name, entry.file_name, entry.type_name });
     }
     const sections = (try custom_code.readForOutput(arena, io, "classes/classes.zig")) orelse custom_code.Sections{};
-    try custom_code.writeRaw(writer, sections.namespace_code);
+    try custom_code.writeRaw(writer, sections.imports);
 }
 
 fn customConflictsWithClass(class: *const ExtensionApiJson.Class, code: []const u8) bool {
@@ -237,8 +238,9 @@ fn loadClassCustom(
     }
 
     return .{
-        .namespace_code = own.namespace_code,
+        .imports = own.imports,
         .structs = try arena.dupe(custom_code.StructSection, structs[0..count]),
+        .methods = own.methods,
     };
 }
 
@@ -249,9 +251,12 @@ fn emitClass(
     options: Options,
     resolver: *const class_resolver.ClassResolver,
     info: *const class_resolver.Info,
+    templates: *const template_mod.Set,
 ) !void {
     const class = info.class;
     const singleton = isSingleton(api, class.name);
+    const ancestors = try buildTemplateAncestry(arena, resolver, info);
+    const active_templates = try templates.*.filtered(arena, .class, class.name, ancestors);
     const sections = try loadClassCustom(arena, io, resolver, info);
     const path = try resolver.path(arena, info);
     const full_path = try std.fs.path.join(arena, &.{ options.output_dir, path });
@@ -357,8 +362,39 @@ fn emitClass(
     }
 
     try custom_code.writeIndented(writer, sections.codeForStruct(class.name), 4);
+    var template_names: [64][]const u8 = undefined;
+    var template_count: usize = 0;
+    for (active_templates.list(.class)) |tmpl| {
+        if (tmpl.kind != .artifact) {
+            std.log.err("Bindgen template `{s}` is not an artifact addition in {s}", .{ tmpl.method, class.name });
+            return error.UnsupportedTemplateKind;
+        }
+        if (try customMethodCollides(arena, resolver, info, tmpl.method)) {
+            std.log.err("Duplicate template class method `{s}` in {s}", .{ tmpl.method, class.name });
+            return error.DuplicateTemplateMethod;
+        }
+        const rendered = try template_mod.render(arena, tmpl, .{
+            .artifact = .class,
+            .method = tmpl.method,
+            .class_name = class.name,
+            .api_type = class.api_type,
+            .dispatcher = "dispatcher",
+        });
+        try custom_code.writeIndented(writer, rendered, 4);
+        template_names[template_count] = tmpl.method;
+        template_count += 1;
+    }
+    for (sections.methods) |section| {
+        if (try customMethodCollides(arena, resolver, info, section.name) or
+            hasMethodName(template_names[0..template_count], section.name))
+        {
+            std.log.err("Duplicate custom class method `{s}` in {s}", .{ section.name, class.name });
+            return error.DuplicateCustomMethod;
+        }
+        try custom_code.writeIndented(writer, section.code, 4);
+    }
     try writer.writeAll("};\n\n");
-    try custom_code.writeRaw(writer, sections.namespace_code);
+    try custom_code.writeRaw(writer, sections.imports);
 
     try writeImports(writer, arena, resolver, info, &imports);
 }
@@ -1222,6 +1258,40 @@ fn hasMethodName(names_list: []const []const u8, name: []const u8) bool {
     return false;
 }
 
+fn buildTemplateAncestry(
+    arena: Allocator,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
+) ![]const []const u8 {
+    var names_list: std.ArrayList([]const u8) = .empty;
+    var current: ?*const class_resolver.Info = info;
+    while (current) |class_info| {
+        try names_list.append(arena, class_info.class.name);
+        current = resolver.baseInfo(class_info);
+    }
+    return names_list.items;
+}
+
+fn customMethodCollides(
+    arena: Allocator,
+    resolver: *const class_resolver.ClassResolver,
+    info: *const class_resolver.Info,
+    name: []const u8,
+) !bool {
+    var current: ?*const class_resolver.Info = info;
+    while (current) |class_info| {
+        for (class_info.class.methods) |method| {
+            const code_name = if (method.is_virtual)
+                resolver.virtualName(info, method.name)
+            else
+                try names.camel(arena, method.name);
+            if (std.mem.eql(u8, code_name, name)) return true;
+        }
+        current = resolver.baseInfo(class_info);
+    }
+    return false;
+}
+
 fn resolveWrite(
     writer: *Io.Writer,
     resolver: *const class_resolver.ClassResolver,
@@ -1315,3 +1385,4 @@ const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
 const Options = @import("Options.zig");
 const option_fields = @import("../model/options.zig");
 const virtuals = @import("../model/virtuals.zig");
+const template_mod = @import("templates.zig");

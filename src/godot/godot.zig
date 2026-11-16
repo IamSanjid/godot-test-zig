@@ -26,7 +26,7 @@ pub inline fn dispatcher() *const DefaultDispatcher {
     return &_dispatcher;
 }
 
-pub inline fn registery() *Registry {
+pub inline fn registry() *Registry {
     assert(registry_initialized);
     return &_registry;
 }
@@ -97,7 +97,7 @@ pub fn richLogFn(
 }
 
 pub fn initialize(_: ?*anyopaque, p_level: interface.InitializationLevel) callconv(.c) void {
-    for (registery().classes.items) |class| {
+    for (registry().classes.items) |class| {
         if (class.options.register_at_level != p_level) continue;
         dispatch(.classdb_register_extension_class6, .{
             library(),
@@ -112,12 +112,12 @@ pub fn deinitialize(_: ?*anyopaque, p_level: interface.InitializationLevel) call
     const min_init_level = @backingInt(build_options.minimum_initialization_level);
     if (@backingInt(p_level) < min_init_level) return;
 
-    while (registery().classes.pop()) |class| {
+    while (registry().classes.pop()) |class| {
         if (class.options.register_at_level == p_level) {
             dispatch(.classdb_unregister_extension_class, .{ library(), &class.class_name });
         }
     }
-    registery().deinit();
+    registry().deinit();
 }
 
 const std = @import("std");

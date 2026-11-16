@@ -1,4 +1,4 @@
-// @struct String
+// @section artifact fromComptimeLatin1
 /// Creates a String from a comptime Latin-1 encoded C string.
 ///
 /// String has no static-buffer constructor, so this copies once and caches the
@@ -21,6 +21,8 @@ pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) Strin
     return S.value;
 }
 
+// @section_end artifact fromComptimeLatin1
+// @section artifact fromLatin1
 /// Creates a String from a Latin-1 encoded C string.
 pub inline fn fromLatin1(dispatcher: anytype, str: []const u8) String {
     var result: String = undefined;
@@ -32,6 +34,8 @@ pub inline fn fromLatin1(dispatcher: anytype, str: []const u8) String {
     return result;
 }
 
+// @section_end artifact fromLatin1
+// @section artifact fromUtf8
 /// Creates a String from a UTF-8 encoded C string with the given length.
 pub inline fn fromUtf8(dispatcher: anytype, str: []const u8) !String {
     var result: String = undefined;
@@ -43,4 +47,4 @@ pub inline fn fromUtf8(dispatcher: anytype, str: []const u8) !String {
     if (err != 0) return error.FailedToCreateString;
     return result;
 }
-// @struct_end String
+// @section_end artifact fromUtf8

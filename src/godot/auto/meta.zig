@@ -20,6 +20,9 @@ pub fn isNamespace(comptime T: type) bool {
     if (isNormalStruct(T) or isTuple(T)) return false;
     const info = @typeInfo(T);
     if (info != .@"struct") return false;
+    // A zero-field struct can be a valid extension class. Only a struct without
+    // an engine base is a namespace.
+    if (@hasDecl(T, "Extends")) return false;
     const struct_info = info.@"struct";
     return struct_info.field_names.len == 0;
 }
@@ -68,7 +71,8 @@ pub fn isFn(comptime f: anytype) bool {
 }
 
 pub fn FnReturnType(comptime f: anytype) ?type {
-    const info = @typeInfo(@TypeOf(f));
+    const F = @TypeOf(f);
+    const info = if (F == type) @typeInfo(f) else @typeInfo(F);
     if (info != .@"fn") @compileError("Expected a fn but found: " ++ @typeName(@TypeOf(f)));
     return info.@"fn".return_type;
 }

@@ -66,9 +66,9 @@ fn emitEnums(writer: *Io.Writer, arena: Allocator, api: ExtensionApiJson) !void 
 
 fn appendNamespace(writer: *Io.Writer, arena: Allocator, io: Io, relative_path: []const u8) !void {
     const sections = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
-    if (sections.namespace_code.len != 0) {
+    if (sections.imports.len != 0) {
         try writer.writeAll("\n");
-        try custom_code.writeRaw(writer, sections.namespace_code);
+        try custom_code.writeRaw(writer, sections.imports);
     }
 }
 

@@ -46,9 +46,8 @@ pub fn OnReadyNode(comptime T: type, comptime p_node_path: [:0]const u8) type {
 
         pub fn init(comptime OwnerT: type, comptime Base: type, owner: *OwnerT, base: *Base) Self {
             _ = owner;
-            if (comptime !auto.inheritsFrom(OwnerT, classes.core.Node))
-                @compileError("The child has to extend engine class Node!");
-            return .{ .value = @ptrCast(base.getNode(nodePath())) };
+            const value = if (base.getNode(nodePath())) |v| v.upcast(T) else null;
+            return .{ .value = value };
         }
 
         /// unwraps

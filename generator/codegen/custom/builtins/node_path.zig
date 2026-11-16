@@ -1,4 +1,4 @@
-// @method fromComptimeLatin1
+// @section artifact fromComptimeLatin1
 
 /// Creates a NodePath from a comptime Latin-1 encoded C string.
 ///
@@ -25,4 +25,4 @@ pub fn fromComptimeLatin1(comptime str: [:0]const u8) NodePath {
 
     return NP.value;
 }
-// @method_end fromComptimeLatin1
+// @section_end artifact fromComptimeLatin1

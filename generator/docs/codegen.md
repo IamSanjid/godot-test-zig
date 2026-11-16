@@ -232,69 +232,48 @@ generator/codegen/custom/
   templates/builtins/*.zig.tpl
 ```
 
-Class/builtin/utility overlays support:
+Codegen custom files use the shared section grammar:
 
 ```zig
-// @imports
-// @imports_end
-// @replace methodName
-// @replace_end methodName
-// @method addedName
-// @method_end addedName
+// @section file
+// @section artifact name
+// @section replace methodName
 ```
 
-Targets are generated Zig method/function names (camelCase). Custom files are
-read, never created.
+- `file` adds file-scope code.
+- `artifact` appends a new member and collision-checks its name.
+- `replace` replaces a generated method.
 
-Templates support:
+Nested sections are bindgen-only and rejected by codegen.
 
-```zig
-// @template replace methodName
-// @template_end methodName
-// @template method addedName
-// @template_end addedName
-```
-
-Templates can be scoped to specific types with a file-level directive placed
-before the first template block:
+Templates use the same section grammar, with a file-level target directive.
+Codegen supports both `replace` and `artifact`; bindgen supports `artifact`
+only.
 
 ```zig
 // @templates_for Node:derived, Control, Button
-// @template replace process
-// @template_end process
+// @section replace process
+// @section_end replace process
+
+// @section artifact helper
+// @section_end artifact helper
 ```
 
-Rules:
+- `@templates_for` is optional; omitted or `*` means every type.
+- `Node` is exact; `Node:derived` also applies to descendants.
+- `replace` targets generated Zig identifiers (`do_thing` -> `doThing`).
+- `artifact` adds a member whose Zig identifier is the section name.
+- Builtins cannot use `:derived` and must be generated, non-primitive types.
+- Unknown targets and duplicate method names are errors.
+- A missing replacement target is a no-op.
+- A file's `@templates_for` applies to every block; split files for different
+  targets.
+- Use per-artifact custom overlays for a one-class replacement.
 
-- No directive means every type.
-- `*` explicitly means every type.
-- `,` separates selectors.
-- `Node` means only `Node`.
-- `Node:derived` means `Node` and all descendants. `{{Class}}` and
-  `{{binding_class}}` resolve to the current derived class.
-- `exact` is accepted as an explicit modifier.
-- Type selectors use raw `extension_api.json` type names.
-- `@template replace` targets use generated Zig identifiers, not raw API
-  method names. For example `do_thing` is targeted as `doThing`. Keyword
-  identifiers such as `align` are valid targets and are escaped in output.
-- `@template method` additions declare their Zig identifier directly.
-- Builtins have no inheritance; `:derived` on a builtin is an error.
-- Builtin targets must be generated, non-primitive builtins; primitive names
-  such as `bool` are rejected.
-- Unknown target names are errors.
-- A replacement only takes effect where the generated method exists. A missing
-  method on a selected type is a no-op, not an error.
-- One template per method name per class/builtin template directory. Use
-  per-artifact `custom/classes/...` for a one-class replacement.
-- The directive applies to every template block in that file. Split the file if
-  different blocks need different targets.
-
-The `{{method}}` placeholder is different from a template method target. For an
-API method replacement it is the raw API name (`do_thing`); for a template
-addition it is the declared template name.
-
-Placeholders: `{{Class}}`, `{{Builtin}}`, `{{binding_class}}`,
-`{{binding_builtin}}`, `{{api_type}}`, `{{dispatcher}}`, `{{method}}`.
+The `{{method}}` placeholder is the raw API name for replacements and the
+declared name for additions. Placeholders: `{{Class}}`, `{{Builtin}}`,
+`{{binding_class}}`, `{{binding_builtin}}`, `{{api_type}}`, `{{dispatcher}}`,
+`{{method}}`.
 
 Substitution is literal; the renderer does not add prefixes.
 
@@ -308,12 +287,12 @@ builtins; it would render as `builtins.builtins.Name`.
 
 Precedence:
 
-1. per-artifact `@replace`
+1. per-artifact `replace` section
 2. template replacement
 3. generated method
 
 Template additions are emitted after generated methods and before per-artifact
-`@method` additions. Names must not collide.
+`artifact` additions. Names must not collide.
 
 ## Unsupported overlays
 

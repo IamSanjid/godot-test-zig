@@ -85,7 +85,7 @@ export fn test_zig_init(
         }
     };
 
-    godot.registery().addClasses(.{ @This(), TestNode2 }, .{
+    godot.registry().addClasses(.{ @This(), TestNode2 }, .{
         .create_allocator = godot.engine_allocator,
     }, true) catch return false;
 

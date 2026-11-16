@@ -49,18 +49,48 @@ generator/bindgen/custom/
   utility/<category>.zig
 ```
 
-The custom file mirrors the generated output path below `custom/`. The bindgen
-custom format uses:
+Bindgen custom files use the shared section grammar:
 
 ```zig
-// @namespace
-// @namespace_end
-// @struct Name
-// @struct_end Name
+// @section file
+// @section artifact name
+// @section nested Target[,true]
 ```
 
-Custom code is inserted as-is. It is never compiled directly from the custom
-tree; it becomes part of the generated file.
+- `file` adds file-scope code.
+- `artifact` appends code to the generated class or builtin. The name identifies
+  the added member and is collision-checked.
+- `nested` inserts code into a nested namespace such as `Virtual`, `Required`,
+  `Optional`, `Properties`, or an options struct. `,true` marks it inheritable.
+
+Code is inserted as-is and is never compiled directly from the custom tree.
+Bindgen rejects `replace` sections.
+
+## Templates
+
+Bindgen templates live under:
+
+```text
+generator/bindgen/custom/templates/{classes,builtins}/*.zig.tpl
+```
+
+They use the shared template grammar:
+
+```zig
+// @templates_for Object:derived
+// @section artifact helper
+pub fn helper(self: *{{Class}}, dispatcher: anytype) void { ... }
+// @section_end artifact helper
+```
+
+Bindgen supports artifact additions only. `replace` remains codegen-only.
+Templates may declare private helpers as well as public methods; a section is
+inserted as-is inside the generated class or builtin.
+Placeholders are `{{Class}}`, `{{Builtin}}`, `{{dispatcher}}`, `{{api_type}}`,
+and `{{method}}`. The codegen-only `{{binding_class}}` and
+`{{binding_builtin}}` placeholders are unavailable. Template code must use
+imports already emitted for the target artifact; bindgen does not inject
+template imports yet.
 
 ## Generated builtin conversion methods
 

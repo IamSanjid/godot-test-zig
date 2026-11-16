@@ -9,6 +9,8 @@ test {
     _ = @import("model/docs.zig");
     _ = @import("model/defaults.zig");
     _ = @import("model/options.zig");
+    _ = @import("model/custom.zig");
+    _ = @import("model/templates.zig");
     _ = @import("model/virtuals.zig");
     _ = @import("model/names.zig");
     _ = @import("model/types.zig");

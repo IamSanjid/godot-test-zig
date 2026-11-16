@@ -148,7 +148,7 @@ fn emitBuiltin(
     }
 
     for (active_templates.list(.builtin)) |template| {
-        if (template.kind != .method) continue;
+        if (template.kind != .artifact) continue;
         if (hasName(emitted_code_names[0..emitted_code_count], template.method)) {
             std.log.err("Duplicate template builtin method `{s}` in {s}", .{ template.method, class.name });
             return error.DuplicateTemplateMethod;

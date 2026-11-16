@@ -1,4 +1,4 @@
-// @struct NodePath
+// @section artifact fromComptimeLatin1
 /// Creates a NodePath from a comptime Latin-1 encoded C string.
 ///
 /// The result is cached for the lifetime of the process. NodePath copies the
@@ -24,4 +24,4 @@ pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) NodeP
 
     return NP.value;
 }
-// @struct_end NodePath
+// @section_end artifact fromComptimeLatin1

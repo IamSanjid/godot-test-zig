@@ -1,4 +1,4 @@
-// @method fromComptimeLatin1
+// @section artifact fromComptimeLatin1
 
 /// Creates a StringName from a comptime Latin-1 encoded C string.
 ///
@@ -21,9 +21,9 @@ pub fn fromComptimeLatin1(comptime str: [:0]const u8) StringName {
 
     return SN.value;
 }
-// @method_end fromComptimeLatin1
+// @section_end artifact fromComptimeLatin1
 
-// @method fromLatin1
+// @section artifact fromLatin1
 
 /// Creates a StringName from a Latin-1 encoded C string.
 pub inline fn fromLatin1(str: [:0]const u8, is_static: bool) StringName {
@@ -35,9 +35,9 @@ pub inline fn fromLatin1(str: [:0]const u8, is_static: bool) StringName {
     });
     return result;
 }
-// @method_end fromLatin1
+// @section_end artifact fromLatin1
 
-// @method fromUtf8
+// @section artifact fromUtf8
 
 /// Creates a StringName from a UTF-8 encoded string.
 pub inline fn fromUtf8(str: []const u8) StringName {
@@ -49,9 +49,9 @@ pub inline fn fromUtf8(str: []const u8) StringName {
     });
     return result;
 }
-// @method_end fromUtf8
+// @section_end artifact fromUtf8
 
-// @method fromType
+// @section artifact fromType
 
 /// Uses the generated `GodotClassName` when available; otherwise falls back to
 /// Pascal conversion of the short Zig type name.
@@ -61,17 +61,17 @@ pub fn fromType(comptime T: type) StringName {
     }
     return fromTypeName(typeShortName(T));
 }
-// @method_end fromType
+// @section_end artifact fromType
 
-// @method fromUserType
+// @section artifact fromUserType
 
 /// Uses the user type's short name verbatim. No case conversion is applied.
 pub fn fromUserType(comptime T: type) StringName {
     return fromComptimeLatin1(typeShortName(T));
 }
-// @method_end fromUserType
+// @section_end artifact fromUserType
 
-// @method fromTypeName
+// @section artifact fromTypeName
 
 /// Pascal-converts a name without a generated `GodotClassName` annotation.
 /// Prefer `fromType` or `fromUserType` when the type is known.
@@ -79,17 +79,17 @@ pub fn fromTypeName(comptime name: []const u8) StringName {
     const converted = comptime naming.comptimeConvert(.godot, .type, name);
     return fromComptimeLatin1(converted);
 }
-// @method_end fromTypeName
+// @section_end artifact fromTypeName
 
-// @method typeShortName
+// @section artifact typeShortName
 
 fn typeShortName(comptime T: type) [:0]const u8 {
     const full = @typeName(T);
     const pos = std.mem.lastIndexOfScalar(u8, full, '.') orelse return full;
     return full[pos + 1 ..];
 }
-// @method_end typeShortName
+// @section_end artifact typeShortName
 
-// @imports
+// @section file
 const naming = @import("naming");
-// @imports_end
+// @section_end file

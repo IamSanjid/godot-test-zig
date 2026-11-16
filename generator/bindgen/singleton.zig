@@ -61,7 +61,7 @@ pub fn generate(
     }
 
     const sections = (try custom_code.readForOutput(arena, io, "singletons.zig")) orelse custom_code.Sections{};
-    try custom_code.writeRaw(writer, sections.namespace_code);
+    try custom_code.writeRaw(writer, sections.imports);
 
     try writer.writeAll("\nconst classes = @import(\"classes/classes.zig\");\n");
     try writer.writeAll("const StringName = @import(\"builtins/string_name.zig\").StringName;\n");

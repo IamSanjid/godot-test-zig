@@ -1,4 +1,4 @@
-// @struct Variant
+// @section artifact Data
 const Data = extern union {
     aabb: *AABB,
     array: *Array,
@@ -59,6 +59,8 @@ comptime {
     std.debug.assert(@alignOf(VariantWrapped) == @alignOf(Variant));
 }
 
+// @section_end artifact Data
+// @section artifact fromPtr
 pub fn fromPtr(dispatcher: anytype, comptime T: type, value: anytype) Variant {
     const VT = @TypeOf(value);
     if (VT != *const T and
@@ -148,6 +150,8 @@ pub fn fromPtr(dispatcher: anytype, comptime T: type, value: anytype) Variant {
     }
 }
 
+// @section_end artifact fromPtr
+// @section artifact nil
 pub fn nil() Variant {
     const wrapped: VariantWrapped = .{
         .tag = .nil,
@@ -156,23 +160,29 @@ pub fn nil() Variant {
     return wrapped.toVariant();
 }
 
+// @section_end artifact nil
+// @section artifact asInt
 pub fn asInt(self: Variant) i64 {
     const wrapped: VariantWrapped = @as(*const VariantWrapped, @ptrCast(&self)).*;
     return wrapped.data.int;
 }
 
+// @section_end artifact asInt
+// @section artifact asCallable
 pub fn asCallable(self: Variant) Callable {
     const wrapped: VariantWrapped = @as(*const VariantWrapped, @ptrCast(&self)).*;
     return wrapped.data.callable;
 }
 
+// @section_end artifact asCallable
+// @section artifact asObject
 pub fn asObject(self: Variant) *classes.core.Object {
     const wrapped: VariantWrapped = @as(*const VariantWrapped, @ptrCast(&self)).*;
     return wrapped.data.object.object;
 }
-// @struct_end Variant
+// @section_end artifact asObject
 
-// @namespace
+// @section file
 const classes = @import("../classes/classes.zig");
 const native = @import("../native.zig");
-// @namespace_end
+// @section_end file

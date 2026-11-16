@@ -1,4 +1,4 @@
-// @struct StringName
+// @section artifact fromComptimeLatin1
 /// Creates a StringName from a comptime Latin-1 encoded C string.
 ///
 /// The string is treated as static and the result is cached per unique string.
@@ -21,6 +21,8 @@ pub fn fromComptimeLatin1(dispatcher: anytype, comptime str: [:0]const u8) Strin
     return SN.value;
 }
 
+// @section_end artifact fromComptimeLatin1
+// @section artifact fromUtf8
 /// Creates a StringName from a UTF-8 encoded string.
 pub inline fn fromUtf8(dispatcher: anytype, str: []const u8) StringName {
     var result: StringName = undefined;
@@ -31,4 +33,4 @@ pub inline fn fromUtf8(dispatcher: anytype, str: []const u8) StringName {
     });
     return result;
 }
-// @struct_end StringName
+// @section_end artifact fromUtf8

@@ -71,7 +71,7 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
     try interface_gen.emit(writer, registry, interface_json.interface, options.api.strip_deprecation);
     try writer.writeAll("\n");
     const interface_custom = (try custom_code.readForOutput(arena, io, "interface.zig")) orelse custom_code.Sections{};
-    try custom_code.writeRaw(writer, interface_custom.namespace_code);
+    try custom_code.writeRaw(writer, interface_custom.imports);
     try writer.writeAll("\n");
 
     const builtin_registry = try builtin_catalog.BuiltinCatalog.init(arena, io, context.extension_api_json, options);
@@ -82,10 +82,12 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
         real_name,
         try builtinNames(arena, &builtin_registry),
     );
-    try builtin_gen.generate(arena, io, context.extension_api_json, options, &builtin_registry, &resolver);
+    const templates = try template_mod.load(arena, io);
+    try templates.validate(context.extension_api_json);
+    try builtin_gen.generate(arena, io, context.extension_api_json, options, &builtin_registry, &resolver, &templates);
     try global_gen.generate(arena, io, context.extension_api_json, options);
 
-    try class_gen.generate(arena, io, context.extension_api_json, options, &resolver);
+    try class_gen.generate(arena, io, context.extension_api_json, options, &resolver, &templates);
     try singleton_gen.generate(arena, io, context.extension_api_json, options, &resolver);
     try native_gen.generate(arena, io, context.extension_api_json, options, &resolver);
     try utility_gen.generate(arena, io, context.extension_api_json, options, &resolver);
@@ -135,3 +137,5 @@ const class_resolver = @import("../model/resolver.zig");
 const types = @import("../model/types.zig");
 const builtin_catalog = @import("builtin_catalog.zig");
 const custom_code = @import("custom.zig");
+
+const template_mod = @import("templates.zig");

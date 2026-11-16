@@ -20,6 +20,7 @@ generator/
     api_options.zig
     builtin_names.zig
     cli.zig
+    custom.zig
     defaults.zig
     docs.zig
     enum_emit.zig
@@ -51,6 +52,12 @@ The two customization trees are data consumed by the tool, not compiled source:
 generator/bindgen/custom/
 generator/codegen/custom/
 ```
+
+Both use the shared section parser in `model/custom.zig`. Sections are
+placement-oriented: `file`, `artifact`, `nested`, and `replace`. `artifact`
+names are collision-checked; bindgen additionally supports targeted `nested`
+sections. Codegen templates use the same section grammar with a file-level
+`@templates_for` target; bindgen templates support artifact additions only.
 
 ## Build integration
 

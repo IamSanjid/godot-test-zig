@@ -1,4 +1,4 @@
-// @method fromComptimeLatin1
+// @section artifact fromComptimeLatin1
 
 /// Creates a String from a comptime Latin-1 encoded C string.
 ///
@@ -21,9 +21,9 @@ pub fn fromComptimeLatin1(comptime str: [:0]const u8) String {
 
     return S.value;
 }
-// @method_end fromComptimeLatin1
+// @section_end artifact fromComptimeLatin1
 
-// @method fromLatin1
+// @section artifact fromLatin1
 
 /// Creates a String from a Latin-1 encoded C string.
 pub inline fn fromLatin1(str: []const u8) String {
@@ -35,9 +35,9 @@ pub inline fn fromLatin1(str: []const u8) String {
     });
     return result;
 }
-// @method_end fromLatin1
+// @section_end artifact fromLatin1
 
-// @method fromUtf8
+// @section artifact fromUtf8
 
 /// Creates a String from a UTF-8 encoded C string with the given length.
 pub inline fn fromUtf8(str: []const u8) !String {
@@ -50,4 +50,4 @@ pub inline fn fromUtf8(str: []const u8) !String {
     if (err != 0) return error.FailedToCreateString;
     return result;
 }
-// @method_end fromUtf8
+// @section_end artifact fromUtf8

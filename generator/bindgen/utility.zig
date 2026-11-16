@@ -70,7 +70,7 @@ fn writeCategory(
     }
 
     const sections = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
-    try custom_code.writeRaw(writer, sections.namespace_code);
+    try custom_code.writeRaw(writer, sections.imports);
     try writer.writeAll("\nconst builtins = @import(\"../builtins/builtins.zig\");\n");
     try writer.writeAll("const classes = @import(\"../classes/classes.zig\");\n");
     try writer.writeAll("const interface = @import(\"../interface.zig\");\n");
@@ -107,7 +107,7 @@ fn writeAggregator(
     }
 
     const sections = (try custom_code.readForOutput(arena, io, "utility/utility.zig")) orelse custom_code.Sections{};
-    try custom_code.writeRaw(writer, sections.namespace_code);
+    try custom_code.writeRaw(writer, sections.imports);
 }
 
 fn writeFunction(

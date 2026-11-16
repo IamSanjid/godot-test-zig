@@ -47,7 +47,7 @@ test "per-artifact replacement wins over template" {
 
     const custom_sections = custom_mod.Sections{
         .replacements = &.{
-            .{ .name = "process", .code = "customProcess" },
+            .{ .placement = .replace, .name = "process", .code = "customProcess" },
         },
     };
     const class_templates = [_]template_mod.Template{

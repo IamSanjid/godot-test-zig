@@ -14,7 +14,8 @@
   the callback self type; bindgen and codegen share virtual entry collection
 - class/builtin/utility custom overlays
 - class/builtin template replacements and additions
-- `@templates_for` class/builtin targeting, including derived class selectors
+- `@templates_for` class/builtin targeting, including derived class selectors;
+  shared template engine with codegen `replace`/`artifact` and bindgen `artifact`
 - relative runtime import from `<out_dir>/godot.zig`
 - warning-and-ignore behavior for unsupported artifact overlays
 - builtin enum doc inference, including `Basis.from_euler`'s `order`
@@ -30,6 +31,8 @@
   module; non-Windows installs skip PDB installation
 - shared `src/godot/naming.zig` policy for generator output and reflection;
   generated classes/builtins expose `GodotClassName` for exact StringName lookup
+- shared custom-section parser for bindgen and codegen; bindgen artifact additions
+  use shared `artifact` sections
 - Zig `bitpack struct` emission with target-aware interface bitfield padding
 
 ## Validation

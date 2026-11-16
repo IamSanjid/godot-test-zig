@@ -16,6 +16,7 @@ pub const ClassInfo = struct {
 
 pub fn deinit(self: *Registry) void {
     self.arena.deinit();
+    self.* = undefined;
 }
 
 /// `allocator` owner must out-live each class's "init"/"create" function call.
@@ -42,16 +43,16 @@ pub fn addClasses(
             .{ i, @typeName(Class) },
         ));
 
-        const is_namespace = comptime auto.isNamespace(Class);
         const is_engine_class = comptime auto.isEngineClass(Class);
+        const is_namespace = comptime auto.isNamespace(Class);
         if (!is_namespace and !is_engine_class) {
             @compileError("'" ++ @typeName(Class) ++ "' does not an Extend an Engine class type.");
         }
 
-        if (is_namespace) {
-            try self.addClassesFromNamespace(Class, p_options, auto_onready);
-        } else if (is_engine_class) {
+        if (is_engine_class) {
             try self.addClass(Class, Class.Extends, p_options, auto_onready);
+        } else if (is_namespace) {
+            try self.addClassesFromNamespace(Class, p_options, auto_onready);
         }
     }
 }
@@ -85,6 +86,68 @@ fn typeShortName(comptime T: type) [:0]const u8 {
     const full = @typeName(T);
     const pos = std.mem.lastIndexOfScalar(u8, full, '.') orelse return full;
     return full[pos + 1 ..];
+}
+
+fn checkVirtualMethodSignature(
+    comptime method_name: [:0]const u8,
+    comptime VirtualMethod: type,
+    comptime DeclaredMethod: type,
+) void {
+    const VRetType = auto.FnReturnType(VirtualMethod) orelse void;
+    const DRetType = auto.FnReturnType(DeclaredMethod) orelse void;
+    if (VRetType != DRetType) {
+        @compileError("The function signature doesn't match for " ++ method_name);
+    }
+    for (@typeInfo(VirtualMethod).@"fn".param_types, @typeInfo(DeclaredMethod).@"fn".param_types, 0..) |v_maybe_p, d_maybe_p, i| {
+        const VP = v_maybe_p.?;
+        const DP = d_maybe_p.?;
+        if (i == 0) continue;
+
+        if (VP != DP) {
+            @compileError(std.fmt.comptimePrint(
+                "The paremeter type at {} doesn't match, expected {s}, found {s}",
+                .{ i, @typeName(VP), @typeName(DP) },
+            ));
+        }
+    }
+}
+
+const VirtualMethodName = struct { zig: [:0]const u8, godot: [:0]const u8 };
+fn collectVirtualMethods(comptime T: type, comptime Base: type) []const VirtualMethodName {
+    return comptime blk: {
+        const required_virts = std.meta.declarations(Base.Virtual.Required);
+        const optional_virts = std.meta.declarations(Base.Virtual.Optional);
+        var index = 0;
+        var virtual_methods: [required_virts.len + optional_virts.len]VirtualMethodName = undefined;
+        for (required_virts) |required_virt| {
+            if (!@hasDecl(T, required_virt))
+                @compileError("Type '" ++ @typeName(T) ++ "' doesn't have required virtual method: " ++ required_virt);
+            const VirtMethod = std.meta.Child(@field(Base.Virtual.Required, required_virt));
+            const DeclaredMethod = @TypeOf(@field(T, required_virt));
+            checkVirtualMethodSignature(required_virt, VirtMethod, DeclaredMethod);
+
+            virtual_methods[index] = .{
+                .zig = required_virt,
+                .optional_virt = runtime.naming.comptimeConvert(.godot, .virtual_method, required_virt),
+            };
+            index += 1;
+        }
+        for (optional_virts) |optional_virt| {
+            if (@hasDecl(T, optional_virt)) {
+                const VirtMethod = std.meta.Child(@field(Base.Virtual.Required, optional_virt));
+                const DeclaredMethod = @TypeOf(@field(T, optional_virt));
+                checkVirtualMethodSignature(optional_virt, VirtMethod, DeclaredMethod);
+
+                virtual_methods[index] = .{
+                    .zig = optional_virt,
+                    .godot = runtime.naming.comptimeConvert(.godot, .virtual_method, optional_virt),
+                };
+                index += 1;
+            }
+        }
+
+        break :blk virtual_methods[0..index];
+    };
 }
 
 // addClasses is enough.
@@ -121,8 +184,10 @@ fn addClass(
                 @setRuntimeSafety(false);
                 const p_method_name: *const builtins.StringName = @ptrCast(@alignCast(p_name orelse return null));
 
-                const buffer = p_method_name.toUtf8Buffer();
+                var buffer = p_method_name.toAsciiBuffer();
+                defer buffer.deinit();
                 const as_bytes = buffer.bytesConst();
+
                 std.log.debug("{s} Was looking for: {s}", .{ @typeName(T), as_bytes });
 
                 const ready_method_name: builtins.StringName = .fromComptimeLatin1("_ready");
