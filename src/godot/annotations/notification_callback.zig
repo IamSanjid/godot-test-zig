@@ -2,7 +2,7 @@
 ///
 /// `foo` must be a member function and not accept any arguments. And must return void.
 pub fn NotificationCallback(comptime T: type, comptime method: anytype) type {
-    if (!auto.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
+    if (!reflect.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
 
     const MethodT = @TypeOf(method);
     const type_info = @typeInfo(MethodT);
@@ -98,4 +98,4 @@ fn isNotificationCallbackMarker(comptime Decl: anytype) bool {
 
 const std = @import("std");
 
-const auto = @import("../auto.zig");
+const reflect = @import("../reflect/reflect.zig");

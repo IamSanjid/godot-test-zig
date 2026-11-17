@@ -703,7 +703,7 @@ fn writeImports(
     options: Options,
 ) !void {
     try writer.print("const bindings = @import(\"{s}\");\n", .{options.bindings_module});
-    try writer.writeAll("const runtime = @import(\"../../godot.zig\");\n");
+    try writer.writeAll("const runtime = @import(\"../../runtime.zig\");\n");
     try writer.writeAll("const builtins = @import(\"../builtins.zig\");\n");
     if (imports.classes) try writer.writeAll("const classes = @import(\"../../classes/classes.zig\");\n");
     if (imports.enums) try writer.writeAll("const enums = @import(\"../../enums.zig\");\n");

@@ -11,16 +11,27 @@ pub fn inheritsFrom(comptime T: type, comptime Base: type) bool {
     }
 }
 
+/// True when T is `RefCounted` or descends from it.
+pub fn isRefCounted(comptime T: type) bool {
+    return inheritsFrom(T, classes.core.RefCounted);
+}
+
+/// True for a pointer/optional-pointer whose pointee is `RefCounted` or a
+/// descendant of it.
+pub fn isRefCountedPointer(comptime T: type) bool {
+    return isRefCounted(meta.ValueType(T));
+}
+
 pub fn isEngineClass(comptime T: type) bool {
-    if (auto.isNamespace(T)) return false;
     if (!@hasDecl(T, "Extends")) return false;
 
     const Extends = T.Extends;
-    const can_be_engine_class = auto.isNormalStruct(Extends) or auto.isOpaque(Extends);
-    return can_be_engine_class and auto.inheritsFrom(Extends, classes.core.Object);
+    const can_be_engine_class = reflect.isNormalStruct(Extends) or reflect.isOpaque(Extends);
+    return can_be_engine_class and reflect.inheritsFrom(Extends, classes.core.Object);
 }
 
 const std = @import("std");
 
-const auto = @import("auto.zig");
+const reflect = @import("reflect.zig");
+const meta = @import("meta.zig");
 const classes = @import("../classes/classes.zig");

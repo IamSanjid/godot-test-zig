@@ -46,3 +46,7 @@ const Io = std.Io;
 
 const names = @import("names.zig");
 const api_options = @import("api_options.zig");
+
+test {
+    _ = @import("abi.zig");
+}

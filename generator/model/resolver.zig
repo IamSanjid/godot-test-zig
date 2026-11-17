@@ -135,6 +135,17 @@ pub const ClassResolver = struct {
         };
     }
 
+    pub fn classInfo(self: ClassResolver, name: []const u8) ?*const Info {
+        for (self.infos) |*info| {
+            if (std.mem.eql(u8, info.class.name, name)) return info;
+        }
+        return null;
+    }
+
+    pub fn isRefCountedClass(self: ClassResolver, name: []const u8) bool {
+        const info = self.classInfo(name) orelse return false;
+        return info.class.is_refcounted;
+    }
     pub fn builtinClass(self: ClassResolver, name: []const u8) ?*const ExtensionApiJson.BuiltinClass {
         for (self.builtin_classes) |*builtin| {
             if (std.mem.eql(u8, builtin.name, name)) return builtin;

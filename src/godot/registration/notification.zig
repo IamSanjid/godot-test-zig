@@ -15,21 +15,20 @@ pub fn Notification(
                 const instance: *T = @ptrCast(@alignCast(p_instance orelse return));
 
                 if (p_what == Node.notification_post_enter_tree and !p_reversed) {
-                    std.log.debug("IsEditorHing: {}", .{singletons.Engine.get().isEditorHint()});
                     const base = &@field(instance, base_field_name);
                     if (!base.get().isNodeReady()) {
-                        auto.annot.initOnReadyFields(T, Base, instance, base.get());
+                        annotations.initOnReadyFields(T, Base, instance, base.get());
                     }
                 }
 
-                auto.annot.callNotificationCallback(T, Base, instance, p_what, p_reversed);
+                annotations.callNotificationCallback(T, Base, instance, p_what, p_reversed);
             }
         }.f;
     } else {
         return &struct {
             fn f(p_instance: interface.ClassInstancePtr, p_what: i32, p_reversed: bool) callconv(.c) void {
                 const instance: *T = @ptrCast(@alignCast(p_instance orelse return));
-                auto.annot.callNotificationCallback(T, Base, instance, p_what, p_reversed);
+                annotations.callNotificationCallback(T, Base, instance, p_what, p_reversed);
             }
         }.f;
     }
@@ -42,13 +41,11 @@ const bindings = @import("bindings");
 const interface = bindings.interface;
 const classes = @import("../classes/classes.zig");
 const Node = classes.core.Node;
-const singletons = @import("../singletons.zig");
 
-const runtime = @import("../godot.zig");
-const auto = runtime.auto;
+const annotations = @import("../annotations/annotations.zig");
 
-const annot_base = @import("../auto/annotations/base.zig");
+const annot_base = @import("../annotations/base.zig");
 const findBaseFieldName = annot_base.findBaseFieldName;
 
-const annot_on_ready = @import("../auto/annotations/on_ready.zig");
+const annot_on_ready = @import("../annotations/on_ready.zig");
 const findOnReadyFieldNames = annot_on_ready.findOnReadyFieldNames;

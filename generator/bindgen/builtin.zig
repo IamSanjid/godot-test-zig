@@ -307,7 +307,6 @@ fn writeBuiltinDefault(
     real_name: []const u8,
     resolver: *const class_resolver.ClassResolver,
 ) !bool {
-    _ = real_name;
     if (try defaults.writeMathLiteral(writer, "", raw_type, default_value)) return true;
     if (try defaults.writeStringLiteral(writer, "", raw_type, default_value, "dispatcher")) return true;
     if (std.mem.eql(u8, raw_type, "Variant")) {
@@ -342,7 +341,7 @@ fn writeBuiltinDefault(
         try writer.writeAll(default_value);
         return true;
     }
-    try writeBuiltinType(writer, resolver, raw_type, .argument);
+    try writeBuiltinType(writer, resolver, raw_type, .argument, real_name, null);
     try writer.writeAll(".init(dispatcher)");
     return defaults.isEmptyConstructor(raw_type, default_value);
 }
@@ -355,7 +354,6 @@ fn writeVarargMethod(
     real_name: []const u8,
     resolver: *const class_resolver.ClassResolver,
 ) !void {
-    _ = real_name;
     const fixed_count = method.arguments.len;
 
     try docs.write(writer, arena, method.description, 0, "///");
@@ -374,10 +372,10 @@ fn writeVarargMethod(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try writeBuiltinType(writer, resolver, argument.type, .argument);
+        try writeBuiltinType(writer, resolver, argument.type, .argument, real_name, argument.meta);
     }
     try writer.writeAll(", vargs: anytype) ");
-    try writeBuiltinType(writer, resolver, method.return_type, .return_value);
+    try writeBuiltinType(writer, resolver, method.return_type, .return_value, real_name, null);
     try writer.writeAll(" {\n");
 
     if (!method.is_static) {
@@ -473,7 +471,7 @@ fn writeMethod(
             try common.writeArgument(writer, argument.name);
             try writer.writeAll(": ");
             if (!inline_default) try writer.writeAll("?");
-            try writeBuiltinType(writer, resolver, argument.type, .argument);
+            try writeBuiltinType(writer, resolver, argument.type, .argument, real_name, argument.meta);
             if (inline_default) {
                 try writer.writeAll(" = ");
                 if (!try writeBuiltinDefault(writer, argument.type, default_value, real_name, resolver)) {
@@ -504,7 +502,7 @@ fn writeMethod(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, index);
         try writer.writeAll(": ");
-        try writeBuiltinType(writer, resolver, argument.type, .argument);
+        try writeBuiltinType(writer, resolver, argument.type, .argument, real_name, argument.meta);
     }
     if (has_options) {
         try writer.writeAll(", opt: ");
@@ -512,7 +510,9 @@ fn writeMethod(
         try writer.writeAll("Options");
     }
     try writer.writeAll(") ");
-    try writeBuiltinType(writer, resolver, method.return_type, .return_value);
+    try writeBuiltinType(writer, resolver, method.return_type, .return_value, real_name, null);
+    const return_scalar = abi.scalar(method.return_type, null, real_name);
+    const resolved_return = try resolver.resolveFor(method.return_type, .return_value, .builtin_file);
     try writer.writeAll(" {\n");
 
     for (method.arguments) |argument| {
@@ -548,48 +548,39 @@ fn writeMethod(
             defaults.canInlineDefault(argument.type, default_value)
         else
             false;
+        const source = try argSource(arena, argument, has_default, inline_default, index);
         const resolved_argument = try resolver.resolveFor(argument.type, .argument, .builtin_file);
         if (resolved_argument.kind == .@"enum") {
             if (resolved_argument.is_bitfield) {
-                try writer.print("    const arg{d}_slot: u{d} = @bitCast(", .{ index, resolved_argument.bitfield_bits });
+                try abi.writeBitfieldArgSlot(writer, resolved_argument.bitfield_bits, index, "    ", source);
             } else {
-                try writer.print("    const arg{d}_slot: i64 = @backingInt(", .{index});
+                try writer.print("    const arg{d}_slot: i64 = @backingInt({s});\n", .{ index, source });
             }
-            if (has_default) {
-                if (inline_default) {
-                    try writer.writeAll("opt.");
-                    try names.writeMemberIdent(writer, argument.name);
-                } else {
-                    try names.writePrefixedIdent(writer, "actual_", argument.name);
-                }
-            } else {
-                try names.writeArgName(writer, argument.name, index);
-            }
-            try writer.writeAll(");\n");
             try writer.print("    args[{d}] = @ptrCast(&arg{d}_slot);\n", .{ index, index });
+        } else if (abi.scalar(argument.type, argument.meta, real_name)) |scalar_value| {
+            try abi.writeArgSlot(writer, scalar_value, index, "    ", source);
         } else {
-            try writer.print("    args[{d}] = @ptrCast(&", .{index});
-            if (has_default) {
-                if (inline_default) {
-                    try writer.writeAll("opt.");
-                    try names.writeMemberIdent(writer, argument.name);
-                } else {
-                    try names.writePrefixedIdent(writer, "actual_", argument.name);
-                }
-            } else {
-                try names.writeArgName(writer, argument.name, index);
-            }
-            try writer.writeAll(");\n");
+            try writer.print("    args[{d}] = @ptrCast(&{s});\n", .{ index, source });
         }
     }
 
     const returns_void = std.mem.eql(u8, method.return_type, "void") or std.mem.eql(u8, method.return_type, "Nil");
     if (!returns_void) {
-        try writer.writeAll("    var result: ");
-        try writeBuiltinType(writer, resolver, method.return_type, .return_value);
-        try writer.writeAll(" = ");
-        try result_init.writeResultInitializer(writer, method.return_type, method.return_type, "dispatcher");
-        try writer.writeAll(";\n");
+        if (return_scalar) |scalar_value| {
+            try abi.writeResultSlot(writer, scalar_value, "    ");
+        } else if (resolved_return.kind == .@"enum") {
+            if (resolved_return.is_bitfield) {
+                try abi.writeBitfieldResultSlot(writer, resolved_return.bitfield_bits, "    ");
+            } else {
+                try writer.writeAll("    var result: i64 = undefined;\n");
+            }
+        } else {
+            try writer.writeAll("    var result: ");
+            try writeBuiltinType(writer, resolver, method.return_type, .return_value, real_name, null);
+            try writer.writeAll(" = ");
+            try result_init.writeResultInitializer(writer, method.return_type, method.return_type, "dispatcher");
+            try writer.writeAll(";\n");
+        }
     }
 
     const ptr_name = try names.pointer(arena, method.name);
@@ -641,7 +632,19 @@ fn writeMethod(
         try writer.writeAll("@as(interface.TypePtr, @ptrCast(&result))");
     }
     try writer.writeAll(", args.len);\n");
-    if (!returns_void) try writer.writeAll("    return result;\n");
+    if (!returns_void) {
+        if (return_scalar) |scalar_value| {
+            try abi.writeReturnSlot(writer, scalar_value, "    ");
+        } else if (resolved_return.kind == .@"enum") {
+            if (resolved_return.is_bitfield) {
+                try abi.writeBitfieldReturnSlot(writer, resolved_return.bitfield_bits, "    ");
+            } else {
+                try writer.writeAll("    return @fromBackingInt(@intCast(result));\n");
+            }
+        } else {
+            try writer.writeAll("    return result;\n");
+        }
+    }
     try writer.writeAll("}\n");
     try writer.print("var {s}_ptr: interface.PtrBuiltInMethod = null;\n\n", .{ptr_name});
 }
@@ -656,7 +659,6 @@ fn writeConstructor(
     resolver: *const class_resolver.ClassResolver,
 ) !void {
     _ = api;
-    _ = real_name;
     const name = try builtin_names.constructorName(arena, constructor);
     try docs.write(writer, arena, constructor.description, 0, "///");
     try writer.writeAll("pub fn ");
@@ -666,14 +668,25 @@ fn writeConstructor(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, index);
         try writer.writeAll(": ");
-        try writeBuiltinType(writer, resolver, argument.type, .argument);
+        try writeBuiltinType(writer, resolver, argument.type, .argument, real_name, argument.meta);
     }
     try writer.print(") {s} {{\n", .{class.name});
     try writer.print("    var args: [{d}]interface.ConstTypePtr = undefined;\n", .{constructor.arguments.len});
     for (constructor.arguments, 0..) |argument, index| {
-        try writer.print("    args[{d}] = @ptrCast(&", .{index});
-        try names.writeArgName(writer, argument.name, index);
-        try writer.writeAll(");\n");
+        const source = try argSource(arena, argument, false, false, index);
+        const resolved = try resolver.resolveFor(argument.type, .argument, .builtin_file);
+        if (resolved.kind == .@"enum") {
+            if (resolved.is_bitfield) {
+                try abi.writeBitfieldArgSlot(writer, resolved.bitfield_bits, index, "    ", source);
+            } else {
+                try writer.print("    const arg{d}_slot: i64 = @backingInt({s});\n", .{ index, source });
+            }
+            try writer.print("    args[{d}] = @ptrCast(&arg{d}_slot);\n", .{ index, index });
+        } else if (abi.scalar(argument.type, argument.meta, real_name)) |scalar_value| {
+            try abi.writeArgSlot(writer, scalar_value, index, "    ", source);
+        } else {
+            try writer.print("    args[{d}] = @ptrCast(&{s});\n", .{ index, source });
+        }
     }
     try writer.print("    var result: {s} = undefined;\n", .{class.name});
     try writer.print("    if ({s}_ptr == null) {{\n", .{name});
@@ -695,7 +708,6 @@ fn writeOperator(
     resolver: *const class_resolver.ClassResolver,
 ) !void {
     _ = api;
-    _ = real_name;
     const name = try builtin_names.operatorName(arena, operator);
     try docs.write(writer, arena, operator.description, 0, "///");
     try writer.writeAll("pub fn ");
@@ -703,18 +715,28 @@ fn writeOperator(
     try writer.writeAll("(self: *const ");
     try writer.writeAll(class.name);
     try writer.writeAll(", dispatcher: anytype");
+    const right_scalar = if (operator.right_type) |right_type| abi.scalar(right_type, null, real_name) else null;
     if (operator.right_type) |right_type| {
         try writer.writeAll(", rhs: *const ");
-        try writeBuiltinType(writer, resolver, right_type, .argument);
+        try writeBuiltinType(writer, resolver, right_type, .argument, real_name, null);
     }
     try writer.writeAll(") ");
-    try writeBuiltinType(writer, resolver, operator.return_type, .return_value);
+    try writeBuiltinType(writer, resolver, operator.return_type, .return_value, real_name, null);
+    const return_scalar = abi.scalar(operator.return_type, null, real_name);
     try writer.writeAll(" {\n");
-    try writer.writeAll("    var result: ");
-    try writeBuiltinType(writer, resolver, operator.return_type, .return_value);
-    try writer.writeAll(" = ");
-    try result_init.writeResultInitializer(writer, operator.return_type, operator.return_type, "dispatcher");
-    try writer.writeAll(";\n");
+    var has_rhs_slot = false;
+    if (right_scalar) |scalar_value| {
+        has_rhs_slot = try abi.writeConvertedSlot(writer, scalar_value, "rhs_slot", "    ", "rhs.*");
+    }
+    if (return_scalar) |scalar_value| {
+        try abi.writeResultSlot(writer, scalar_value, "    ");
+    } else {
+        try writer.writeAll("    var result: ");
+        try writeBuiltinType(writer, resolver, operator.return_type, .return_value, real_name, null);
+        try writer.writeAll(" = ");
+        try result_init.writeResultInitializer(writer, operator.return_type, operator.return_type, "dispatcher");
+        try writer.writeAll(";\n");
+    }
     try writer.print("    if ({s}_ptr == null) {{\n", .{name});
     try writer.writeAll("        @branchHint(.cold);\n");
     try writer.print("        {s}_ptr = dispatcher.dispatch(.variant_get_ptr_operator_evaluator, .{{\n", .{name});
@@ -732,13 +754,46 @@ fn writeOperator(
     try writer.writeAll(" was not found\");\n    }\n");
     try writer.print("    {s}_ptr.?(@as(interface.ConstTypePtr, @ptrCast(self)), ", .{name});
     if (operator.right_type != null) {
-        try writer.writeAll("@as(interface.ConstTypePtr, @ptrCast(rhs))");
+        if (has_rhs_slot) {
+            try writer.writeAll("@as(interface.ConstTypePtr, @ptrCast(&rhs_slot))");
+        } else {
+            try writer.writeAll("@as(interface.ConstTypePtr, @ptrCast(rhs))");
+        }
     } else {
         try writer.writeAll("null");
     }
     try writer.writeAll(", @as(interface.TypePtr, @ptrCast(&result)));\n");
-    try writer.writeAll("    return result;\n}\n");
+    if (return_scalar) |scalar_value| {
+        try abi.writeReturnSlot(writer, scalar_value, "    ");
+    } else {
+        try writer.writeAll("    return result;\n");
+    }
+    try writer.writeAll("}\n");
     try writer.print("var {s}_ptr: interface.PtrOperatorEvaluator = null;\n\n", .{name});
+}
+
+/// Renders the Zig expression that names the public value of one builtin
+/// argument, including reconstructed defaults (`actual_*`) and options fields.
+fn argSource(
+    arena: Allocator,
+    argument: ExtensionApiJson.Argument,
+    has_default: bool,
+    inline_default: bool,
+    index: usize,
+) ![]const u8 {
+    var buf: [200]u8 = undefined;
+    var fixed: Io.Writer = .fixed(&buf);
+    if (has_default) {
+        if (inline_default) {
+            try fixed.writeAll("opt.");
+            try names.writeMemberIdent(&fixed, argument.name);
+        } else {
+            try names.writePrefixedIdent(&fixed, "actual_", argument.name);
+        }
+    } else {
+        try names.writeArgName(&fixed, argument.name, index);
+    }
+    return arena.dupe(u8, fixed.buffered());
 }
 
 fn writeDestructor(writer: *Io.Writer, arena: Allocator, class: ExtensionApiJson.BuiltinClass) !void {
@@ -764,7 +819,12 @@ fn writeBuiltinType(
     resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
     context: BuiltinTypeContext,
+    real_name: []const u8,
+    meta: ?[]const u8,
 ) !void {
+    if (abi.scalar(raw, meta, real_name)) |scalar_value| {
+        return writer.writeAll(scalar_value.public_type);
+    }
     const type_context: class_resolver.TypeContext = if (context == .return_value) .return_value else .argument;
     const resolved = try resolver.resolveFor(raw, type_context, .builtin_file);
     try writer.writeAll(resolved.zig);
@@ -846,6 +906,7 @@ const Allocator = std.mem.Allocator;
 
 const common = @import("common.zig");
 const builtin_names = @import("../model/builtin_names.zig");
+const abi = @import("../model/abi.zig");
 const names = @import("../model/names.zig");
 const types = @import("../model/types.zig");
 const result_init = @import("../model/result_init.zig");

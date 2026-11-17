@@ -16,15 +16,23 @@ pub fn isNormalStruct(comptime T: type) bool {
     return info.@"struct".field_names.len > 0 and @sizeOf(T) > 0;
 }
 
-pub fn isNamespace(comptime T: type) bool {
+/// Best-effort namespace detector: a zero-field non-tuple struct.
+/// `Extends`/engine-class checks stay with callers that need them.
+pub fn isLikelyNamespace(comptime T: type) bool {
     if (isNormalStruct(T) or isTuple(T)) return false;
     const info = @typeInfo(T);
     if (info != .@"struct") return false;
-    // A zero-field struct can be a valid extension class. Only a struct without
-    // an engine base is a namespace.
-    if (@hasDecl(T, "Extends")) return false;
     const struct_info = info.@"struct";
     return struct_info.field_names.len == 0;
+}
+
+/// Canonical extension-class name: `GodotClassName` when present, otherwise
+/// the exact short Zig type name.
+pub fn className(comptime T: type) [:0]const u8 {
+    if (@hasDecl(T, "GodotClassName")) return T.GodotClassName;
+    const full = @typeName(T);
+    const pos = std.mem.lastIndexOfScalar(u8, full, '.') orelse return full;
+    return full[pos + 1 ..];
 }
 
 pub fn isSelfType(comptime Self: type, comptime T: type) bool {
@@ -54,6 +62,14 @@ pub fn isNormalFunction(comptime function: anytype) bool {
     return true;
 }
 
+/// True for `?*T` and `?*const T` pointer optionals.
+pub fn isOptionalPointer(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .optional => |info| @typeInfo(info.child) == .pointer,
+        else => false,
+    };
+}
+
 pub fn ValueType(comptime T: type) type {
     const info = @typeInfo(T);
     return switch (info) {
@@ -66,7 +82,8 @@ pub fn ValueType(comptime T: type) type {
 }
 
 pub fn isFn(comptime f: anytype) bool {
-    const info = @typeInfo(@TypeOf(f));
+    const F = @TypeOf(f);
+    const info = if (F == type) @typeInfo(f) else @typeInfo(F);
     return info == .@"fn";
 }
 
@@ -76,3 +93,5 @@ pub fn FnReturnType(comptime f: anytype) ?type {
     if (info != .@"fn") @compileError("Expected a fn but found: " ++ @typeName(@TypeOf(f)));
     return info.@"fn".return_type;
 }
+
+const std = @import("std");

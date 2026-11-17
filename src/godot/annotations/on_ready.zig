@@ -8,7 +8,7 @@ pub fn OnReady(comptime T: type, comptime strategy: anytype) type {
         return OnReadyNode(T, strategy.node);
     } else if (@hasField(StrategyT, "call")) {
         const CallT = @TypeOf(strategy.call);
-        if (!auto.isTuple(CallT)) @compileError("Expected a tuple for .call strategy, found: " ++ @typeName(CallT));
+        if (!reflect.isTuple(CallT)) @compileError("Expected a tuple for .call strategy, found: " ++ @typeName(CallT));
 
         const func = strategy.call[0];
         const args = if (strategy.call.len > 1) strategy.call[1] else .{};
@@ -17,11 +17,11 @@ pub fn OnReady(comptime T: type, comptime strategy: anytype) type {
 }
 
 pub fn OnReadyNode(comptime T: type, comptime p_node_path: [:0]const u8) type {
-    if (!auto.inheritsFrom(auto.ValueType(T), classes.core.Node)) {
+    if (!reflect.inheritsFrom(reflect.ValueType(T), classes.core.Node)) {
         @compileError("Type: " ++ @typeName(T) ++ ", doesn't extend a Node, it cannot be attached to another Node");
     }
 
-    const ValueT = if (auto.isOpaque(T)) *T else T;
+    const ValueT = if (reflect.isOpaque(T)) *T else T;
 
     return struct {
         pub const ForT = T;
@@ -46,7 +46,7 @@ pub fn OnReadyNode(comptime T: type, comptime p_node_path: [:0]const u8) type {
 
         pub fn init(comptime OwnerT: type, comptime Base: type, owner: *OwnerT, base: *Base) Self {
             _ = owner;
-            const value = if (base.getNode(nodePath())) |v| v.upcast(T) else null;
+            const value = if (base.getNode(nodePath())) |v| v.downcast(T) else null;
             return .{ .value = value };
         }
 
@@ -72,7 +72,7 @@ pub fn OnReadyNode(comptime T: type, comptime p_node_path: [:0]const u8) type {
 
 pub fn OnReadyCall(comptime T: type, comptime p_func: anytype, comptime args: anytype) type {
     const ArgsT = @TypeOf(args);
-    if (!auto.isTuple(ArgsT)) @compileError("Expected a tuple for .call strategy args, found: " ++ @typeName(ArgsT));
+    if (!reflect.isTuple(ArgsT)) @compileError("Expected a tuple for .call strategy args, found: " ++ @typeName(ArgsT));
 
     const func = blk: {
         if (@TypeOf(p_func) == @EnumLiteral()) {
@@ -94,7 +94,7 @@ pub fn OnReadyCall(comptime T: type, comptime p_func: anytype, comptime args: an
         break :blk p_func;
     };
 
-    const ValueT = if (auto.isOpaque(T)) *T else T;
+    const ValueT = if (reflect.isOpaque(T)) *T else T;
 
     const FuncT = @TypeOf(func);
     const fn_info = @typeInfo(FuncT).@"fn";
@@ -107,7 +107,7 @@ pub fn OnReadyCall(comptime T: type, comptime p_func: anytype, comptime args: an
         ));
     if (fn_info.is_generic) {
         @compileError("The func is a generic function(probably has a comptime argument type) " ++
-            "it should be a normal runtime dispatchable function. Use callComptimeArgN from auto to wrap them around.");
+            "it should be a normal runtime dispatchable function. Use callComptimeArg1 from annotations to wrap them around.");
     }
     const Args = std.meta.ArgsTuple(FuncT);
 
@@ -145,7 +145,7 @@ pub fn OnReadyCall(comptime T: type, comptime p_func: anytype, comptime args: an
                     } else {
                         rargs[i] = arg;
                     }
-                } else if (comptime auto.isFn(arg)) {
+                } else if (comptime reflect.isFn(arg)) {
                     rargs[i] = callInnerFn(OwnerT, Base, owner, base, arg);
                 } else if (comptime @typeInfo(Arg) == .@"struct" and @hasField(Arg, "field")) {
                     const field_name = comptime arg.field;
@@ -163,13 +163,13 @@ pub fn OnReadyCall(comptime T: type, comptime p_func: anytype, comptime args: an
             owner: *OwnerT,
             base: *Base,
             comptime f: anytype,
-        ) auto.FnReturnType(f).? {
+        ) reflect.FnReturnType(f).? {
             var iargs: std.meta.ArgsTuple(@TypeOf(f)) = undefined;
             inline for (0..iargs.len) |i| {
-                const Pointee = auto.ValueType(@TypeOf(iargs[i]));
+                const Pointee = reflect.ValueType(@TypeOf(iargs[i]));
                 if (comptime Pointee == OwnerT) {
                     iargs[i] = owner;
-                } else if (comptime auto.inheritsFrom(Base, Pointee)) {
+                } else if (comptime reflect.inheritsFrom(Base, Pointee)) {
                     iargs[i] = @ptrCast(base);
                 } else {
                     @compileError(std.fmt.comptimePrint(
@@ -215,7 +215,7 @@ pub fn findOnReadyFieldNames(comptime T: type) []const [:0]const u8 {
         var names: [info.field_names.len][:0]const u8 = undefined;
         var n: usize = 0;
         for (info.field_names, info.field_types) |name, F| {
-            if (auto.isNormalStruct(F) and @hasDecl(F, "isSelf")) {
+            if (reflect.isNormalStruct(F) and @hasDecl(F, "isSelf")) {
                 const isSelf = @field(F, "isSelf");
                 const is_self_type_info = @typeInfo(@TypeOf(isSelf));
                 if (is_self_type_info != .@"fn") continue;
@@ -236,12 +236,12 @@ pub fn findOnReadyFieldNames(comptime T: type) []const [:0]const u8 {
 
 const std = @import("std");
 
-const SafeGuard = @import("SafeGuard.zig");
+const SafeGuard = @import("internal/safe_guard.zig");
 const annot_base = @import("base.zig");
 const findBaseFieldName = annot_base.findBaseFieldName;
 
-const auto = @import("../auto.zig");
-const classes = @import("../../classes/classes.zig");
-const builtins = @import("../../builtins/builtins.zig");
+const reflect = @import("../reflect/reflect.zig");
+const classes = @import("../classes/classes.zig");
+const builtins = @import("../builtins/builtins.zig");
 
 const is_runtime_safety = @import("builtin").mode.runtimeSafety();

@@ -98,7 +98,7 @@ fn writeCategory(
     }
 
     try writer.print("const bindings = @import(\"{s}\");\n", .{options.bindings_module});
-    try writer.writeAll("const runtime = @import(\"../godot.zig\");\n");
+    try writer.writeAll("const runtime = @import(\"../runtime.zig\");\n");
     try writer.writeAll("const builtins = @import(\"../builtins/builtins.zig\");\n");
     try writer.writeAll("const classes = @import(\"../classes/classes.zig\");\n");
     try writer.writeAll("const enums = @import(\"../enums.zig\");\n");
@@ -150,7 +150,7 @@ fn writeFunction(
         if (index != 0) try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, index);
         try writer.writeAll(": ");
-        const resolved = try type_mapping.resolveUtility(resolver, argument.type, .argument);
+        const resolved = try type_mapping.resolvePublicUtility(resolver, argument.type, .argument);
         try writer.writeAll(resolved.zig);
     }
     if (function.is_vararg) {
@@ -160,7 +160,7 @@ fn writeFunction(
     try writer.writeAll(") ");
 
     const return_type = function.return_type orelse "void";
-    const resolved_return = try type_mapping.resolveUtility(resolver, return_type, .return_value);
+    const resolved_return = try type_mapping.resolvePublicUtility(resolver, return_type, .return_value);
     try writer.writeAll(resolved_return.zig);
     try writer.writeAll(" {\n");
 

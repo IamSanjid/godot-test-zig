@@ -189,6 +189,10 @@ pub const ClassMethod = struct {
 
 pub const ReturnValue = struct {
     type: []const u8,
+    /// Original C++ type metadata (`float`/`double`, `int32`/`int64`, ...).
+    /// Needed so an API `float` return that is a true `double` keeps an `f64`
+    /// public type instead of following `real_t`.
+    meta: ?[]const u8 = null,
 };
 
 pub fn parse(gpa: Allocator, bytes: []const u8) !json.Parsed(ExtensionApiJson) {
@@ -231,6 +235,11 @@ test "parse extension api builtin data" {
         \\     "methods": [{"name": "get_center", "return_type": "Vector3", "hash": 1}],
         \\     "constructors": [{"index": 0}],
         \\     "operators": [{"name": "==", "right_type": "AABB", "return_type": "bool"}]}
+        \\  ],
+        \\  "classes": [
+        \\    {"name": "Node",
+        \\     "methods": [{"name": "get_process_delta_time", "hash": 3,
+        \\                  "return_value": {"type": "float", "meta": "double"}}]}
         \\  ]
         \\}
     ;
@@ -243,6 +252,9 @@ test "parse extension api builtin data" {
     try std.testing.expectEqual(@as(usize, 12), value.offsetsFor(.float_32).?[0].members[1].offset);
     try std.testing.expectEqualStrings("get_center", value.builtin_classes[0].methods[0].name);
     try std.testing.expectEqualStrings("AABB", value.builtin_classes[0].operators[0].right_type.?);
+    const return_value = value.classes[0].methods[0].return_value.?;
+    try std.testing.expectEqualStrings("float", return_value.type);
+    try std.testing.expectEqualStrings("double", return_value.meta.?);
 }
 
 const std = @import("std");

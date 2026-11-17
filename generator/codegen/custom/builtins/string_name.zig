@@ -53,13 +53,9 @@ pub inline fn fromUtf8(str: []const u8) StringName {
 
 // @section artifact fromType
 
-/// Uses the generated `GodotClassName` when available; otherwise falls back to
-/// Pascal conversion of the short Zig type name.
+/// Uses the canonical `GodotClassName` / extension class name.
 pub fn fromType(comptime T: type) StringName {
-    if (@hasDecl(T, "GodotClassName")) {
-        return fromComptimeLatin1(T.GodotClassName);
-    }
-    return fromTypeName(typeShortName(T));
+    return fromComptimeLatin1(runtime.reflect.className(T));
 }
 // @section_end artifact fromType
 

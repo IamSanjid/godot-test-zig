@@ -31,6 +31,21 @@ pub fn resolveUtility(
     return class_resolver.resolveFor(raw, context, .utility_file);
 }
 
+/// Resolves the public codegen type of a utility signature value.
+///
+/// Godot utility functions are C++ `double` even though the API JSON says
+/// `float`, so utility floats use the shared ABI `meta:"double"` rule and are
+/// public `f64`; the bindgen utility signature uses the same rule.
+pub fn resolvePublicUtility(
+    class_resolver: *const resolver.ClassResolver,
+    raw: []const u8,
+    context: TypeContext,
+) !ResolvedType {
+    var resolved = try resolveUtility(class_resolver, raw, context);
+    if (abi.utilityScalar(raw, class_resolver.real_type)) |scalar_value| resolved.zig = scalar_value.public_type;
+    return resolved;
+}
+
 /// Writes a value expression for an argument going from codegen to bindings.
 pub fn writeArg(writer: *Io.Writer, resolved: ResolvedType, expr: []const u8) !void {
     switch (resolved.kind) {
@@ -143,6 +158,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const resolver = @import("../model/resolver.zig");
+const abi = @import("../model/abi.zig");
 const defaults = @import("../model/defaults.zig");
 const names = @import("../model/names.zig");
 const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");

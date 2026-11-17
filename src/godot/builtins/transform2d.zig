@@ -35,26 +35,26 @@ pub fn Transform2dOf(comptime Real: type) type {
         pub inline fn bindingCall(
             self: *Self,
             comptime method: @EnumLiteral(),
-            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
-        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
-            const func = auto.FunctionOf(generated_namespace, method);
+            args: reflect.FunctionArgsAsTupleSkipFirst(reflect.FunctionOf(generated_namespace.MemberFunctions, method)),
+        ) reflect.FunctionReturnType(reflect.FunctionOf(generated_namespace, method)) {
+            const func = reflect.FunctionOf(generated_namespace, method);
             return @call(.auto, func, .{self} ++ args);
         }
 
         pub inline fn bindingCallConst(
             self: *const Self,
             comptime method: @EnumLiteral(),
-            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, method)),
-        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
-            const func = auto.FunctionOf(generated_namespace, method);
+            args: reflect.FunctionArgsAsTupleSkipFirst(reflect.FunctionOf(generated_namespace.MemberFunctions, method)),
+        ) reflect.FunctionReturnType(reflect.FunctionOf(generated_namespace, method)) {
+            const func = reflect.FunctionOf(generated_namespace, method);
             return @call(.auto, func, .{self} ++ args);
         }
 
         pub inline fn bindingCallStatic(
             comptime method: @EnumLiteral(),
-            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_namespace.StaticFunctions, method)),
-        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, method)) {
-            const func = auto.FunctionOf(generated_namespace, method);
+            args: reflect.FunctionArgsAsTuple(reflect.FunctionOf(generated_namespace.StaticFunctions, method)),
+        ) reflect.FunctionReturnType(reflect.FunctionOf(generated_namespace, method)) {
+            const func = reflect.FunctionOf(generated_namespace, method);
             return @call(.auto, func, args);
         }
 
@@ -423,7 +423,7 @@ test "Transform2D double precision" {
 
 const std = @import("std");
 const bindings = @import("bindings");
-const auto = @import("../auto/auto.zig");
+const reflect = @import("../reflect/reflect.zig");
 const generated_namespace = @import("generated/transform2d.zig");
 const vector = @import("vector.zig");
 const constants = @import("constants.zig");

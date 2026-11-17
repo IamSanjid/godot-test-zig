@@ -958,26 +958,26 @@ fn Helpers(comptime Self: type) type {
         pub inline fn bindingCall(
             self: *Self,
             comptime function: @EnumLiteral(),
-            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, function)),
-        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, function)) {
-            const func = auto.FunctionOf(generated_namespace, function);
+            args: reflect_mod.FunctionArgsAsTupleSkipFirst(reflect_mod.FunctionOf(generated_namespace.MemberFunctions, function)),
+        ) reflect_mod.FunctionReturnType(reflect_mod.FunctionOf(generated_namespace, function)) {
+            const func = reflect_mod.FunctionOf(generated_namespace, function);
             return @call(.auto, func, .{self} ++ args);
         }
 
         pub inline fn bindingCallConst(
             self: *const Self,
             comptime function: @EnumLiteral(),
-            args: auto.FunctionArgsAsTupleSkipFirst(auto.FunctionOf(generated_namespace.MemberFunctions, function)),
-        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, function)) {
-            const func = auto.FunctionOf(generated_namespace, function);
+            args: reflect_mod.FunctionArgsAsTupleSkipFirst(reflect_mod.FunctionOf(generated_namespace.MemberFunctions, function)),
+        ) reflect_mod.FunctionReturnType(reflect_mod.FunctionOf(generated_namespace, function)) {
+            const func = reflect_mod.FunctionOf(generated_namespace, function);
             return @call(.auto, func, .{self} ++ args);
         }
 
         pub inline fn bindingCallStatic(
             comptime function: @EnumLiteral(),
-            args: auto.FunctionArgsAsTuple(auto.FunctionOf(generated_namespace.StaticFunctions, function)),
-        ) auto.FunctionReturnType(auto.FunctionOf(generated_namespace, function)) {
-            const func = auto.FunctionOf(generated_namespace, function);
+            args: reflect_mod.FunctionArgsAsTuple(reflect_mod.FunctionOf(generated_namespace.StaticFunctions, function)),
+        ) reflect_mod.FunctionReturnType(reflect_mod.FunctionOf(generated_namespace, function)) {
+            const func = reflect_mod.FunctionOf(generated_namespace, function);
             return @call(.auto, func, args);
         }
     };
@@ -1422,6 +1422,7 @@ const std = @import("std");
 const basis_mod = @import("basis.zig");
 const constants = @import("constants.zig");
 
-const auto = @import("../auto/auto.zig");
+// `reflect` is also a `Vector` method name; alias the module here to avoid a name collision.
+const reflect_mod = @import("../reflect/reflect.zig");
 
 const bindings = @import("bindings");

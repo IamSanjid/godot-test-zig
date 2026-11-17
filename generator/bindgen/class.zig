@@ -308,7 +308,7 @@ fn emitClass(
     try writeClassProperties(writer, arena, resolver, info, real_name, sections, &imports);
 
     if (class.is_instantiable and !singleton) {
-        try class_templates.writeConstruct(writer, class);
+        try class_templates.writeConstruct(writer, class, options.api.strip_deprecation);
     }
 
     var emitted_names: [4096][]const u8 = undefined;
@@ -457,12 +457,14 @@ fn writeVirtualGroup(
             first = false;
             try names.writeArgName(writer, argument.name, 0);
             try writer.writeAll(": ");
-            try resolveWrite(writer, resolver, argument.type, .argument, real_name);
+            const resolved = try resolvePublic(resolver, argument.type, .argument, real_name, argument.meta);
+            try writer.writeAll(resolved.zig);
             try addImportResolved(imports, resolver, argument.type, .argument);
         }
         try writer.writeAll(") callconv(.c) ");
         if (method.return_value) |return_value| {
-            try resolveWrite(writer, resolver, return_value.type, .return_value, real_name);
+            const resolved = try resolvePublic(resolver, return_value.type, .return_value, real_name, return_value.meta);
+            try writer.writeAll(resolved.zig);
             try addImportResolved(imports, resolver, return_value.type, .return_value);
         } else {
             try writer.writeAll("void");
@@ -709,7 +711,8 @@ fn writeOwnMethod(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try resolveWrite(writer, resolver, argument.type, .argument, real_name);
+        const resolved_argument = try resolvePublic(resolver, argument.type, .argument, real_name, argument.meta);
+        try writer.writeAll(resolved_argument.zig);
         try addImport(imports, resolver, argument.type);
         try addImportResolved(imports, resolver, argument.type, .argument);
     }
@@ -719,8 +722,11 @@ fn writeOwnMethod(
         try writer.writeAll("Options");
     }
     try writer.writeAll(") ");
-    const return_type = if (method.return_value) |return_value| return_value.type else "void";
-    const resolved_return = try resolver.resolve(return_type, .return_value);
+    const return_value = method.return_value;
+    const return_type = if (return_value) |value| value.type else "void";
+    const return_meta = if (return_value) |value| value.meta else null;
+    const resolved_return = try resolvePublic(resolver, return_type, .return_value, real_name, return_meta);
+    const return_scalar = abi.scalar(return_type, return_meta, real_name);
     try addImportResolved(imports, resolver, return_type, .return_value);
     try writer.writeAll(resolved_return.zig);
     try writer.writeAll(" {\n");
@@ -758,50 +764,19 @@ fn writeOwnMethod(
             defaults.canInlineDefault(argument.type, default_value)
         else
             false;
+        const source = try argSource(arena, argument, has_default, inline_default);
         const resolved_argument = try resolver.resolve(argument.type, .argument);
         if (resolved_argument.kind == .@"enum") {
             if (resolved_argument.is_bitfield) {
-                try writer.print("        const arg{d}_slot: u{d} = @bitCast(", .{ index, resolved_argument.bitfield_bits });
-                if (has_default) {
-                    if (inline_default) {
-                        try writer.writeAll("opt.");
-                        try names.writeMemberIdent(writer, argument.name);
-                    } else {
-                        try names.writePrefixedIdent(writer, "actual_", argument.name);
-                    }
-                } else {
-                    try names.writeArgName(writer, argument.name, 0);
-                }
-                try writer.writeAll(");\n");
-                try writer.print("        args[{d}] = @ptrCast(&arg{d}_slot);\n", .{ index, index });
+                try abi.writeBitfieldArgSlot(writer, resolved_argument.bitfield_bits, index, "        ", source);
             } else {
-                try writer.print("        const arg{d}_slot: i64 = @backingInt(", .{index});
-                if (has_default) {
-                    if (inline_default) {
-                        try writer.writeAll("opt.");
-                        try names.writeMemberIdent(writer, argument.name);
-                    } else {
-                        try names.writePrefixedIdent(writer, "actual_", argument.name);
-                    }
-                } else {
-                    try names.writeArgName(writer, argument.name, 0);
-                }
-                try writer.writeAll(");\n");
-                try writer.print("        args[{d}] = @ptrCast(&arg{d}_slot);\n", .{ index, index });
+                try writer.print("        const arg{d}_slot: i64 = @backingInt({s});\n", .{ index, source });
             }
+            try writer.print("        args[{d}] = @ptrCast(&arg{d}_slot);\n", .{ index, index });
+        } else if (abi.scalar(argument.type, argument.meta, real_name)) |scalar_value| {
+            try abi.writeArgSlot(writer, scalar_value, index, "        ", source);
         } else {
-            try writer.print("        args[{d}] = @ptrCast(&", .{index});
-            if (has_default) {
-                if (inline_default) {
-                    try writer.writeAll("opt.");
-                    try names.writeMemberIdent(writer, argument.name);
-                } else {
-                    try names.writePrefixedIdent(writer, "actual_", argument.name);
-                }
-            } else {
-                try names.writeArgName(writer, argument.name, 0);
-            }
-            try writer.writeAll(");\n");
+            try writer.print("        args[{d}] = @ptrCast(&{s});\n", .{ index, source });
         }
         try addImport(imports, resolver, argument.type);
         try addImportResolved(imports, resolver, argument.type, .argument);
@@ -810,15 +785,24 @@ fn writeOwnMethod(
     const is_enum_return = resolved_return.kind == .@"enum";
     if (is_enum_return) {
         if (resolved_return.is_bitfield) {
-            try writer.print("        var result: u{d} = undefined;\n", .{resolved_return.bitfield_bits});
+            try abi.writeBitfieldResultSlot(writer, resolved_return.bitfield_bits, "        ");
         } else {
             try writer.writeAll("        var result: i64 = undefined;\n");
         }
+    } else if (return_scalar) |scalar_value| {
+        try abi.writeResultSlot(writer, scalar_value, "        ");
     } else if (resolved_return.kind != .void) {
         try writer.writeAll("        var result: ");
         try writer.writeAll(resolved_return.zig);
         try writer.writeAll(" = ");
-        try result_init.writeResultInitializer(writer, return_type, resolved_return.zig, "dispatcher");
+        if (resolved_return.kind == .class_ptr and resolver.isRefCountedClass(return_type)) {
+            // Ref<T> return storage is a real Ref on the engine side. It must
+            // start as an empty Ref, not undefined, before ptrcall encode
+            // assigns into it.
+            try writer.writeAll("null");
+        } else {
+            try result_init.writeResultInitializer(writer, return_type, resolved_return.zig, "dispatcher");
+        }
         try writer.writeAll(";\n");
     }
 
@@ -864,11 +848,13 @@ fn writeOwnMethod(
     }
     try writer.writeAll(" });\n");
 
-    switch (resolved_return.kind) {
+    if (return_scalar) |scalar_value| {
+        try abi.writeReturnSlot(writer, scalar_value, "        ");
+    } else switch (resolved_return.kind) {
         .void => {},
         .@"enum" => {
             if (resolved_return.is_bitfield) {
-                try writer.writeAll("        return @bitCast(result);\n");
+                try abi.writeBitfieldReturnSlot(writer, resolved_return.bitfield_bits, "        ");
             } else {
                 try writer.writeAll("        return @fromBackingInt(@intCast(result));\n");
             }
@@ -906,12 +892,15 @@ fn writeVarargMethod(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try resolveWrite(writer, resolver, argument.type, .argument, real_name);
+        const resolved_argument = try resolvePublic(resolver, argument.type, .argument, real_name, argument.meta);
+        try writer.writeAll(resolved_argument.zig);
         try addImportResolved(imports, resolver, argument.type, .argument);
     }
     try writer.writeAll(", vargs: anytype) ");
-    const return_type = if (method.return_value) |return_value| return_value.type else "void";
-    const resolved_return = try resolver.resolve(return_type, .return_value);
+    const return_value = method.return_value;
+    const return_type = if (return_value) |value| value.type else "void";
+    const return_meta = if (return_value) |value| value.meta else null;
+    const resolved_return = try resolvePublic(resolver, return_type, .return_value, real_name, return_meta);
     try addImportResolved(imports, resolver, return_type, .return_value);
     try writer.writeAll(resolved_return.zig);
     try writer.writeAll(" {\n");
@@ -1062,7 +1051,8 @@ fn writeForwardedMethod(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try resolveWrite(writer, resolver, argument.type, .argument, real_name);
+        const resolved_argument = try resolvePublic(resolver, argument.type, .argument, real_name, argument.meta);
+        try writer.writeAll(resolved_argument.zig);
         try addImport(imports, resolver, argument.type);
         try addImportResolved(imports, resolver, argument.type, .argument);
     }
@@ -1075,8 +1065,11 @@ fn writeForwardedMethod(
         try imports.add(base.name);
     }
     try writer.writeAll(") ");
-    const return_type = if (method.return_value) |return_value| return_value.type else "void";
-    try resolveWrite(writer, resolver, return_type, .return_value, real_name);
+    const return_value = method.return_value;
+    const return_type = if (return_value) |value| value.type else "void";
+    const return_meta = if (return_value) |value| value.meta else null;
+    const resolved_return = try resolvePublic(resolver, return_type, .return_value, real_name, return_meta);
+    try writer.writeAll(resolved_return.zig);
     try addImportResolved(imports, resolver, return_type, .return_value);
 
     try writer.writeAll(" {\n        return ");
@@ -1127,12 +1120,16 @@ fn writeForwardedVarargMethod(
         try writer.writeAll(", ");
         try names.writeArgName(writer, argument.name, 0);
         try writer.writeAll(": ");
-        try resolveWrite(writer, resolver, argument.type, .argument, real_name);
+        const resolved_argument = try resolvePublic(resolver, argument.type, .argument, real_name, argument.meta);
+        try writer.writeAll(resolved_argument.zig);
         try addImportResolved(imports, resolver, argument.type, .argument);
     }
     try writer.writeAll(", vargs: anytype) ");
-    const return_type = if (method.return_value) |return_value| return_value.type else "void";
-    try resolveWrite(writer, resolver, return_type, .return_value, real_name);
+    const return_value = method.return_value;
+    const return_type = if (return_value) |value| value.type else "void";
+    const return_meta = if (return_value) |value| value.meta else null;
+    const resolved_return = try resolvePublic(resolver, return_type, .return_value, real_name, return_meta);
+    try writer.writeAll(resolved_return.zig);
     try addImportResolved(imports, resolver, return_type, .return_value);
 
     try writer.writeAll(" {\n        return ");
@@ -1172,7 +1169,8 @@ fn writeOptions(
         try names.writeMemberIdent(writer, argument.name);
         try writer.writeAll(": ");
         if (!inline_default) try writer.writeAll("?");
-        try resolveWrite(writer, resolver, argument.type, .argument, real_name);
+        const resolved_argument = try resolvePublic(resolver, argument.type, .argument, real_name, argument.meta);
+        try writer.writeAll(resolved_argument.zig);
         try addImportResolved(imports, resolver, argument.type, .argument);
         if (inline_default) {
             try writer.writeAll(" = ");
@@ -1292,6 +1290,47 @@ fn customMethodCollides(
     return false;
 }
 
+/// Resolves an API type for a public binding signature.
+///
+/// Scalars follow the canonical ABI public types. API `int` metadata selects
+/// the public width, `bool` stays `bool`, and API `float` is `f64` when the
+/// JSON says `meta:"double"` and the build configuration's `real_t` otherwise. The ptrcall slot can be a
+/// different type; see `abi.writeArgSlot`/`abi.writeReturnSlot`.
+fn resolvePublic(
+    resolver: *const class_resolver.ClassResolver,
+    raw: []const u8,
+    context: class_resolver.TypeContext,
+    real_name: []const u8,
+    meta: ?[]const u8,
+) !class_resolver.ResolvedType {
+    var resolved = try resolver.resolve(raw, context);
+    if (abi.scalar(raw, meta, real_name)) |scalar_value| resolved.zig = scalar_value.public_type;
+    return resolved;
+}
+
+/// Renders the Zig expression that names the public value of one argument,
+/// including reconstructed defaults (`actual_*`) and options struct fields.
+fn argSource(
+    arena: Allocator,
+    argument: ExtensionApiJson.Argument,
+    has_default: bool,
+    inline_default: bool,
+) ![]const u8 {
+    var buf: [200]u8 = undefined;
+    var fixed: Io.Writer = .fixed(&buf);
+    if (has_default) {
+        if (inline_default) {
+            try fixed.writeAll("opt.");
+            try names.writeMemberIdent(&fixed, argument.name);
+        } else {
+            try names.writePrefixedIdent(&fixed, "actual_", argument.name);
+        }
+    } else {
+        try names.writeArgName(&fixed, argument.name, 0);
+    }
+    return arena.dupe(u8, fixed.buffered());
+}
+
 fn resolveWrite(
     writer: *Io.Writer,
     resolver: *const class_resolver.ClassResolver,
@@ -1375,6 +1414,7 @@ const common = @import("common.zig");
 const custom_code = @import("custom.zig");
 const docs = @import("../model/docs.zig");
 const defaults = @import("../model/defaults.zig");
+const abi = @import("../model/abi.zig");
 const enum_emit = @import("../model/enum_emit.zig");
 const names = @import("../model/names.zig");
 const types = @import("../model/types.zig");

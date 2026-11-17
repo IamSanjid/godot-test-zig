@@ -55,12 +55,12 @@ pub fn findBaseFieldName(comptime T: type, comptime B: type) ?[:0]const u8 {
 
 /// True if `FTypec` is a type produced by `Base(...)`.
 fn isBaseMarker(comptime FType: type, comptime B: type) bool {
-    return comptime auto.isNormalStruct(FType) and
+    return comptime reflect.isNormalStruct(FType) and
         @hasDecl(FType, "BaseFor") and
         Base(FType.BaseFor) == FType and
         Base(B) == FType;
 }
 
-const SafeGuard = @import("SafeGuard.zig");
+const SafeGuard = @import("internal/safe_guard.zig");
 
-const auto = @import("../auto.zig");
+const reflect = @import("../reflect/reflect.zig");

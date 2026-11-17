@@ -16,7 +16,7 @@
 - class/builtin template replacements and additions
 - `@templates_for` class/builtin targeting, including derived class selectors;
   shared template engine with codegen `replace`/`artifact` and bindgen `artifact`
-- relative runtime import from `<out_dir>/godot.zig`
+- relative runtime import from the hand-written `<out_dir>/runtime.zig`
 - warning-and-ignore behavior for unsupported artifact overlays
 - builtin enum doc inference, including `Basis.from_euler`'s `order`
 - correct bitfield backing width and ptrcall slots
@@ -47,6 +47,10 @@ Last full review performed:
 
 Temporary compile-check steps and files are removed after use.
 
+## Public scalar types
+
+API `int` metadata selects the public Zig width (`int8` -> `i8`, `uint64` -> `u64`, `char32` -> `u32`, ...) while ptrcall stays canonical (`uint64` -> `u64`, all other ints -> `i64`). Utility `float` signatures are public `f64` because the engine utility implementation is C++ `double`.
+
 ## Known gaps
 
 ### Unsupported vararg return types
@@ -55,10 +59,11 @@ Generation now fails explicitly with `UnsupportedVarargReturn` instead of
 emitting a bad fallback. If a future vararg return type should be supported,
 add an explicit conversion.
 
-### Non-bitfield enum ABI
+### Enum and bitfield ABI
 
-Normal enum ptrcall slots are `i64`. Bitfields use their actual `u32`/`u64`
-backing width. Revisit only if Godot defines a different enum ptrcall width.
+Normal enum ptrcall slots are `i64`. Packed bitfields also use the canonical
+`i64` slot regardless of their public 32/64-bit backing width. This matches
+Godot's `PtrToArg` encoding for `BitField<T>`.
 
 ### Hand-written builtins
 
@@ -106,9 +111,9 @@ Option-field selection and inline/optional classification are shared through
 renderer with callbacks, but keeping bindgen and codegen type/default logic
 separate is intentional.
 
-### StringName fallback
+### StringName naming
 
-`StringName.fromTypeName` remains a lossy Pascal fallback for names without a
-generated `GodotClassName`. Generated classes/builtins and hand-written builtins
-provide `GodotClassName`; use `StringName.fromType` or `fromUserType` for exact
-names.
+`StringName.fromType` uses `reflect.className`: `GodotClassName` when present,
+otherwise the exact short Zig type name. `StringName.fromUserType` always uses
+the short Zig name verbatim. `StringName.fromTypeName` remains an explicit Pascal
+conversion helper for names without an exact engine spelling.

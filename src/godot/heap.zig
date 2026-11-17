@@ -12,11 +12,11 @@ const pad_align = @import("builtin").mode == .debug;
 
 fn alloc(_: *anyopaque, len: usize, alignment: Alignment, _: usize) ?[*]u8 {
     if (alignment == .@"1") {
-        return @ptrCast(godot.dispatch(.mem_alloc2, .{ len, pad_align }) orelse return null);
+        return @ptrCast(runtime.dispatch(.mem_alloc2, .{ len, pad_align }) orelse return null);
     }
 
     const padding = @sizeOf(u32) + alignment.toByteUnits() - 1;
-    const unaligned_ptr = godot.dispatch(.mem_alloc2, .{ len + padding, pad_align }) orelse return null;
+    const unaligned_ptr = runtime.dispatch(.mem_alloc2, .{ len + padding, pad_align }) orelse return null;
     const unaligned_addr = @intFromPtr(unaligned_ptr);
     const aligned_addr = alignment.forward(unaligned_addr + @sizeOf(u32));
 
@@ -31,7 +31,7 @@ fn resize(_: *anyopaque, _: []u8, _: Alignment, _: usize, _: usize) bool {
 
 fn remap(_: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, _: usize) ?[*]u8 {
     if (alignment == .@"1") {
-        return @ptrCast(godot.dispatch(.mem_realloc2, .{ memory.ptr, new_len, pad_align }) orelse return null);
+        return @ptrCast(runtime.dispatch(.mem_realloc2, .{ memory.ptr, new_len, pad_align }) orelse return null);
     }
 
     const padding = @sizeOf(u32) + alignment.toByteUnits() - 1;
@@ -40,7 +40,7 @@ fn remap(_: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, _: u
     const old_unaligned_addr = aligned_addr - old_payload_offset;
     const old_unaligned_ptr: [*]u8 = @ptrFromInt(old_unaligned_addr);
 
-    const new_unaligned_ptr = godot.dispatch(.mem_realloc2, .{ old_unaligned_ptr, new_len + padding, pad_align }) orelse return null;
+    const new_unaligned_ptr = runtime.dispatch(.mem_realloc2, .{ old_unaligned_ptr, new_len + padding, pad_align }) orelse return null;
     const new_unaligned_addr = @intFromPtr(new_unaligned_ptr);
     const new_aligned_addr = alignment.forward(new_unaligned_addr + @sizeOf(u32));
     const new_payload_offset = new_aligned_addr - new_unaligned_addr;
@@ -61,18 +61,18 @@ fn remap(_: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, _: u
 
 fn free(_: *anyopaque, memory: []u8, alignment: Alignment, _: usize) void {
     if (alignment == .@"1") {
-        godot.dispatch(.mem_free2, .{ memory.ptr, pad_align });
+        runtime.dispatch(.mem_free2, .{ memory.ptr, pad_align });
         return;
     }
 
     const aligned_addr = @intFromPtr(memory.ptr);
     const offset = @as(*align(1) u32, @ptrFromInt(aligned_addr - @sizeOf(u32))).*;
 
-    godot.dispatch(.mem_free2, .{ @ptrFromInt(aligned_addr - offset), pad_align });
+    runtime.dispatch(.mem_free2, .{ @ptrFromInt(aligned_addr - offset), pad_align });
 }
 
 const std = @import("std");
 const Alignment = std.mem.Alignment;
 const Allocator = std.mem.Allocator;
 
-const godot = @import("godot.zig");
+const runtime = @import("runtime.zig");

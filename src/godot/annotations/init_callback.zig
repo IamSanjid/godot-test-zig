@@ -6,7 +6,7 @@
 /// Besides `self`, `foo` may take a std.mem.Allocator (the one used to create it),
 /// a *Base pointer, or both, in any order (each at most once).
 pub fn InitCallback(comptime T: type, comptime method: anytype) type {
-    if (!auto.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
+    if (!reflect.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
 
     const MethodT = @TypeOf(method);
     const type_info = @typeInfo(MethodT);
@@ -150,4 +150,4 @@ fn isInitCallbackMarker(comptime Decl: anytype) bool {
 
 const std = @import("std");
 
-const auto = @import("../auto.zig");
+const reflect = @import("../reflect/reflect.zig");

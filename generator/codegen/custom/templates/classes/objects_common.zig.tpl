@@ -16,12 +16,12 @@ pub fn typeToken(comptime T: type) ?*anyopaque {
 
 /// Bind an instance of an extension class to this engine class.
 pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
-    comptime if (!runtime.auto.inheritsFrom(T, {{Class}})) {
+    comptime if (!runtime.reflect.inheritsFrom(T, {{Class}})) {
         @compileError("T must extend {{Class}} or any of its derived classes, by declaring an `Extends` alias to the base class.");
     };
 
     const token = comptime typeToken(T);
-    const class_name: builtins.StringName = .fromType(T);
+    const class_name: builtins.StringName = .fromComptimeLatin1(runtime.reflect.className(T));
     runtime.dispatch(.object_set_instance, .{ self, &class_name, instance });
     runtime.dispatch(.object_set_instance_binding, .{ self, token, instance, &struct {
         const callbacks: bindings.interface.InstanceBindingCallbacks = .{
@@ -48,8 +48,8 @@ pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
 
 /// Returns the registered instance of extension class T, or null if no binding exists.
 pub fn asInstance(self: *{{Class}}, comptime T: type) ?*T {
-    comptime std.debug.assert(runtime.auto.inheritsFrom(T, {{Class}}));
-    comptime std.debug.assert(runtime.auto.isNormalStruct(T));
+    comptime std.debug.assert(runtime.reflect.inheritsFrom(T, {{Class}}));
+    comptime std.debug.assert(runtime.reflect.isNormalStruct(T));
 
     const token = comptime typeToken(T);
     const instance = runtime.dispatch(.object_get_instance_binding, .{self, token, null}) orelse return null;
@@ -61,7 +61,7 @@ pub fn asInstance(self: *{{Class}}, comptime T: type) ?*T {
 // @section artifact upcast
 
 pub inline fn upcast(self: *{{Class}}, comptime T: type) *T {
-    if (!comptime runtime.auto.inheritsFrom({{Class}}, T)) @compileError("{{Class}} doesn't extend, " ++ @typeName(T));
+    if (!comptime runtime.reflect.inheritsFrom({{Class}}, T)) @compileError("{{Class}} doesn't extend, " ++ @typeName(T));
     return @ptrCast(self);
 }
 // @section_end artifact upcast
@@ -69,7 +69,7 @@ pub inline fn upcast(self: *{{Class}}, comptime T: type) *T {
 // @section artifact downcast
 
 pub inline fn downcast(self: *{{Class}}, comptime T: type) ?*T {
-    return if (self.isClass(.fromType(T))) @ptrCast(self) else null;
+    return if (self.isClass(builtins.StringName.fromComptimeLatin1(runtime.reflect.className(T)))) @ptrCast(self) else null;
 }
 
 // @section_end artifact downcast

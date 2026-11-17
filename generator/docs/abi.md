@@ -5,30 +5,33 @@ compatibility first, then the codegen-facing convenience types.
 
 ## Primitive mapping
 
-| Godot API type | Binding Zig type | Codegen Zig type |
+| Godot API type | Public binding/codegen type | Ptrcall slot |
 |---|---|---|
-| `int` | `i64` | `i64` |
-| `float` | `f32` / `f64` by `builtin_build_conf` | same |
-| `bool` | `bool` | `bool` |
-| `void`, `Nil` | `void` | `void` |
-| `Variant` | `bindings.builtins.Variant` | `builtins.Variant` |
-| class pointer | `?*BindingClass` return, `*BindingClass` arg | `?*Class` return, `*Class` arg |
-| builtin | binding builtin extern struct | codegen builtin extern struct |
-| normal enum | binding enum alias | codegen/binding enum alias |
-| bitfield | bitpack struct with translated C backing (or `u32`/`u64` for API bitfields) | same alias |
-
-GDExtension interface flag bitfields keep the translated C backing type and use
-`@bitSizeOf(gdi.<type>)` for final padding. API bitfields choose `u32` or `u64`
-from their highest used bit.
-| native struct | `bindings.native.X` | `native.X` alias |
-| `Object` | class pointer | class pointer |
-| `typedarray::T` | `Array` | `Array` |
-| `typeddictionary::K,V` | `Dictionary` | `Dictionary` |
+| `int` | per `meta`: `i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64`/`u32` (`char32`); no meta -> `i64` | `i64`, except `meta:"uint64"` -> `u64` |
+| `float` (`meta` absent/`float`) | `real_t` (`f32`/`f64` by `builtin_build_conf`) | `f64` |
+| utility `float` | `f64` | `f64` |
+| `float` (`meta:"double"`) | `f64` | `f64` |
+| `bool` | `bool` | `u8` |
+| `void`, `Nil` | `void` | none |
+| normal enum | binding enum alias | `i64` |
+| bitfield | bitpack struct | `i64` |
+| `Variant` | binding/codegen Variant | pointer to the value |
+| class pointer | `?*Class` return, `*Class` arg | pointer-to-pointer |
+| builtin | binding/codegen builtin extern struct | pointer to the value |
+| native struct | `bindings.native.X` / `native.X` | pointer to the value |
+| `Object` | class pointer | pointer-to-pointer |
 
 `real_t` comes from `builtin_build_conf`:
 
 - `float_32`, `float_64` -> `f32`
 - `double_32`, `double_64` -> `f64`
+
+`real_t` selects public float precision and builtin struct layout. It does not
+select the ptrcall slot width. A public `f32` float is converted to an `f64` slot
+at the binding boundary; `meta:"double"` is a public `f64`.
+
+Utility functions are C++ `double` operations. Their public `float` signatures
+use `f64` in both backends, regardless of `builtin_build_conf`.
 
 ## Ptrcall argument slots
 
@@ -37,19 +40,24 @@ Class methods use `object_method_bind_ptrcall`. Builtin methods use
 
 | Argument kind | What is passed in `ConstTypePtr` |
 |---|---|
-| primitive/builtin value | pointer to the value |
-| class pointer | pointer to the class pointer (pointer-to-pointer) |
+| `int` | pointer to an `i64`, except `meta:"uint64"` -> `u64` |
+| `float` / `double` | pointer to an `f64` |
+| `bool` | pointer to a `u8` (`0`/`1`) |
 | normal enum | pointer to an `i64` backing slot |
-| bitfield | pointer to a `u32`/`u64` backing slot |
+| bitfield | pointer to a canonical `i64` slot |
+| builtin value | pointer to the builtin value |
+| class pointer | pointer to the class pointer (pointer-to-pointer) |
+| `RefCounted` in a virtual | `Ref<T>` storage, not a raw object pointer |
 | `Variant` | pointer to the Variant value |
-| `Object` inside a builtin method | pointer-to-pointer |
 
-The backing width for a bitfield is derived from the highest used bit, not from
-the current JSON version. `templates` and `enum_emit` use the same width rule.
+Canonical slot width is independent of `builtin_build_conf`. Normal enums use an
+`i64` slot. Packed bitfields use the canonical `i64` slot regardless of their
+public 32/64-bit backing width.
 
-Normal enums are still passed in `i64` slots. That is the current GDExtension
-ptrcall assumption. Recheck this if Godot ever defines enum arguments with a
-different ptrcall width.
+Runtime code uses the same rule from `src/godot/abi.zig`:
+`readArgument` / `writeReturn` marshal a value from its Zig type. Generated
+bindings keep their own inline conversions so bindings stay independent of the
+runtime layer.
 
 ## Return values
 
@@ -69,7 +77,10 @@ Codegen converts returns at the binding boundary:
 - class pointer -> conditional `@ptrCast`
 - builtin -> `fromBinding`
 - `Variant` -> `Variant.fromBinding`
-- enums/native/primitive -> direct
+- float return -> `f64` slot converted to public `f32`/`f64`
+- bool return -> `u8` slot converted to `bool`
+- ints -> canonical slot; narrow public ints use `@intCast` and `uint64` uses the `u64` slot
+- enums/native -> direct
 
 ## Optional arguments and defaults
 

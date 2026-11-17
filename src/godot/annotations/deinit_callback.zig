@@ -2,7 +2,7 @@
 ///
 /// `foo` must be a member function and may or may not accept a std.mem.Allocator. And must return void.
 pub fn DeinitCallback(comptime T: type, comptime method: anytype) type {
-    if (!auto.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
+    if (!reflect.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
 
     const MethodT = @TypeOf(method);
     const type_info = @typeInfo(MethodT);
@@ -108,4 +108,4 @@ fn isDeinitCallbackMarker(comptime Decl: anytype) bool {
 
 const std = @import("std");
 
-const auto = @import("../auto.zig");
+const reflect = @import("../reflect/reflect.zig");

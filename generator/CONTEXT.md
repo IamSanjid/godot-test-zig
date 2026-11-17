@@ -33,6 +33,7 @@ generator/
     resolver.zig
     result_init.zig
     types.zig
+    abi.zig
   bindgen/
     custom/
     ...
@@ -125,6 +126,8 @@ changing every emitter.
 
 - Codegen never overwrites `src/godot/bindings` or hand-written builtins.
 - Codegen never generates `builtins/builtins.zig` for now.
+- Generated dispatch code imports the hand-written `runtime.zig` as `runtime`
+  (for `dispatcher()`, `dispatch()`, and `reflect`), never the `godot.zig` facade.
 - No codegen-owned `auto.zig`.
 - No codegen-owned registration layer.
 - Bindgen and codegen emitters do not merge.

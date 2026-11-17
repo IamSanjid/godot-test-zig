@@ -24,19 +24,20 @@ There is no fixed output path.
   singletons.zig
 ```
 
-Codegen does not generate `builtins/builtins.zig` and does not write
-`godot.zig`.
+Codegen does not generate `builtins/builtins.zig` and does not write the
+hand-written runtime `runtime.zig` or the public facade `godot.zig`.
 
 ## Import contract
 
 - bindings are imported through a module named `bindings` by default
   (`--bindings-module` can rename it).
-- the runtime is a **file** at `<out_dir>/godot.zig`, imported relatively:
-  - classes with an api type: `../../godot.zig`
-  - classes without: `../godot.zig`
-  - utility: `../godot.zig`
-  - generated builtins: `../../godot.zig`
-  - singletons: `godot.zig`
+- the runtime is the hand-written **file** at `<out_dir>/runtime.zig`, imported
+  relatively:
+  - classes with an api type: `../../runtime.zig`
+  - classes without: `../runtime.zig`
+  - utility: `../runtime.zig`
+  - generated builtins: `../../runtime.zig`
+  - singletons: `runtime.zig`
 - builtins always come through the hand-written aggregate:
   - classes: `../../builtins/builtins.zig`
   - utility: `../builtins/builtins.zig`
@@ -150,7 +151,7 @@ hand-written builtin is added or removed.
 `utility/<category>.zig` contains static wrappers:
 
 ```zig
-pub inline fn sin(angle: f32) f32 {
+pub inline fn sin(angle: f64) f64 {
     return bindings.utility.math.sin(runtime.dispatcher(), angle);
 }
 ```
@@ -197,6 +198,9 @@ Rules:
 - Class `Virtual` metadata includes inherited virtuals, with the child class as
   the callback self type; optional virtual wrappers are still ordinary generated
   member functions and are included in `MemberFunctions`.
+- `Virtual.Meta` carries the engine hash, staticness, and the exact
+  `godot_name` from `extension_api.json`, so runtime registration does not need
+  to repeat a name conversion.
 - Inherited methods appear in the derived class metadata because the wrappers
   exist on the derived class.
 - Metadata is generated after API method emission, so custom/template
