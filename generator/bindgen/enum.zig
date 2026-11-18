@@ -5,7 +5,13 @@
 /// Bitfields are emitted as `bitpack struct(gdi.<name>)`. The final padding is
 /// expressed with `@bitSizeOf` so it follows the translated C backing type
 /// instead of assuming a host/target integer width.
-pub fn emit(arena: Allocator, writer: *Io.Writer, registry: Registry, t: InterfaceJson.TypeDecl) !void {
+pub fn emit(
+    arena: Allocator,
+    writer: *Io.Writer,
+    registry: Registry,
+    t: InterfaceJson.TypeDecl,
+    extra_code: []const u8,
+) !void {
     std.debug.assert(t.data == .@"enum");
     const e = t.data.@"enum";
     const zig_name = registry.get(t.name).?.zig;
@@ -14,13 +20,19 @@ pub fn emit(arena: Allocator, writer: *Io.Writer, registry: Registry, t: Interfa
     try common.writeDesc(writer, t.description, 0, 3);
 
     if (e.is_bitfield) {
-        try emitBitfield(arena, writer, zig_name, t.name, e);
+        try emitBitfield(arena, writer, zig_name, t.name, e, extra_code);
     } else {
-        try emitPlain(writer, zig_name, t.name, e);
+        try emitPlain(writer, zig_name, t.name, e, extra_code);
     }
 }
 
-fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: InterfaceJson.EnumType) !void {
+fn emitPlain(
+    writer: *Io.Writer,
+    zig_name: []const u8,
+    raw_name: []const u8,
+    e: InterfaceJson.EnumType,
+    extra_code: []const u8,
+) !void {
     const prefix_len = enum_utils.commonPrefixLen(e.values);
     for (e.values) |value| {
         if (value.value < 0) {
@@ -56,6 +68,7 @@ fn emitPlain(writer: *Io.Writer, zig_name: []const u8, raw_name: []const u8, e: 
         try writer.print(": @This() = @fromBackingInt(@intCast({d}));\n", .{value.value});
     }
 
+    try writeExtra(writer, extra_code);
     try writer.writeAll("};\n");
 }
 
@@ -72,6 +85,7 @@ fn emitBitfield(
     zig_name: []const u8,
     raw_name: []const u8,
     e: InterfaceJson.EnumType,
+    extra_code: []const u8,
 ) !void {
     const prefix_len = enum_utils.commonPrefixLen(e.values);
 
@@ -138,7 +152,15 @@ fn emitBitfield(
         try writer.print(": @This() = @bitCast(gdi.{s});\n", .{value.name});
     }
 
+    try writeExtra(writer, extra_code);
     try writer.writeAll("};\n");
+}
+
+/// Writes interface-enum extension declarations at body indentation.
+fn writeExtra(writer: *Io.Writer, extra_code: []const u8) !void {
+    if (extra_code.len == 0) return;
+    try writer.writeAll("\n");
+    try custom.writeIndented(writer, extra_code, 4);
 }
 
 fn bitLessThan(_: void, a: Bit, b: Bit) bool {
@@ -169,7 +191,7 @@ test "plain enums keep aliases for duplicate values" {
 
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
-    try emit(arena_state.allocator(), &aw.writer, registry, types[0]);
+    try emit(arena_state.allocator(), &aw.writer, registry, types[0], "");
 
     try std.testing.expectEqualStrings(
         \\pub const CallErrorType = enum(gdi.GDExtensionCallErrorType) {
@@ -182,6 +204,35 @@ test "plain enums keep aliases for duplicate values" {
         \\};
         \\
     , aw.writer.buffered());
+}
+
+test "interface enums append extension code before the closing brace" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const values = [_]InterfaceJson.EnumValue{
+        .{ .name = "GDEXTENSION_CALL_OK", .value = 0 },
+        .{ .name = "GDEXTENSION_CALL_ERROR", .value = 1 },
+    };
+    const types = [_]InterfaceJson.TypeDecl{
+        .{ .name = "GDExtensionCallErrorType", .data = .{ .@"enum" = .{ .values = &values } } },
+    };
+    const registry = try Registry.init(arena_state.allocator(), &types, false);
+
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try emit(arena_state.allocator(), &aw.writer, registry, types[0],
+        \\/// Preset value.
+        \\pub const preset: @This() = @fromBackingInt(@intCast(0));
+        \\
+    );
+
+    try std.testing.expect(std.mem.endsWith(u8, aw.writer.buffered(),
+        \\    /// Preset value.
+        \\    pub const preset: @This() = @fromBackingInt(@intCast(0));
+        \\};
+        \\
+    ));
 }
 
 test "bitfields pad gaps and expose aliases" {
@@ -205,7 +256,7 @@ test "bitfields pad gaps and expose aliases" {
 
     var aw: Io.Writer.Allocating = .init(std.testing.allocator);
     defer aw.deinit();
-    try emit(arena_state.allocator(), &aw.writer, registry, types[0]);
+    try emit(arena_state.allocator(), &aw.writer, registry, types[0], "");
 
     try std.testing.expectEqualStrings(
         \\pub const ClassMethodFlags = bitpack struct(gdi.GDExtensionClassMethodFlags) {
@@ -232,4 +283,5 @@ const Io = std.Io;
 const InterfaceJson = @import("../model/InterfaceJson.zig");
 const Registry = @import("Registry.zig");
 const common = @import("common.zig");
+const custom = @import("custom.zig");
 const enum_utils = @import("../model/enum_utils.zig");

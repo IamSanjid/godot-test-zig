@@ -114,9 +114,12 @@ Semantics:
 - Arbitrary combined flags are allowed; Registry does not pattern-match
   `none`/`default`/`exported`.
 
-The `none` behavior needs a runtime check: if Godot only routes `set`/`get` for
-names present in the property list, `none` must instead be represented by a
-hidden property-list entry with zero usage.
+Godot routes direct `Object.set`/`Object.get` through the extension
+`set_func`/`get_func` callbacks before native property lookup; property-list
+membership is not consulted. A zero-usage property can therefore be omitted
+from `get_property_list` entirely and still be reachable by direct engine
+`set`/`get`. A runtime regression test should still assert both halves:
+omitted from the list, and still settable/gettable.
 
 ## Custom get/set
 
@@ -336,8 +339,10 @@ Properties must not be implemented before that layer is usable.
 
 ## Open questions
 
-1. Verify that zero-usage properties are reachable through `Object.set/get`
-   when omitted from `get_property_list`.
+1. ~~Verify that zero-usage properties are reachable through `Object.set/get`
+   when omitted from `get_property_list`.~~ Resolved by Godot source:
+   `Object::set`/`Object::get` invoke extension callbacks before native lookup,
+   independent of the property list. Keep it as a runtime regression test.
 2. Decide exact getter/setter error behavior for wrong Variant types.
 3. Decide ownership for RefCounted-backed property fields.
 4. Decide when to add the static ClassDB backend.

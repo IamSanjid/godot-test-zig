@@ -43,6 +43,7 @@ generator/bindgen/custom/
   builtins/<snake>.zig
   classes/<api_type>/<snake>.zig
   classes/<snake>.zig              # classes without api_type
+  enums.zig
   interface.zig
   native.zig
   singletons.zig
@@ -54,8 +55,8 @@ Bindgen custom files use the shared section grammar:
 ```zig
 // @section file
 // @section artifact name
+// @section extend Target[,true]
 // @section replace generatedName
-// @section nested Target[,true]
 ```
 
 - `file` adds file-scope code.
@@ -63,10 +64,17 @@ Bindgen custom files use the shared section grammar:
   the added member and is collision-checked.
 - `replace` replaces a generated class method with the supplied code. The name
   is the generated Zig identifier (for example `getInstanceId`). Builtin custom
-  files currently consume file/artifact/nested sections only; class replacements
+  files currently consume file/artifact/extend sections only; class replacements
   are the supported replacement path.
-- `nested` inserts code into a nested namespace such as `Virtual`, `Required`,
-  `Optional`, `Properties`, or an options struct. `,true` marks it inheritable.
+- `extend` appends raw declarations inside the generated declaration or scope
+  named `Target`. Class files use it for the class namespace itself and generated
+  scopes such as `Virtual`, `Required`, `Optional`, `Properties`, a signal type,
+  a property type, or an options struct. Enum declarations use the generated Zig
+  enum type name: global enums in `enums.zig`, class enums in the class file,
+  builtin enums in the builtin file, and interface enums in `interface.zig`.
+  `,true` keeps the class-scope inheritance behavior, so a child class receives
+  the extension too. Enum extensions are emitted inside the enum/bitfield body
+  and are inherited by codegen aliases automatically.
 
 Code is inserted as-is and is never compiled directly from the custom tree.
 Unused class replacements are errors.

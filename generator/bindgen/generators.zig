@@ -33,12 +33,16 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
     try writeHeader(writer, interface_json);
 
     const registry = try Registry.init(arena, interface_json.types, options.api.strip_deprecation);
+    // Interface custom sections are read before enum emission: `extend` targets
+    // the generated Zig enum type name, exactly like global/class enums.
+    const interface_custom = (try custom_code.readForOutput(arena, io, "interface.zig")) orelse custom_code.Sections{};
 
     for (interface_json.types) |t| {
         if (options.api.strip_deprecation and t.deprecated != null) continue;
         switch (t.data) {
             .@"enum" => {
-                try enum_gen.emit(arena, writer, registry, t);
+                const zig_name = registry.get(t.name).?.zig;
+                try enum_gen.emit(arena, writer, registry, t, interface_custom.extensionCode(zig_name));
                 try writer.writeAll("\n");
             },
             .handle => {
@@ -70,7 +74,6 @@ pub fn generateInterfaceBindings(context: *Context, options: Options) !void {
 
     try interface_gen.emit(writer, registry, interface_json.interface, options.api.strip_deprecation);
     try writer.writeAll("\n");
-    const interface_custom = (try custom_code.readForOutput(arena, io, "interface.zig")) orelse custom_code.Sections{};
     try custom_code.writeRaw(writer, interface_custom.imports);
     try writer.writeAll("\n");
 

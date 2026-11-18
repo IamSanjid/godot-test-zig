@@ -1,12 +1,30 @@
 //! Shared enum/bitfield emission for builtins, classes, and global enums.
 
 pub fn write(writer: *Io.Writer, arena: Allocator, global_enum: ExtensionApiJson.GlobalEnum, indent: usize) !void {
+    try writeWithExtra(writer, arena, global_enum, indent, "");
+}
+
+/// Like `write`, but appends `extra_code` as raw declarations inside the
+/// generated enum/bitfield declaration. Custom `extend` sections use this to
+/// grow enum bodies without enum-specific custom grammar.
+pub fn writeWithExtra(
+    writer: *Io.Writer,
+    arena: Allocator,
+    global_enum: ExtensionApiJson.GlobalEnum,
+    indent: usize,
+    extra_code: []const u8,
+) !void {
     const prefix_len = enum_utils.commonPrefixLen(global_enum.values);
     if (global_enum.is_bitfield) {
-        try writeBitfield(writer, arena, global_enum, prefix_len, indent);
+        try writeBitfield(writer, arena, global_enum, prefix_len, indent, extra_code);
     } else {
-        try writePlain(writer, arena, global_enum, prefix_len, indent);
+        try writePlain(writer, arena, global_enum, prefix_len, indent, extra_code);
     }
+}
+
+/// Generated Zig type name of an enum. Custom `extend` sections target it.
+pub fn zigTypeName(arena: Allocator, global_enum: ExtensionApiJson.GlobalEnum) ![]const u8 {
+    return names.pascal(arena, global_enum.name);
 }
 
 fn writePlain(
@@ -15,6 +33,7 @@ fn writePlain(
     global_enum: ExtensionApiJson.GlobalEnum,
     prefix_len: usize,
     indent: usize,
+    extra_code: []const u8,
 ) !void {
     var negative = false;
     for (global_enum.values) |value| {
@@ -48,6 +67,7 @@ fn writePlain(
         try writer.print(": @This() = @fromBackingInt(@intCast({d}));\n", .{value.value});
     }
 
+    try writeExtra(writer, extra_code, indent);
     try writeIndent(writer, indent);
     try writer.writeAll("};\n");
 }
@@ -60,6 +80,7 @@ fn writeBitfield(
     global_enum: ExtensionApiJson.GlobalEnum,
     prefix_len: usize,
     indent: usize,
+    extra_code: []const u8,
 ) !void {
     var bits: [64]Bit = undefined;
     var bit_count: usize = 0;
@@ -127,8 +148,17 @@ fn writeBitfield(
         try writer.print(": @This() = @bitCast(@as(u{d}, {d}));\n", .{ backing_bits, value.value });
     }
 
+    try writeExtra(writer, extra_code, indent);
     try writeIndent(writer, indent);
     try writer.writeAll("};\n");
+}
+
+/// Writes extension declarations at body indentation, separated from the
+/// generated variants/constants by one blank line.
+fn writeExtra(writer: *Io.Writer, extra_code: []const u8, indent: usize) !void {
+    if (extra_code.len == 0) return;
+    try writer.writeAll("\n");
+    try custom.writeIndented(writer, extra_code, indent + 4);
 }
 
 fn writeIndent(writer: *Io.Writer, indent: usize) !void {
@@ -167,6 +197,40 @@ test "bitfield selects a backing integer wide enough for its values" {
     try std.testing.expect(std.mem.indexOf(u8, output, "@as(u64, 7)") != null);
 }
 
+test "extension code is inserted before the closing brace" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const values = [_]ExtensionApiJson.GlobalEnumValue{
+        .{ .name = "FLAG_A", .value = 1 },
+        .{ .name = "FLAG_B", .value = 2 },
+    };
+    const global = ExtensionApiJson.GlobalEnum{
+        .name = "Flags",
+        .is_bitfield = true,
+        .values = &values,
+    };
+
+    const extra =
+        \\/// Preset combination.
+        \\pub const exported: @This() = .{ .flag_a = true };
+        \\
+    ;
+
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try writeWithExtra(&aw.writer, arena, global, 0, extra);
+    const output = aw.writer.buffered();
+
+    try std.testing.expect(std.mem.endsWith(u8, output,
+        \\    /// Preset combination.
+        \\    pub const exported: @This() = .{ .flag_a = true };
+        \\};
+        \\
+    ));
+}
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
@@ -174,5 +238,6 @@ const Io = std.Io;
 const names = @import("names.zig");
 const naming = @import("naming");
 const docs = @import("docs.zig");
+const custom = @import("custom.zig");
 const enum_utils = @import("enum_utils.zig");
 const ExtensionApiJson = @import("ExtensionApiJson.zig");

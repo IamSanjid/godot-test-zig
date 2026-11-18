@@ -206,11 +206,11 @@ fn loadClassCustom(
 ) !custom_code.Sections {
     const relative_path = try resolver.path(arena, info);
     const own = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
-    var structs: [256]custom_code.StructSection = undefined;
+    var extensions: [256]custom_code.ExtensionSection = undefined;
     var count: usize = 0;
 
-    for (own.structs) |section| {
-        structs[count] = section;
+    for (own.extensions) |section| {
+        extensions[count] = section;
         count += 1;
     }
 
@@ -218,18 +218,18 @@ fn loadClassCustom(
     while (base_info) |base| {
         const base_path = try resolver.path(arena, base);
         const base_sections = (try custom_code.readForOutput(arena, io, base_path)) orelse custom_code.Sections{};
-        for (base_sections.structs) |section| {
-            if (!section.emit_child) continue;
-            if (std.mem.eql(u8, section.type_name, base.class.name) and customConflictsWithClass(info.class, section.code)) {
-                std.log.warn("Skipping inherited custom member for {s}: {s} already declares it", .{ info.class.name, section.type_name });
+        for (base_sections.extensions) |section| {
+            if (!section.propagate) continue;
+            if (std.mem.eql(u8, section.target, base.class.name) and customConflictsWithClass(info.class, section.code)) {
+                std.log.warn("Skipping inherited custom member for {s}: {s} already declares it", .{ info.class.name, section.target });
                 continue;
             }
-            if (count == structs.len) return error.TooManyCustomSections;
-            structs[count] = .{
-                .type_name = if (std.mem.eql(u8, section.type_name, base.class.name))
+            if (count == extensions.len) return error.TooManyCustomSections;
+            extensions[count] = .{
+                .target = if (std.mem.eql(u8, section.target, base.class.name))
                     info.class.name
                 else
-                    section.type_name,
+                    section.target,
                 .code = section.code,
             };
             count += 1;
@@ -239,7 +239,7 @@ fn loadClassCustom(
 
     return .{
         .imports = own.imports,
-        .structs = try arena.dupe(custom_code.StructSection, structs[0..count]),
+        .extensions = try arena.dupe(custom_code.ExtensionSection, extensions[0..count]),
         .methods = own.methods,
         .replacements = own.replacements,
     };
@@ -301,7 +301,7 @@ fn emitClass(
     try writer.writeAll("\n");
 
     for (class.enums) |class_enum| {
-        try writeClassEnum(writer, arena, class_enum);
+        try writeClassEnum(writer, arena, class_enum, sections);
         try writer.writeAll("\n");
     }
 
@@ -399,7 +399,7 @@ fn emitClass(
             return error.UnknownCustomReplacement;
         }
     }
-    try custom_code.writeIndented(writer, sections.codeForStruct(class.name), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode(class.name), 4);
     var template_names: [64][]const u8 = undefined;
     var template_count: usize = 0;
     for (active_templates.list(.class)) |tmpl| {
@@ -471,7 +471,7 @@ fn writeVirtualStruct(
     try writer.writeAll("    pub const Virtual = struct {\n");
     try writeVirtualGroup(writer, arena, resolver, info, real_name, sections, imports, entries, true);
     try writeVirtualGroup(writer, arena, resolver, info, real_name, sections, imports, entries, false);
-    try custom_code.writeIndented(writer, sections.codeForStruct("Virtual"), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode("Virtual"), 4);
     try writer.writeAll("    };\n\n");
 }
 
@@ -521,7 +521,7 @@ fn writeVirtualGroup(
         }
         try writer.writeAll(";\n");
     }
-    const group_code = if (required) sections.codeForStruct("Required") else sections.codeForStruct("Optional");
+    const group_code = if (required) sections.extensionCode("Required") else sections.extensionCode("Optional");
     try custom_code.writeIndented(writer, group_code, 4);
     try writer.writeAll("        };\n\n");
 }
@@ -630,7 +630,7 @@ fn writeClassSignal(
     try names.writeEscaped(writer, signal.name);
     try writer.writeAll("\"), p_callable);\n");
     try writer.writeAll("        }\n");
-    try custom_code.writeIndented(writer, sections.codeForStruct(signal_type), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode(signal_type), 4);
     try writer.writeAll("    };\n\n");
 }
 
@@ -667,7 +667,7 @@ fn writeClassProperties(
         }
         current = resolver.baseInfo(class_info);
     }
-    try custom_code.writeIndented(writer, sections.codeForStruct("Properties"), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode("Properties"), 4);
     try writer.writeAll("    };\n\n");
 }
 
@@ -706,7 +706,7 @@ fn writeClassProperty(
     }
     try writer.writeAll(";\n");
     const property_type = try names.snake(arena, property.name);
-    try custom_code.writeIndented(writer, sections.codeForStruct(property_type), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode(property_type), 4);
     try writer.writeAll("        };\n\n");
 }
 
@@ -720,8 +720,14 @@ fn writeOptionalString(writer: *Io.Writer, value: ?[]const u8) !void {
     }
 }
 
-fn writeClassEnum(writer: *Io.Writer, arena: Allocator, global_enum: ExtensionApiJson.GlobalEnum) !void {
-    try enum_emit.write(writer, arena, global_enum, 4);
+fn writeClassEnum(
+    writer: *Io.Writer,
+    arena: Allocator,
+    global_enum: ExtensionApiJson.GlobalEnum,
+    sections: custom_code.Sections,
+) !void {
+    const target = try enum_emit.zigTypeName(arena, global_enum);
+    try enum_emit.writeWithExtra(writer, arena, global_enum, 4, sections.extensionCode(target));
 }
 
 fn writeOwnMethod(
@@ -1239,7 +1245,7 @@ fn writeOptions(
         try writer.writeAll(",\n");
     }
     const options_type = try std.fmt.allocPrint(arena, "{s}Options", .{method_pascal});
-    try custom_code.writeIndented(writer, sections.codeForStruct(options_type), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode(options_type), 4);
     try writer.writeAll("    };\n\n");
 }
 

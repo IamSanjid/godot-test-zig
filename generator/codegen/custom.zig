@@ -2,7 +2,8 @@
 //!
 //! Custom files mirror the generated artifact path below `generator/codegen/custom/`.
 //! The section format is shared with bindgen; codegen consumes file, artifact,
-//! and replacement sections.
+//! and replacement sections. `extend` sections are bindgen-only: codegen has no
+//! separate generated bodies to attach them to.
 
 pub const Sections = shared.Sections;
 pub const Section = shared.Section;
@@ -12,7 +13,7 @@ pub const writeIndented = shared.writeIndented;
 pub fn read(arena: Allocator, io: Io, relative_path: []const u8) !?Sections {
     const sections = try shared.read(arena, io, "generator/codegen/custom", relative_path);
     if (sections) |value| {
-        if (value.hasPlacement(.nested)) return error.UnsupportedCustomPlacement;
+        if (value.hasPlacement(.extend)) return error.UnsupportedCustomPlacement;
     }
     return sections;
 }

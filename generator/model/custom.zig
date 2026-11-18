@@ -5,9 +5,13 @@
 //!
 //!   // @section file
 //!   // @section artifact name
-//!   // @section nested Target[,true]
+//!   // @section extend Target[,true]
 //!   // @section replace method
 //!
+//! `extend` appends raw declarations inside the generated declaration or scope
+//! named `Target`; `,true` keeps the class-scope propagation behavior. Artifact
+//! and replacement names and `extend` targets are separate namespaces; each
+//! rejects duplicate names in the same file.
 //! Each block ends with the matching `@section_end` line.
 
 const std = @import("std");
@@ -16,20 +20,21 @@ const Io = std.Io;
 
 const names = @import("names.zig");
 
-pub const Placement = enum { file, artifact, nested, replace };
+pub const Placement = enum { file, artifact, extend, replace };
 
 pub const Section = struct {
     placement: Placement,
-    /// Artifact label, nested target, or replacement name. Empty for `file`.
+    /// Artifact label, extension target, or replacement name. Empty for `file`.
     name: []const u8 = "",
-    /// Bindgen nested sections may be inherited by child classes.
-    emit_child: bool = false,
+    /// `extend` sections marked with `,true` are inherited by child classes.
+    propagate: bool = false,
     code: []const u8,
 };
 
-pub const StructSection = struct {
-    type_name: []const u8,
-    emit_child: bool = false,
+/// One raw-code block attached to a generated declaration or scope.
+pub const ExtensionSection = struct {
+    target: []const u8,
+    propagate: bool = false,
     code: []const u8,
 };
 
@@ -38,26 +43,24 @@ pub const Sections = struct {
     imports: []const u8 = "",
     methods: []const Section = &.{},
     replacements: []const Section = &.{},
-    structs: []const StructSection = &.{},
+    extensions: []const ExtensionSection = &.{},
 
     pub fn fileCode(self: Sections) []const u8 {
         return self.imports;
     }
 
-    pub fn nestedCode(self: Sections, target: []const u8) []const u8 {
-        for (self.structs) |section| {
-            if (std.mem.eql(u8, section.type_name, target)) return section.code;
+    /// Raw code attached to the generated declaration or scope named `target`.
+    pub fn extensionCode(self: Sections, target: []const u8) []const u8 {
+        for (self.extensions) |section| {
+            if (std.mem.eql(u8, section.target, target)) return section.code;
         }
         return "";
     }
 
-    pub fn codeForStruct(self: Sections, target: []const u8) []const u8 {
-        return self.nestedCode(target);
-    }
-
-    pub fn hasNestedChild(self: Sections, target: []const u8) bool {
-        for (self.structs) |section| {
-            if (section.emit_child and std.mem.eql(u8, section.type_name, target)) return true;
+    /// Whether an inheritable extension targets `target`.
+    pub fn hasExtension(self: Sections, target: []const u8) bool {
+        for (self.extensions) |section| {
+            if (section.propagate and std.mem.eql(u8, section.target, target)) return true;
         }
         return false;
     }
@@ -97,7 +100,7 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
     var section_count: usize = 0;
     var active: ?Placement = null;
     var active_name: []const u8 = "";
-    var active_emit_child = false;
+    var active_propagate = false;
     var active_aw: Io.Writer.Allocating = .init(arena);
 
     var lines = std.mem.splitScalar(u8, raw, '\n');
@@ -115,13 +118,13 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
             sections[section_count] = .{
                 .placement = current,
                 .name = try arena.dupe(u8, active_name),
-                .emit_child = active_emit_child,
+                .propagate = active_propagate,
                 .code = try arena.dupe(u8, active_aw.writer.buffered()),
             };
             section_count += 1;
             active = null;
             active_name = "";
-            active_emit_child = false;
+            active_propagate = false;
             active_aw = .init(arena);
             continue;
         }
@@ -131,11 +134,15 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
             const header = try parseHeader(std.mem.trim(u8, trimmed["// @section ".len..], " "));
             active = header.placement;
             active_name = header.name;
-            active_emit_child = header.emit_child;
+            active_propagate = header.propagate;
             for (sections[0..section_count]) |existing| {
-                if (header.placement != .nested and existing.placement != .nested and
-                    std.mem.eql(u8, existing.name, header.name))
-                {
+                if (!std.mem.eql(u8, existing.name, header.name)) continue;
+                // Artifact/replacement names and extend targets are separate
+                // namespaces; each namespace rejects its own duplicates.
+                if (header.placement == .extend and existing.placement == .extend) {
+                    return error.DuplicateCustomSection;
+                }
+                if (header.placement != .extend and existing.placement != .extend) {
                     return error.DuplicateCustomSection;
                 }
             }
@@ -154,8 +161,8 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
     var artifact_count: usize = 0;
     var replacements: [64]Section = undefined;
     var replacement_count: usize = 0;
-    var structs: [64]StructSection = undefined;
-    var struct_count: usize = 0;
+    var extensions: [64]ExtensionSection = undefined;
+    var extension_count: usize = 0;
     for (sections[0..section_count]) |section| {
         switch (section.placement) {
             .file => file_code = section.code,
@@ -167,13 +174,13 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
                 replacements[replacement_count] = section;
                 replacement_count += 1;
             },
-            .nested => {
-                structs[struct_count] = .{
-                    .type_name = section.name,
-                    .emit_child = section.emit_child,
+            .extend => {
+                extensions[extension_count] = .{
+                    .target = section.name,
+                    .propagate = section.propagate,
                     .code = section.code,
                 };
-                struct_count += 1;
+                extension_count += 1;
             },
         }
     }
@@ -183,14 +190,14 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
         .imports = file_code,
         .methods = try arena.dupe(Section, artifacts[0..artifact_count]),
         .replacements = try arena.dupe(Section, replacements[0..replacement_count]),
-        .structs = try arena.dupe(StructSection, structs[0..struct_count]),
+        .extensions = try arena.dupe(ExtensionSection, extensions[0..extension_count]),
     };
 }
 
 const Header = struct {
     placement: Placement,
     name: []const u8 = "",
-    emit_child: bool = false,
+    propagate: bool = false,
 };
 
 fn parseHeader(spec: []const u8) !Header {
@@ -207,15 +214,15 @@ fn parseHeader(spec: []const u8) !Header {
     if (rest.len == 0) return error.InvalidCustomPlacement;
 
     var name = rest;
-    var emit_child = false;
-    if (placement == .nested) {
+    var propagate = false;
+    if (placement == .extend) {
         if (std.mem.indexOfScalar(u8, rest, ',')) |comma| {
             name = std.mem.trim(u8, rest[0..comma], " ");
-            emit_child = std.mem.eql(u8, std.mem.trim(u8, rest[comma + 1 ..], " "), "true");
+            propagate = std.mem.eql(u8, std.mem.trim(u8, rest[comma + 1 ..], " "), "true");
         }
     }
     if (!names.isValidMemberName(name)) return error.InvalidCustomName;
-    return .{ .placement = placement, .name = name, .emit_child = emit_child };
+    return .{ .placement = placement, .name = name, .propagate = propagate };
 }
 
 pub fn writeRaw(writer: *Io.Writer, code: []const u8) !void {
@@ -246,9 +253,9 @@ test "shared custom sections" {
         \\// @section file
         \\const a = 1;
         \\// @section_end file
-        \\// @section nested Object,true
+        \\// @section extend Object,true
         \\const b = 2;
-        \\// @section_end nested Object
+        \\// @section_end extend Object
         \\// @section artifact extra
         \\const c = 3;
         \\// @section_end artifact extra
@@ -257,11 +264,54 @@ test "shared custom sections" {
         \\// @section_end replace process
     );
     try std.testing.expectEqualStrings("const a = 1;\n", sections.fileCode());
-    try std.testing.expectEqualStrings("const b = 2;\n", sections.nestedCode("Object"));
-    try std.testing.expect(sections.hasNestedChild("Object"));
+    try std.testing.expectEqualStrings("const b = 2;\n", sections.extensionCode("Object"));
+    try std.testing.expectEqualStrings("", sections.extensionCode("Missing"));
+    try std.testing.expect(sections.hasExtension("Object"));
+    try std.testing.expect(!sections.hasExtension("Missing"));
     try std.testing.expectEqualStrings("extra", sections.sections[2].name);
     try std.testing.expectEqualStrings("const c = 3;\n", sections.sections[2].code);
     try std.testing.expectEqualStrings("const d = 4;\n", sections.sections[3].code);
+}
+
+test "shared custom extensions without propagation" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const sections = try parse(arena,
+        \\// @section extend Required
+        \\const a = 1;
+        \\// @section_end extend Required
+    );
+    try std.testing.expectEqualStrings("const a = 1;\n", sections.extensionCode("Required"));
+    try std.testing.expect(!sections.hasExtension("Required"));
+}
+
+test "shared custom extensions reject duplicate targets" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try std.testing.expectError(error.DuplicateCustomSection, parse(arena,
+        \\// @section extend Object
+        \\const a = 1;
+        \\// @section_end extend Object
+        \\// @section extend Object,true
+        \\const b = 2;
+        \\// @section_end extend Object
+    ));
+
+    // Extend targets and artifact names are separate namespaces.
+    const sections = try parse(arena,
+        \\// @section extend Object
+        \\const a = 1;
+        \\// @section_end extend Object
+        \\// @section artifact Object
+        \\const b = 2;
+        \\// @section_end artifact Object
+    );
+    try std.testing.expectEqualStrings("const a = 1;\n", sections.extensionCode("Object"));
+    try std.testing.expectEqualStrings("Object", sections.methods[0].name);
 }
 
 test "shared custom markers reject mismatches" {
@@ -282,5 +332,10 @@ test "shared custom markers reject mismatches" {
     try std.testing.expectError(error.InvalidCustomPlacement, parse(arena,
         \\// @section unknown one
         \\// @section_end unknown one
+    ));
+    // The old `nested` placement was renamed to `extend`.
+    try std.testing.expectError(error.InvalidCustomPlacement, parse(arena,
+        \\// @section nested Object
+        \\// @section_end nested Object
     ));
 }

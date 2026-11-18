@@ -164,7 +164,8 @@ are converted to binding Variants before the binding call.
 
 - `constants.zig` — global constant values (literal values because the bindings
   aggregate does not currently expose `bindings.constants`)
-- `enums.zig` — aliases to `bindings.enums`
+- `enums.zig` — aliases to `bindings.enums`, so bindgen enum-body extensions
+  (for example `PropertyUsageFlags.exported`) are inherited
 - `native.zig` — aliases to `bindings.native`
 - `singletons.zig` — cached singleton accessors using binding singleton helpers
 
@@ -248,7 +249,10 @@ Codegen custom files use the shared section grammar:
 - `artifact` appends a new member and collision-checks its name.
 - `replace` replaces a generated method.
 
-Nested sections are bindgen-only and rejected by codegen.
+`extend` sections are bindgen-only and rejected by codegen. Codegen global,
+class and builtin enum declarations are aliases of the binding enums, so
+declarations that bindgen extends into an enum body flow through codegen
+automatically; codegen has no separate enum body to insert into.
 
 Templates use the same section grammar, with a file-level target directive.
 Codegen supports both `replace` and `artifact`; bindgen supports `artifact`

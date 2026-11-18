@@ -55,10 +55,12 @@ generator/codegen/custom/
 ```
 
 Both use the shared section parser in `model/custom.zig`. Sections are
-placement-oriented: `file`, `artifact`, `nested`, and `replace`. `artifact`
-names are collision-checked; bindgen additionally supports targeted `nested`
-sections. Codegen templates use the same section grammar with a file-level
-`@templates_for` target; bindgen templates support artifact additions only.
+placement-oriented: `file`, `artifact`, `extend`, and `replace`. `artifact`
+names are collision-checked; bindgen additionally supports targeted `extend`
+sections that append declarations inside a generated declaration or scope
+(including enum bodies). Codegen templates use the same section grammar with a
+file-level `@templates_for` target; bindgen templates support artifact additions
+only.
 
 ## Build integration
 

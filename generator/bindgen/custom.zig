@@ -2,10 +2,10 @@
 //!
 //! Custom files mirror the generated file path relative to the output root, but
 //! live under `generator/bindgen/custom/`. The section format is shared with
-//! codegen; bindgen consumes file, artifact, nested-target, and replacement
+//! codegen; bindgen consumes file, artifact, extension-target, and replacement
 //! sections.
 
-pub const StructSection = shared.StructSection;
+pub const ExtensionSection = shared.ExtensionSection;
 pub const Sections = shared.Sections;
 pub const writeRaw = shared.writeRaw;
 pub const writeIndented = shared.writeIndented;

@@ -143,10 +143,15 @@ fn emitFile(
     try docs.write(writer, arena, class.description, 0, "//!");
     if (class.brief_description != null or class.description != null) try writer.writeAll("\n");
 
+    // Loaded before struct emission: builtin enums accept extension sections
+    // from this file, targeted by generated Zig enum name.
+    const relative_path = try std.fmt.allocPrint(arena, "builtins/{s}.zig", .{try names.snake(arena, class.name)});
+    const sections = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
+
     try writeLayoutCheck(writer, class, expected_size, field_offsets);
     try writer.writeAll("\n");
 
-    try writeStruct(writer, arena, api, class, field_offsets, expected_size, real_name, pointer_align);
+    try writeStruct(writer, arena, api, class, field_offsets, expected_size, real_name, pointer_align, sections);
 
     var body_aw: Io.Writer.Allocating = .init(arena);
     const body = &body_aw.writer;
@@ -167,9 +172,6 @@ fn emitFile(
     if (class.has_destructor) {
         try writeDestructor(body, arena, class);
     }
-
-    const relative_path = try std.fmt.allocPrint(arena, "builtins/{s}.zig", .{try names.snake(arena, class.name)});
-    const sections = (try custom_code.readForOutput(arena, io, relative_path)) orelse custom_code.Sections{};
 
     try writeIndented(writer, body_aw.writer.buffered(), 4);
 
@@ -196,7 +198,7 @@ fn emitFile(
         template_count += 1;
     }
 
-    try custom_code.writeIndented(writer, sections.codeForStruct(class.name), 4);
+    try custom_code.writeIndented(writer, sections.extensionCode(class.name), 4);
     for (sections.methods) |section| {
         if (try customMethodCollides(arena, class, section.name) or
             hasMethodName(template_names[0..template_count], section.name))
@@ -274,6 +276,7 @@ fn writeStruct(
     expected_size: usize,
     real_name: []const u8,
     pointer_align: usize,
+    sections: custom_code.Sections,
 ) !void {
     _ = api;
     _ = real_name;
@@ -297,7 +300,8 @@ fn writeStruct(
 
     for (class.enums) |class_enum| {
         try writer.writeAll("\n");
-        try enum_emit.write(writer, arena, class_enum, 4);
+        const target = try enum_emit.zigTypeName(arena, class_enum);
+        try enum_emit.writeWithExtra(writer, arena, class_enum, 4, sections.extensionCode(target));
     }
 }
 
