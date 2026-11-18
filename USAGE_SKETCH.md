@@ -8,14 +8,14 @@ pub const Extends = godot.classes.core.Sprit2D;
 // will be converted into call-convention(.c) if it is not already,
 // for these type of "event" functions you should convert it to callconv(.c)
 pub fn _ready() callconv(.c) void {
-    
+
 }
 
 // will be converted into snake case while registering the method to the engine.
 // so `_physics_process`, the bindgen will parse some sort of metadata so the
 // argument types match and will report during compilation on mismatches.
 pub fn _physicsProcess(delta: f32) callconv(.c) void {
-    
+
 }
 ```
 

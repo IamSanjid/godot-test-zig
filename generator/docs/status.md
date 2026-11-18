@@ -24,7 +24,8 @@
 - cached String/StringName default literal handling
 - compile-time default options are inlined (primitives, enums, bitfields,
   Color/Vector/Rect); runtime-owned defaults stay optional
-- Variant `asObject` / `asCallable` / `asInt` via pointer casts
+- hand-written Variant `wrap`/`init`/`as(T)` conversion; raw binding Variant
+  keeps internal `asInt`/`asCallable` accessors for emitted vararg returns
 - codegen varargs convert library-supplied codegen Variants to binding Variants;
   bindgen assembles the final engine pointer array
 - host-targeted generator/translate-c with target-configured translated interface
@@ -32,7 +33,7 @@
 - shared `src/godot/naming.zig` policy for generator output and reflection;
   generated classes/builtins expose `GodotClassName` for exact StringName lookup
 - shared custom-section parser for bindgen and codegen; bindgen artifact additions
-  use shared `artifact` sections
+  use shared `artifact` sections and class replacements use `replace` sections
 - Zig `bitpack struct` emission with target-aware interface bitfield padding
 
 ## Validation
@@ -74,10 +75,12 @@ the API uses.
 
 ### Variant subclass downcast
 
-No automatic class downcast is generated for Variant results. Callers use:
+No automatic class downcast is generated for Variant results. `Variant.as(*T)`
+checks that the Variant holds an object and returns `null` otherwise; callers
+extract and downcast explicitly:
 
 ```zig
-const object = variant.asObject();
+const object = variant.as(*Object) orelse return null; // borrowed
 const node: *Node = @ptrCast(object);
 ```
 

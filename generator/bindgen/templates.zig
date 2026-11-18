@@ -1,5 +1,5 @@
-//! Bindgen template entry points. Bindgen supports template additions; method
-//! replacement is codegen-only.
+//! Bindgen template entry points. Bindgen supports template additions;
+//! method replacement is a per-artifact `replace` section, not a template.
 
 pub const Artifact = shared.Artifact;
 pub const Kind = shared.Kind;

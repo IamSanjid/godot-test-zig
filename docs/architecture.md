@@ -55,9 +55,9 @@ No generated file references annotations or registration.
 
 ## What is generated
 
-`bindings/` is bindgen output. It contains raw ABI wrappers, explicit
-`dispatcher: anytype` parameters, interface structs, builtin layouts, and class
-methods.
+`bindings/` is bindgen output apart from the hand-written `bindings.zig` module
+entry point. It contains raw ABI wrappers, explicit `dispatcher: anytype`
+parameters, interface structs, builtin layouts, and class methods.
 
 `classes/`, `builtins/generated/`, `utility/`, `constants.zig`, `enums.zig`,
 `native.zig`, and `singletons.zig` are codegen output. They add:
@@ -77,8 +77,8 @@ Codegen does not own registration or class-instance lifecycle.
 - `godot.zig` — public facade re-exporting `runtime.zig` and the codegen type
   modules; the entry point imports it as `godot`.
 - `abi.zig` — canonical ptrcall widths and shared argument/return marshalling.
-- `reflect/` — type predicates, inheritance traversal, function-shape helpers,
-  generic field-default initialization.
+- `reflect/` — type/object predicates, inheritance traversal, Base-marker
+  discovery, function-shape helpers, generic field-default initialization.
 - `annotations/` — optional markers such as `Base`, `OnReady`, `InitCallback`,
   `DeinitCallback`, `NotificationCallback`.
 - `registration/` — optional `Registry`, class creation/free, notification

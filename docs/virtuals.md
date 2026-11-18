@@ -11,7 +11,7 @@ Codegen emits two signature groups plus metadata:
 ```zig
 pub const Virtual = struct {
     pub const Required = struct {
-        pub const _getWidth = *const fn (self: *const Texture2D) callconv(.c) i64;
+        pub const _getWidth = *const fn (self: *const Texture2D) callconv(.c) i32;
     };
 
     pub const Optional = struct {
@@ -19,8 +19,8 @@ pub const Virtual = struct {
     };
 
     pub const Meta = struct {
-        pub const _getWidth = .{ .hash = 123, .static = false };
-        pub const _getImage = .{ .hash = 456, .static = false };
+        pub const _getWidth = .{ .hash = 123, .static = false, .godot_name = "_get_width" };
+        pub const _getImage = .{ .hash = 456, .static = false, .godot_name = "_get_image" };
     };
 };
 ```
@@ -37,7 +37,7 @@ pub const Virtual = struct {
 ```zig
 pub const Extends = godot.classes.core.Texture2D;
 
-pub fn _getWidth(self: *const @This()) i64 {
+pub fn _getWidth(self: *const @This()) i32 {
     return 64;
 }
 ```
@@ -109,7 +109,7 @@ Zig type:
 
 - `float` / `real_t` -> `f64` slot + `@floatCast`
 - normal integers -> `i64` (or `u64` when the integer is u64)
-- enums -> their backing integer slot
+- enums -> their canonical integer slot (`i64`; `u64` for a 64-bit unsigned backing)
 - packed bitfield structs -> canonical `i64` slot
 - `bool` -> `u8`
 - everything else -> its declared layout
@@ -158,8 +158,9 @@ if (comptime isRefCountedPointer(R)) {
 
 Do not assign a raw pointer into `Ref<T>` storage.
 
-`isRefCountedPointer` lives in `reflect`: it strips pointer/optional and checks
-`reflect.inheritsFrom(Child, classes.core.RefCounted)`. The virtual callback keeps
+`isRefCountedPointer` lives in `reflect`: it resolves the single-item class
+pointer through `reflect.objectTarget` and checks
+`reflect.inheritsFrom(Class, classes.core.RefCounted)`. The virtual callback keeps
 only the ABI decision to call `ref_get_object` / `ref_set_object`.
 
 ## Do not use upcast/downcast here

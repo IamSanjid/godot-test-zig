@@ -45,7 +45,7 @@ pub fn writeResultInitializer(
     dispatcher_expr: []const u8,
 ) !void {
     if (std.mem.eql(u8, raw, "Variant")) {
-        try writer.print("{s}.nil()", .{zig_type});
+        try writer.print("{s}.nil", .{zig_type});
     } else if (resultNeedsInit(raw)) {
         try writer.print("{s}.init({s})", .{ zig_type, dispatcher_expr });
     } else {

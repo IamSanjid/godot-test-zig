@@ -53,10 +53,18 @@ share it. Use another call for another group.
 
 The class name is `T.GodotClassName` when present, otherwise the short Zig type
 name. Duplicate names are rejected. `addClasses` also accepts a namespace struct
-and registers its first-level public engine-class declarations.
+and registers its first-level public extension-class declarations.
 
 `addClasses` returns errors such as `DuplicateClassName`. Report registration
 failure from the entry symbol and fail extension startup.
+
+## Extension-class parents
+
+A registered extension class must directly extend an engine class. The Godot 4
+extension API does not support extension-to-extension class inheritance, so
+`Registry` rejects it with a compile error. `reflect` can still analyse an
+extension-to-extension `Extends` chain, but it cannot be used as a registered
+class parent yet.
 
 ## Registry is optional
 
@@ -132,17 +140,23 @@ engine asks for it.
 `initAnnotFieldsDefault` initializes marker fields to their default wrappers.
 Actual `OnReady` values are initialized:
 
-- automatically when `auto_onready = true`, the class declares at least one
-  `OnReady` field, and the class has a `Base` marker, on `post_enter_tree`, or
+- automatically when `auto_onready = true`, the class extends `Node`, declares at
+  least one `OnReady` field, and the class has a `Base` marker, on
+  `post_enter_tree`, or
 - manually by calling `godot.annotations.initOnReadyFields(...)`.
 
-Auto-OnReady is opt-in. The notification route remains available.
+Auto-OnReady is opt-in. A non-`Node` class that enables it with `OnReady` fields
+is rejected with a compile error, because only `Node` sends the
+`post_enter_tree` notification it waits for. The notification route remains
+available.
 
 ## Namespace detection
 
-`isLikelyNamespace` is a zero-field struct shape check. Registration combines it
-with `!@hasDecl(Class, "Extends")`, so a zero-field extension class remains an
-engine class. Engine classes are checked before namespaces.
+`isLikelyNamespace` is only a shape check: a zero-field, non-tuple struct. A
+zero-field struct may still be a valid extension class, so registration checks
+`reflect.isExtensionClass(Class)` first and only treats the struct as a namespace
+when that check fails and `isLikelyNamespace` passes. Engine classes and other
+types are rejected with a compile error.
 
 ## Virtual and abstract classes
 

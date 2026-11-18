@@ -154,11 +154,11 @@ pub fn writeStringLiteral(
 
 pub fn writeVariantLiteral(writer: *Io.Writer, prefix: []const u8, value: []const u8, dispatcher: []const u8) !bool {
     if (std.mem.eql(u8, value, "null")) {
-        try writer.print("{s}Variant.nil()", .{prefix});
+        try writer.print("{s}Variant.nil", .{prefix});
         return true;
     }
     if (!isInteger(value)) return false;
-    try writer.print("blk: {{ var value: i64 = {s}; break :blk {s}Variant.fromPtr({s}, i64, &value); }}", .{ value, prefix, dispatcher });
+    try writer.print("blk: {{ var value: i64 = {s}; break :blk {s}Variant.wrap({s}, i64, &value); }}", .{ value, prefix, dispatcher });
     return true;
 }
 

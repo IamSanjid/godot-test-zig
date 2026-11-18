@@ -8,7 +8,7 @@
 //! const runtime = @import("../../runtime.zig");
 //! runtime.dispatcher();
 //! runtime.dispatch(.some_proc, .{});
-//! runtime.reflect.isEngineClass(T);
+//! runtime.reflect.inheritsFrom(T, Base);
 //! ```
 //!
 //! User code should import the public facade in `godot.zig` instead; the facade
@@ -127,7 +127,7 @@ pub fn richLogFn(
     var godot_string = builtins.String.fromUtf8(t.written()) catch return;
     defer godot_string.deinit();
 
-    utility.general.printRich(.fromPtr(builtins.String, &godot_string), .{});
+    utility.general.printRich(.wrap(builtins.String, &godot_string), .{});
 }
 
 pub fn initialize(_: ?*anyopaque, p_level: interface.InitializationLevel) callconv(.c) void {

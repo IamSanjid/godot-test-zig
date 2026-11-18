@@ -2,7 +2,7 @@
 ///
 /// `foo` must be a member function and may or may not accept a std.mem.Allocator. And must return void.
 pub fn DeinitCallback(comptime T: type, comptime method: anytype) type {
-    if (!reflect.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
+    if (!reflect.isExtensionClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an extension class type.");
 
     const MethodT = @TypeOf(method);
     const type_info = @typeInfo(MethodT);
@@ -65,9 +65,7 @@ pub fn callDeinitCallback(
     self: *T,
     allocator: std.mem.Allocator,
 ) void {
-    const MarkerOpt = comptime findDeinitCallback(T);
-    if (MarkerOpt == null) return;
-    const Marker = MarkerOpt.?;
+    const Marker = findDeinitCallback(T) orelse return;
     comptime if (B != Marker.TExtends)
         @compileError("Base type mismatch: expected '" ++ @typeName(Marker.TExtends) ++
             "', got '" ++ @typeName(B) ++ "'.");

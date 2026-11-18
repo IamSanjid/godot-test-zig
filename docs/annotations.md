@@ -35,7 +35,8 @@ OnReady(u32, .{ .call = .{ f, .{} } })
   `getPtr()` / `getPtrConst()` when absence is valid.
 - `initOnReadyFields(T, Base, owner, base)` initializes all marked fields.
 - With `auto_onready = true`, registration initializes them on
-  `post_enter_tree` if the class has a `Base` field.
+  `post_enter_tree` if the class has a `Base` field and extends `Node`.
+  Auto-OnReady with `OnReady` fields is a compile error for non-`Node` classes.
 - Users can skip auto mode and call `initOnReadyFields` manually.
 
 ### `InitCallback(T, f)`
@@ -100,3 +101,9 @@ annotation types here.
 
 `reflect.initFieldsDefault` is separate: it initializes ordinary Zig field
 defaults after `allocator.create` and is useful outside annotations.
+
+## Planned properties
+
+`Property` is planned as a direct field type, not a separate declaration. Its
+field schema, usage presets, accessors, and Variant prerequisite are designed in
+[properties.md](properties.md).

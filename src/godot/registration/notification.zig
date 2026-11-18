@@ -6,6 +6,13 @@ pub fn Notification(
     const has_on_ready = comptime auto_onready and findOnReadyFieldNames(T).len > 0;
 
     if (comptime has_on_ready) {
+        // Auto OnReady waits for Node's post-enter-tree notification and probes
+        // Node.isNodeReady, so a Node-derived base is a precondition.
+        if (comptime !reflect.inheritsFrom(Base, Node)) {
+            @compileError("Auto OnReady requires '" ++ @typeName(T) ++ "' to extend a Node, but its base '" ++
+                @typeName(Base) ++ "' does not extend " ++ @typeName(Node) ++ ".");
+        }
+
         const base_field_name = comptime findBaseFieldName(T, Base) orelse
             @compileError("Auto OnReady is enabled, but '" ++ @typeName(T) ++
                 "' has no field of type `Base(Extends)`. Declare one to use auto OnReady.");
@@ -16,8 +23,9 @@ pub fn Notification(
 
                 if (p_what == Node.notification_post_enter_tree and !p_reversed) {
                     const base = &@field(instance, base_field_name);
-                    if (!base.get().isNodeReady()) {
-                        annotations.initOnReadyFields(T, Base, instance, base.get());
+                    const engine_base = base.get();
+                    if (!engine_base.isNodeReady()) {
+                        annotations.initOnReadyFields(T, Base, instance, engine_base);
                     }
                 }
 
@@ -34,15 +42,13 @@ pub fn Notification(
     }
 }
 
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-
 const bindings = @import("bindings");
 const interface = bindings.interface;
 const classes = @import("../classes/classes.zig");
 const Node = classes.core.Node;
 
 const annotations = @import("../annotations/annotations.zig");
+const reflect = @import("../reflect/reflect.zig");
 
 const annot_base = @import("../annotations/base.zig");
 const findBaseFieldName = annot_base.findBaseFieldName;

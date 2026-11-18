@@ -35,3 +35,38 @@ pub const Vector3i = vector.Vector3i;
 pub const Vector4 = vector.Vector4;
 pub const Vector4i = vector.Vector4i;
 pub const Variant = @import("variant.zig").Variant;
+
+const bindings = @import("bindings");
+
+// Hand-written builtin structs must stay layout-compatible with the generated
+// binding structs: `toBinding`/`fromBinding` are pointer bit-casts. Generated
+// builtins already emit their own layout checks; this covers the hand-written
+// ones (and therefore both precision configurations).
+comptime {
+    layoutCheck(AABB, bindings.builtins.aabb.AABB);
+    layoutCheck(Basis, bindings.builtins.basis.Basis);
+    layoutCheck(Color, bindings.builtins.color.Color);
+    layoutCheck(Plane, bindings.builtins.plane.Plane);
+    layoutCheck(Projection, bindings.builtins.projection.Projection);
+    layoutCheck(Quaternion, bindings.builtins.quaternion.Quaternion);
+    layoutCheck(Rect2, bindings.builtins.rect2.Rect2);
+    layoutCheck(Rect2i, bindings.builtins.rect2i.Rect2i);
+    layoutCheck(RID, bindings.builtins.rid.RID);
+    layoutCheck(Transform2D, bindings.builtins.transform2d.Transform2D);
+    layoutCheck(Transform3D, bindings.builtins.transform3d.Transform3D);
+    layoutCheck(Vector2, bindings.builtins.vector2.Vector2);
+    layoutCheck(Vector2i, bindings.builtins.vector2i.Vector2i);
+    layoutCheck(Vector3, bindings.builtins.vector3.Vector3);
+    layoutCheck(Vector3i, bindings.builtins.vector3i.Vector3i);
+    layoutCheck(Vector4, bindings.builtins.vector4.Vector4);
+    layoutCheck(Vector4i, bindings.builtins.vector4i.Vector4i);
+}
+
+fn layoutCheck(comptime Codegen: type, comptime Binding: type) void {
+    if (@sizeOf(Codegen) != @sizeOf(Binding)) {
+        @compileError("hand-written builtin layout mismatch: " ++ @typeName(Codegen));
+    }
+    if (@alignOf(Codegen) != @alignOf(Binding)) {
+        @compileError("hand-written builtin alignment mismatch: " ++ @typeName(Codegen));
+    }
+}

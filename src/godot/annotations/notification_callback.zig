@@ -2,7 +2,7 @@
 ///
 /// `foo` must be a member function and not accept any arguments. And must return void.
 pub fn NotificationCallback(comptime T: type, comptime method: anytype) type {
-    if (!reflect.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
+    if (!reflect.isExtensionClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an extension class type.");
 
     const MethodT = @TypeOf(method);
     const type_info = @typeInfo(MethodT);
@@ -55,9 +55,7 @@ pub fn callNotificationCallback(
     p_what: i32,
     p_reversed: bool,
 ) void {
-    const MarkerOpt = comptime findNotificationCallback(T);
-    if (MarkerOpt == null) return;
-    const Marker = MarkerOpt.?;
+    const Marker = findNotificationCallback(T) orelse return;
     comptime if (B != Marker.TExtends)
         @compileError("Base type mismatch: expected '" ++ @typeName(Marker.TExtends) ++
             "', got '" ++ @typeName(B) ++ "'.");

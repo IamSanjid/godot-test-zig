@@ -38,7 +38,7 @@ src/entrypoint.zig        example consumer; replace with your extension
 src/godot/                hand-written runtime layer
   godot.zig               public facade imported as `godot`
   runtime.zig             process-wide dispatcher/registry state and lifecycle
-src/godot/bindings/       bindgen output (generated, not committed)
+src/godot/bindings/       bindgen output + hand-written bindings.zig module root
 src/godot/classes/        codegen class output (generated)
 src/godot/builtins/       hand-written and generated builtins
 generator/                host-side bindgen/codegen generator
@@ -53,8 +53,11 @@ docs/                     design overview
   virtual metadata; generated code imports `runtime.zig`, not the facade.
 - `src/godot/runtime.zig` owns process-wide dispatcher/registry state and the
   engine lifecycle.
-- `src/godot/abi.zig` contains canonical ptrcall slot/read/write helpers.
-- `src/godot/reflect` contains type/inheritance helpers.
+- `src/godot/abi.zig` contains canonical ptrcall slot/read/write helpers and
+  scalar boxes.
+- `src/godot/builtins/variant.zig` contains the hand-written Variant conversion
+  layer (`wrap`, `init`, `as`, `clone`, `deinit`).
+- `src/godot/reflect` contains type, hierarchy, and object helpers.
 - `src/godot/annotations` contains opt-in markers.
 - `src/godot/registration` contains optional class lifecycle and virtual
   registration.

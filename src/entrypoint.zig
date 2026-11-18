@@ -20,9 +20,10 @@ pub const TestNode = struct {
     pub const BadBaz = godot.annotations.DeinitCallback(@This(), baz);
 
     pub fn foo(self: *@This(), allocator: std.mem.Allocator, base: *Extends) void {
+        const variant = godot.builtins.Variant.wrap(TestNode, self);
         std.log.debug(
-            "Self: {*}, Init Allocator: {}, base: {*}, p_base: {*}, v: {}",
-            .{ self, allocator, self.base.get(), base, self.v },
+            "Self: {*}, Init Allocator: {}, base: {*}, p_base: {*}, v: {}, variant: {}",
+            .{ self, allocator, self.base.get(), base, self.v, variant },
         );
     }
 
@@ -45,7 +46,7 @@ pub const TestNode = struct {
 
     pub fn _ready(self: *const @This()) void {
         std.log.debug("_ready was called! Self: {*}, duh: {}", .{ self, self.duh.get() });
-        godot.utility.general.print(godot.builtins.Variant.fromPtr(godot.builtins.String, &self.blah.get()), .{});
+        godot.utility.general.print(godot.builtins.Variant.wrap(godot.builtins.String, &self.blah.get()), .{});
         if (self.child_node.value == null) return;
         std.log.debug(
             "First read!, State: {}, v: {}, child_node: {*}",
@@ -53,9 +54,9 @@ pub const TestNode = struct {
         );
         const fmt: godot.builtins.StringName = .fromComptimeLatin1("ChildNode: ");
         godot.utility.general.print(
-            godot.builtins.Variant.fromPtr(godot.builtins.StringName, &fmt),
+            godot.builtins.Variant.wrap(godot.builtins.StringName, &fmt),
             .{
-                godot.builtins.Variant.fromPtr(
+                godot.builtins.Variant.wrap(
                     godot.classes.core.Object,
                     @as(*godot.classes.core.Object, @ptrCast(self.child_node.get())),
                 ),

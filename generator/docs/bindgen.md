@@ -9,7 +9,6 @@ binding function takes an explicit `dispatcher: anytype`.
 
 ```text
 <output_dir>/
-  bindings.zig
   interface.zig
   enums.zig
   constants.zig
@@ -21,7 +20,8 @@ binding function takes an explicit `dispatcher: anytype`.
 ```
 
 `interface.zig` is generated from `gdextension_interface.json`; the rest comes
-from `extension_api.json`.
+from `extension_api.json`. The `bindings.zig` module entry point in that
+directory is hand-written; bindgen does not generate or overwrite it.
 
 ## Responsibilities
 
@@ -54,17 +54,22 @@ Bindgen custom files use the shared section grammar:
 ```zig
 // @section file
 // @section artifact name
+// @section replace generatedName
 // @section nested Target[,true]
 ```
 
 - `file` adds file-scope code.
 - `artifact` appends code to the generated class or builtin. The name identifies
   the added member and is collision-checked.
+- `replace` replaces a generated class method with the supplied code. The name
+  is the generated Zig identifier (for example `getInstanceId`). Builtin custom
+  files currently consume file/artifact/nested sections only; class replacements
+  are the supported replacement path.
 - `nested` inserts code into a nested namespace such as `Virtual`, `Required`,
   `Optional`, `Properties`, or an options struct. `,true` marks it inheritable.
 
 Code is inserted as-is and is never compiled directly from the custom tree.
-Bindgen rejects `replace` sections.
+Unused class replacements are errors.
 
 ## Templates
 
@@ -83,9 +88,10 @@ pub fn helper(self: *{{Class}}, dispatcher: anytype) void { ... }
 // @section_end artifact helper
 ```
 
-Bindgen supports artifact additions only. `replace` remains codegen-only.
-Templates may declare private helpers as well as public methods; a section is
-inserted as-is inside the generated class or builtin.
+Bindgen templates support artifact additions only; method replacement is a
+per-artifact custom section, not a template. Templates may declare private
+helpers as well as public methods; a section is inserted as-is inside the
+generated class or builtin.
 Placeholders are `{{Class}}`, `{{Builtin}}`, `{{dispatcher}}`, `{{api_type}}`,
 and `{{method}}`. The codegen-only `{{binding_class}}` and
 `{{binding_builtin}}` placeholders are unavailable. Template code must use
@@ -130,10 +136,10 @@ builtins implement their own.
 
 ## Known bindgen caveats
 
-- Vararg fixed arguments are converted with `Variant.fromPtr`; the `vargs`
+- Vararg fixed arguments are converted with `Variant.wrap`; the `vargs`
   received by bindgen must already be binding Variants. Codegen produces those
   from the library utility's codegen Variants. Bindgen only assembles the final
-  engine Variant pointer array. `Variant.fromPtr` currently supports the fixed
+  engine Variant pointer array. `Variant.wrap` currently supports the fixed
   argument types present in the binding implementation.
 - Vararg return conversion is intentionally limited to the cases generated today;
   unsupported types now fail generation explicitly.

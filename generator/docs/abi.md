@@ -30,6 +30,12 @@ compatibility first, then the codegen-facing convenience types.
 select the ptrcall slot width. A public `f32` float is converted to an `f64` slot
 at the binding boundary; `meta:"double"` is a public `f64`.
 
+Builtin struct members use the selected configuration's `meta` spelling
+directly: `meta:"float"` is always C++ `float` (`f32`) and `meta:"double"` is
+always C++ `double` (`f64`). `real_t` members are emitted as `float` in
+single-precision configurations and `double` in double-precision ones. Fixed
+C++ floats such as `Color` stay `meta:"float"`/`f32` in both.
+
 Utility functions are C++ `double` operations. Their public `float` signatures
 use `f64` in both backends, regardless of `builtin_build_conf`.
 
@@ -63,7 +69,7 @@ runtime layer.
 
 - Class pointer returns are optional `?*Class`.
 - Builtin returns are values.
-- `Variant` returns are initialized with `.nil()` before the engine call.
+- `Variant` returns are initialized with `.nil` before the engine call.
 - Constructors leave the destination `undefined` because the engine constructor
   initializes it.
 - Non-trivial returned builtins (`String`, `StringName`, `NodePath`, `Array`,
@@ -113,7 +119,7 @@ Default ownership:
   constructed the default itself**.
 - Caller-provided option values remain caller-owned; generated bindings do not
   deinitialize them.
-- `Variant` defaults use `.nil()` and need no deinit.
+- `Variant` defaults use `.nil` and need no deinit.
 
 `String` has no static-buffer constructor, so `String.fromComptimeLatin1` copies
 once and caches the result for the process lifetime. `StringName` uses
@@ -145,13 +151,15 @@ still require deinit when the caller is done with them.
 A class returned inside a `Variant` is not automatically downcast:
 
 ```zig
-const object = variant.asObject(); // *Object
+const object = variant.as(*Object) orelse return null; // borrowed *Object
 const node: *Node = @ptrCast(object);
 ```
 
-`asObject`, `asCallable`, `asInt` exist in both binding and codegen Variant
-implementations. No subclass inference is possible from the ABI; the caller is
-responsible for using the correct class type.
+Typed extraction is `Variant.as(T)` / `Variant.as(*T)` on the hand-written
+codegen Variant: it returns `null` on a tag mismatch and performs no conversion.
+The raw binding Variant keeps internal `asInt`/`asCallable` accessors for
+generated vararg returns. No subclass inference is possible from the ABI; the
+caller is responsible for using the correct class type.
 
 ## Virtual methods
 

@@ -72,9 +72,9 @@ pub fn getVirtual(comptime T: type, comptime Base: type) interface.ClassGetVirtu
             p_hash: u32,
         ) callconv(.c) interface.ClassCallVirtual {
             const entries = comptime collect(T, Base);
-            if (p_name == null) return null;
+            const raw_name = p_name orelse return null;
 
-            const name: *const builtins.StringName = @ptrCast(@alignCast(p_name.?));
+            const name: *const builtins.StringName = @ptrCast(@alignCast(raw_name));
             inline for (entries) |entry| {
                 if (p_hash == 0 or p_hash == entry.hash) {
                     if (name.opEqlStringName(&builtins.StringName.fromComptimeLatin1(entry.godot_name))) {

@@ -2,7 +2,8 @@
 //!
 //! Custom files mirror the generated file path relative to the output root, but
 //! live under `generator/bindgen/custom/`. The section format is shared with
-//! codegen; bindgen consumes file, artifact, and nested-target sections.
+//! codegen; bindgen consumes file, artifact, nested-target, and replacement
+//! sections.
 
 pub const StructSection = shared.StructSection;
 pub const Sections = shared.Sections;
@@ -15,11 +16,7 @@ pub fn readForOutput(
     io: Io,
     relative_path: []const u8,
 ) !?Sections {
-    const sections = try shared.read(arena, io, "generator/bindgen/custom", relative_path);
-    if (sections) |value| {
-        if (value.hasPlacement(.replace)) return error.UnsupportedCustomPlacement;
-    }
-    return sections;
+    return shared.read(arena, io, "generator/bindgen/custom", relative_path);
 }
 
 pub fn parse(arena: Allocator, raw: []const u8) !Sections {

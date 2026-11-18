@@ -3,10 +3,10 @@ pub fn CreateInstance(
     comptime Base: type,
 ) interface.ClassCreateInstance3 {
     comptime {
-        const base_info = @typeInfo(Base);
-        if (base_info != .@"struct" and base_info != .@"opaque") {
+        if (!reflect.isEngineObjectClass(Base)) {
             @compileError(std.fmt.comptimePrint(
-                "Cannot build the create-instance callback for '{s}': base '{s}' is not a class type.",
+                "Cannot build the create-instance callback for '{s}': base '{s}' is not an engine object class. " ++
+                    "The base must be an instantiable engine class, not a non-instantiable class or an extension class.",
                 .{ @typeName(T), @typeName(Base) },
             ));
         }
@@ -22,7 +22,7 @@ pub fn CreateInstance(
         fn f(userdata: ?*anyopaque, p_notify_postinitialize: bool) callconv(.c) interface.ObjectPtr {
             const p_options: *AddClassData = @ptrCast(@alignCast(userdata orelse return null));
             const allocator: Allocator = p_options.create_allocator;
-            const gpa: Allocator = if (p_options.gpa != null) p_options.gpa.? else allocator;
+            const gpa: Allocator = p_options.gpa orelse allocator;
             const base = Base.construct() orelse return null;
 
             const child = allocator.create(T) catch {

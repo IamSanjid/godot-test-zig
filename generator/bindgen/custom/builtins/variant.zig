@@ -1,4 +1,15 @@
 // @section artifact Data
+/// Opaque engine-private packed-array header.
+///
+/// This type only gives `Data.packed_*` a distinct typed pointer instead of
+/// `?*anyopaque`. Nothing here is constructed, mutated, dereferenced or treated
+/// as the engine's layout; packed arrays only move through the engine Variant
+/// constructors/destructors.
+fn PackedArrayRef(comptime T: type) type {
+    _ = T;
+    return opaque {};
+}
+
 const Data = extern union {
     aabb: *AABB,
     array: *Array,
@@ -7,7 +18,10 @@ const Data = extern union {
     callable: Callable,
     color: Color,
     dictionary: *Dictionary,
-    float: if (@sizeOf(Variant) == 40) f64 else f32,
+    // Engine layout fact: `Variant::_data._float` is C++ `double` in every
+    // build configuration. This field does not determine the Variant size;
+    // `_mem[sizeof(real_t) * 4]` and the generated builtin members do.
+    float: f64,
     int: i64,
     nil: void,
     node_path: NodePath,
@@ -15,16 +29,16 @@ const Data = extern union {
         id: native.ObjectID,
         object: *classes.core.Object,
     },
-    packed_byte_array: ?*anyopaque,
-    packed_color_array: ?*anyopaque,
-    packed_float32_array: ?*anyopaque,
-    packed_float64_array: ?*anyopaque,
-    packed_int32_array: ?*anyopaque,
-    packed_int64_array: ?*anyopaque,
-    packed_string_array: ?*anyopaque,
-    packed_vector2_array: ?*anyopaque,
-    packed_vector3_array: ?*anyopaque,
-    packed_vector4_array: ?*anyopaque,
+    packed_byte_array: *PackedArrayRef(PackedByteArray),
+    packed_color_array: *PackedArrayRef(PackedColorArray),
+    packed_float32_array: *PackedArrayRef(PackedFloat32Array),
+    packed_float64_array: *PackedArrayRef(PackedFloat64Array),
+    packed_int32_array: *PackedArrayRef(PackedInt32Array),
+    packed_int64_array: *PackedArrayRef(PackedInt64Array),
+    packed_string_array: *PackedArrayRef(PackedStringArray),
+    packed_vector2_array: *PackedArrayRef(PackedVector2Array),
+    packed_vector3_array: *PackedArrayRef(PackedVector3Array),
+    packed_vector4_array: *PackedArrayRef(PackedVector4Array),
     plane: Plane,
     projection: *Projection,
     quaternion: Quaternion,
@@ -60,105 +74,143 @@ comptime {
 }
 
 // @section_end artifact Data
-// @section artifact fromPtr
-pub fn fromPtr(dispatcher: anytype, comptime T: type, value: anytype) Variant {
+// @section artifact wrap
+/// Creates a **borrowed** Variant view of `value` for a raw binding call.
+///
+/// `T` is the value type; `value` must be `*T`, `*const T`, `?*T` or
+/// `?*const T`. A `null` optional pointer produces `Variant.nil`. No engine
+/// allocation happens and no reference counts change. Pointer-backed payloads
+/// alias the caller's storage; scalar and plain-value payloads are copied. The
+/// result is only valid while that storage is alive and must never be destroyed
+/// through the Variant API.
+///
+/// Scalars are written in their canonical Variant payload form: `bool` ->
+/// `bool`, every integer/enum/packed bitfield -> canonical `i64` payload
+/// (unsigned 64-bit backings bit-cast), `float` -> C++ `double` payload.
+/// Inline builtins currently handled here are `String`, `StringName`,
+/// `Callable`, `Signal` and `Vector2`; any generated opaque class pointer is
+/// handled as an object. This raw-layer helper is intentionally a subset of the
+/// public codegen `Variant.wrap`; unsupported fixed-argument types are a
+/// generation/compile error.
+///
+/// Packed arrays compile-error: their Variant payload is an engine-owned
+/// copy-on-write ref, so they need the owning Variant constructors.
+pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
     const VT = @TypeOf(value);
     if (VT != *const T and
         VT != *T and
         VT != ?*T and
         VT != ?*const T)
         @compileError(std.fmt.comptimePrint(
-            "Please provide value as a pointer to {s} or const {s} or ?{s} or ?const {s}, found: {s}",
-            .{
-                @typeName(T), @typeName(T), @typeName(T), @typeName(T), @typeName(VT),
-            },
+            "Variant.wrap expects a pointer to {s} (or an optional pointer), found: {s}",
+            .{ @typeName(T), @typeName(VT) },
         ));
+
+    if (comptime isPackedArray(T)) {
+        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+            ": packed arrays are copy-on-write engine values. Use the owning Variant constructor instead.");
+    }
+
     const v = if (VT == ?*T or VT == ?*const T) blk: {
         const ov = value orelse {
-            return nil();
+            return Variant.nil;
         };
         break :blk ov;
     } else value;
+
     switch (T) {
-        String => {
-            const wrapped: VariantWrapped = .{
-                .tag = .string,
-                .data = .{ .string = v.* },
-            };
-            return wrapped.toVariant();
-        },
-        StringName => {
-            const wrapped: VariantWrapped = .{
-                .tag = .string_name,
-                .data = .{ .string_name = v.* },
-            };
-            return wrapped.toVariant();
-        },
-        Callable => {
-            const wrapped: VariantWrapped = .{
-                .tag = .callable,
-                .data = .{ .callable = v.* },
-            };
-            return wrapped.toVariant();
-        },
-        Signal => {
-            const wrapped: VariantWrapped = .{
-                .tag = .signal,
-                .data = .{ .signal = v.* },
-            };
-            return wrapped.toVariant();
-        },
-        Vector2 => {
-            const wrapped: VariantWrapped = .{
-                .tag = .vector2,
-                .data = .{ .vector2 = v.* },
-            };
-            return wrapped.toVariant();
-        },
+        String => return borrowed(.string, .{ .string = v.* }),
+        StringName => return borrowed(.string_name, .{ .string_name = v.* }),
+        Callable => return borrowed(.callable, .{ .callable = v.* }),
+        Signal => return borrowed(.signal, .{ .signal = v.* }),
+        Vector2 => return borrowed(.vector2, .{ .vector2 = v.* }),
         classes.core.Object => {
-            const wrapped: VariantWrapped = .{
-                .tag = .object,
-                .data = .{
-                    .object = .{
-                        .id = @bitCast(classes.core.Object.getInstanceId(dispatcher, v)),
-                        .object = v,
-                    },
+            const object: *classes.core.Object = @constCast(@as(*const classes.core.Object, @ptrCast(v)));
+            const instance_id = classes.core.Object.getInstanceId(object, dispatcher);
+            return borrowed(.object, .{
+                .object = .{
+                    .id = .{ .id = instance_id },
+                    .object = object,
                 },
-            };
-            return wrapped.toVariant();
+            });
         },
-        else => {
-            const info = @typeInfo(T);
-            switch (info) {
-                .int => {
-                    const wrapped: VariantWrapped = .{
-                        .tag = .int,
-                        .data = .{ .int = @intCast(v.*) },
-                    };
-                    return wrapped.toVariant();
+        else => if (comptime @typeInfo(T) == .@"opaque" and @hasDecl(T, "GodotClassName")) {
+            // Any generated engine class pointer is a Variant object. This is
+            // intentionally broader than the exact Object case above so future
+            // vararg fixed arguments such as *Node keep working.
+            const object: *classes.core.Object = @constCast(@as(*const classes.core.Object, @ptrCast(v)));
+            const instance_id = classes.core.Object.getInstanceId(object, dispatcher);
+            return borrowed(.object, .{
+                .object = .{
+                    .id = .{ .id = instance_id },
+                    .object = object,
                 },
-                .float => {
-                    const wrapped: VariantWrapped = .{
-                        .tag = .float,
-                        .data = .{ .float = @floatCast(v.*) },
-                    };
-                    return wrapped.toVariant();
-                },
-                else => @compileError("Variant.fromPtr not supported for type: " ++ @typeName(T)),
-            }
+            });
+        } else switch (@typeInfo(T)) {
+            .bool => return borrowed(.bool, .{ .bool = v.* }),
+            .int => return borrowed(.int, .{ .int = canonicalInt(T, v.*) }),
+            .float => return borrowed(.float, .{ .float = @as(f64, @floatCast(v.*)) }),
+            .@"enum" => |info| return borrowed(.int, .{
+                .int = canonicalInt(info.tag_type, @backingInt(v.*)),
+            }),
+            .@"struct" => |info| {
+                const Backing = info.backing_integer orelse
+                    @compileError("Variant.wrap does not support type: " ++ @typeName(T));
+                const bits: Backing = @bitCast(v.*);
+                return borrowed(.int, .{ .int = canonicalInt(Backing, bits) });
+            },
+            else => @compileError("Variant.wrap does not support type: " ++ @typeName(T)),
         },
     }
 }
 
-// @section_end artifact fromPtr
+/// Assembles a borrowed Variant from a tag and its inline data payload.
+fn borrowed(comptime tag: interface.VariantType, data: Data) Variant {
+    const result: VariantWrapped = .{ .tag = tag, .data = data };
+    return result.toVariant();
+}
+
+/// Writes a scalar into the canonical Variant payload: integers, enums and
+/// packed bitfields share the `i64` payload, unsigned 64-bit values bit-cast
+/// because the payload bits are identical.
+fn canonicalInt(comptime T: type, value: T) i64 {
+    const info = @typeInfo(T);
+    if (info != .int) @compileError("canonicalInt expects an integer type, found: " ++ @typeName(T));
+    if (info.int.bits == 64 and info.int.signedness == .unsigned) return @bitCast(value);
+    return @intCast(value);
+}
+
+/// True for builtins whose Variant payload is an engine-managed copy-on-write
+/// reference instead of inline data.
+fn isPackedArray(comptime T: type) bool {
+    inline for (.{
+        PackedByteArray,
+        PackedColorArray,
+        PackedFloat32Array,
+        PackedFloat64Array,
+        PackedInt32Array,
+        PackedInt64Array,
+        PackedStringArray,
+        PackedVector2Array,
+        PackedVector3Array,
+        PackedVector4Array,
+    }) |Packed| {
+        if (T == Packed) return true;
+    }
+    return false;
+}
+
+// @section_end artifact wrap
 // @section artifact nil
-pub fn nil() Variant {
+/// Precomputed nil Variant value. It owns no engine-managed references; copy it
+/// when a separate value is needed.
+pub const nil: Variant = blk: {
     const wrapped: VariantWrapped = .{
         .tag = .nil,
         .data = .{ .nil = {} },
     };
-    return wrapped.toVariant();
-}
+    break :blk wrapped.toVariant();
+};
 
 // @section_end artifact nil
 // @section artifact asInt
@@ -175,12 +227,6 @@ pub fn asCallable(self: Variant) Callable {
 }
 
 // @section_end artifact asCallable
-// @section artifact asObject
-pub fn asObject(self: Variant) *classes.core.Object {
-    const wrapped: VariantWrapped = @as(*const VariantWrapped, @ptrCast(&self)).*;
-    return wrapped.data.object.object;
-}
-// @section_end artifact asObject
 
 // @section file
 const classes = @import("../classes/classes.zig");

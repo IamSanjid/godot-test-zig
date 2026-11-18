@@ -202,19 +202,19 @@ pub const ClassResolver = struct {
         const to_api = to.class.api_type;
         const to_file = try names.snake(arena, to.class.name);
 
-        if (from_api == null and to_api == null) {
-            return std.fmt.allocPrint(arena, "{s}.zig", .{to_file});
-        }
-        if (from_api != null and to_api != null and std.mem.eql(u8, from_api.?, to_api.?)) {
-            return std.fmt.allocPrint(arena, "{s}.zig", .{to_file});
-        }
-        if (from_api != null and to_api == null) {
+        if (from_api) |from_api_path| {
+            if (to_api) |to_api_path| {
+                if (std.mem.eql(u8, from_api_path, to_api_path)) {
+                    return std.fmt.allocPrint(arena, "{s}.zig", .{to_file});
+                }
+                return std.fmt.allocPrint(arena, "../{s}/{s}.zig", .{ to_api_path, to_file });
+            }
             return std.fmt.allocPrint(arena, "../{s}.zig", .{to_file});
         }
-        if (from_api == null and to_api != null) {
-            return std.fmt.allocPrint(arena, "{s}/{s}.zig", .{ to_api.?, to_file });
+        if (to_api) |to_api_path| {
+            return std.fmt.allocPrint(arena, "{s}/{s}.zig", .{ to_api_path, to_file });
         }
-        return std.fmt.allocPrint(arena, "../{s}/{s}.zig", .{ to_api.?, to_file });
+        return std.fmt.allocPrint(arena, "{s}.zig", .{to_file});
     }
 
     pub fn rootPrefix(self: ClassResolver, arena: Allocator, info: *const Info) ![]const u8 {
@@ -466,16 +466,13 @@ fn inferEnumReference(
         else
             std.mem.indexOf(u8, sentence, clean_marker);
 
-        const param_index = if (raw_index == null)
-            clean_index orelse continue
-        else if (clean_index == null or raw_index.? <= clean_index.?)
-            raw_index.?
-        else
-            clean_index.?;
-        const marker_len = if (raw_index != null and param_index == raw_index.?)
-            marker.len
-        else
-            clean_marker.len;
+        const param_index = blk: {
+            const raw = raw_index orelse break :blk clean_index orelse continue;
+            const clean = clean_index orelse break :blk raw;
+            break :blk if (raw <= clean) raw else clean;
+        };
+        const uses_raw_marker = if (raw_index) |raw| param_index == raw else false;
+        const marker_len = if (uses_raw_marker) marker.len else clean_marker.len;
 
         const after_param = sentence[param_index + marker_len ..];
         const enum_index = std.mem.indexOf(u8, after_param, "[enum ") orelse continue;

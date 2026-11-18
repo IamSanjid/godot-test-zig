@@ -44,7 +44,7 @@ pub fn deinit(self: *Registry) void {
 }
 
 /// `data.create_allocator` owner must out-live each class's "init"/"create" function call.
-/// If a namespace is provided only the first level of public struct decleration is checked.
+/// If a namespace is provided only the first level of public struct declarations is checked.
 ///
 /// All classes in one call share `class_options` and one heap-stored
 /// `AddClassData`. Use another call for a group with different options,
@@ -73,41 +73,37 @@ pub fn addClasses(
             .{ i, @typeName(Class) },
         ));
 
-        const is_engine_class = comptime reflect.isEngineClass(Class);
-        // A zero-field struct can be a valid extension class. Only a struct without
-        // an engine base is a namespace.
-        const is_likely_namespace = comptime reflect.isLikelyNamespace(Class) and !@hasDecl(Class, "Extends");
-        if (!is_likely_namespace and !is_engine_class) {
-            @compileError("'" ++ @typeName(Class) ++ "' does not an Extend an Engine class type.");
-        }
-
-        if (is_engine_class) {
+        // Extension classes are checked first. `isLikelyNamespace` is only a
+        // shape check (zero-field struct), so a valid zero-field extension class
+        // stays an extension class; only the remaining shape is a namespace.
+        if (comptime reflect.isExtensionClass(Class)) {
             try self.addClass(Class, Class.Extends, class_options, p_data);
-        } else if (is_likely_namespace) {
+        } else if (comptime reflect.isLikelyNamespace(Class)) {
             try self.addClassesFromNamespace(Class, class_options, p_data);
+        } else {
+            @compileError("'" ++ @typeName(Class) ++ "' must be an extension class (a struct declaring `Extends`) or a namespace struct of extension classes.");
         }
     }
 }
 
-// addClasses is enough.
+// Namespace form: expand one level of public extension-class declarations.
 fn addClassesFromNamespace(
     self: *Registry,
     comptime T: type,
     comptime class_options: ClassOptions,
     data: *AddClassData,
 ) !void {
-    const type_info = @typeInfo(T);
-    if (type_info != .@"struct") @compileError("'" ++ @typeName(T) ++ "' is not a valid namespace.");
-    const struct_info = type_info.@"struct";
+    // `addClasses` only calls this for a type `reflect.isLikelyNamespace`
+    // accepted, which already guarantees a zero-field struct.
+    const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.decl_names) |decl_name| {
         const Decl = @field(T, decl_name);
-        if (comptime @TypeOf(Decl) == type and reflect.isEngineClass(Decl)) {
+        if (comptime @TypeOf(Decl) == type and reflect.isExtensionClass(Decl)) {
             try self.addClass(Decl, Decl.Extends, class_options, data);
         }
     }
 }
 
-// addClasses is enough.
 fn addClass(
     self: *Registry,
     comptime T: type,
@@ -116,6 +112,10 @@ fn addClass(
     data: *AddClassData,
 ) !void {
     const c_class_name = comptime reflect.className(T);
+    if (comptime reflect.isExtensionClass(Base)) {
+        @compileError("Cannot register '" ++ @typeName(T) ++ "': Godot 4 does not support inheriting from another extension class ('" ++
+            @typeName(Base) ++ "'). Use an engine class as the direct parent.");
+    }
     const entry = try self.class_names.getOrPut(self.arena.allocator(), c_class_name);
     if (entry.found_existing) {
         std.log.err("'{s}' Class name is already in the registry.", .{c_class_name});

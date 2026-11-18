@@ -252,7 +252,7 @@ Nested sections are bindgen-only and rejected by codegen.
 
 Templates use the same section grammar, with a file-level target directive.
 Codegen supports both `replace` and `artifact`; bindgen supports `artifact`
-only.
+plus class `replace` sections only.
 
 ```zig
 // @templates_for Node:derived, Control, Button

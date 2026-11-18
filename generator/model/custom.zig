@@ -106,14 +106,14 @@ pub fn parse(arena: Allocator, raw: []const u8) !Sections {
 
         if (std.mem.startsWith(u8, trimmed, "// @section_end")) {
             const spec = std.mem.trim(u8, trimmed["// @section_end".len..], " ");
-            if (active == null) return error.UnexpectedSectionEnd;
+            const current = active orelse return error.UnexpectedSectionEnd;
             const end = try parseHeader(spec);
-            if (end.placement != active.? or !std.mem.eql(u8, end.name, active_name)) {
+            if (end.placement != current or !std.mem.eql(u8, end.name, active_name)) {
                 return error.MismatchedSectionEnd;
             }
             if (section_count == sections.len) return error.TooManyCustomSections;
             sections[section_count] = .{
-                .placement = active.?,
+                .placement = current,
                 .name = try arena.dupe(u8, active_name),
                 .emit_child = active_emit_child,
                 .code = try arena.dupe(u8, active_aw.writer.buffered()),

@@ -33,11 +33,38 @@ pub fn writeApiType(writer: *Io.Writer, raw: []const u8, real_name: []const u8) 
     return names.writeRawIdent(writer, raw);
 }
 
-pub fn writeMetaType(writer: *Io.Writer, meta: []const u8, real_name: []const u8) !void {
-    if (std.mem.eql(u8, meta, "float")) return writer.writeAll(real_name);
-    if (std.mem.eql(u8, meta, "int32")) return writer.writeAll("i32");
-    if (std.mem.eql(u8, meta, "int64")) return writer.writeAll("i64");
-    if (std.mem.eql(u8, meta, "bool")) return writer.writeAll("bool");
+/// Writes primitive builtin-member types from their C++ `meta` spelling.
+///
+/// The selected `builtin_class_member_offsets` configuration spells `real_t`
+/// members as `float` or `double`, and fixed C++ `float` members (notably
+/// `Color`) stay `float` in every configuration. The `meta` value is therefore
+/// already the authoritative C++ type: `float` -> `f32`, `double` -> `f64`.
+pub fn writeMetaPrimitive(writer: *Io.Writer, meta: []const u8) !bool {
+    if (std.mem.eql(u8, meta, "float")) {
+        try writer.writeAll("f32");
+        return true;
+    }
+    if (std.mem.eql(u8, meta, "double")) {
+        try writer.writeAll("f64");
+        return true;
+    }
+    if (std.mem.eql(u8, meta, "int32")) {
+        try writer.writeAll("i32");
+        return true;
+    }
+    if (std.mem.eql(u8, meta, "int64")) {
+        try writer.writeAll("i64");
+        return true;
+    }
+    if (std.mem.eql(u8, meta, "bool")) {
+        try writer.writeAll("bool");
+        return true;
+    }
+    return false;
+}
+
+pub fn writeMetaType(writer: *Io.Writer, meta: []const u8) !void {
+    if (try writeMetaPrimitive(writer, meta)) return;
     return names.writeRawIdent(writer, meta);
 }
 
@@ -46,6 +73,20 @@ const Io = std.Io;
 
 const names = @import("names.zig");
 const api_options = @import("api_options.zig");
+
+test "builtin member meta precision" {
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+
+    try std.testing.expect(try writeMetaPrimitive(&aw.writer, "float"));
+    try std.testing.expectEqualStrings("f32", aw.writer.buffered());
+    try std.testing.expect(try writeMetaPrimitive(&aw.writer, "double"));
+    try std.testing.expectEqualStrings("f32f64", aw.writer.buffered());
+    try std.testing.expect(try writeMetaPrimitive(&aw.writer, "int32"));
+    try std.testing.expect(try writeMetaPrimitive(&aw.writer, "int64"));
+    try std.testing.expect(try writeMetaPrimitive(&aw.writer, "bool"));
+    try std.testing.expect(!try writeMetaPrimitive(&aw.writer, "Vector3"));
+}
 
 test {
     _ = @import("abi.zig");

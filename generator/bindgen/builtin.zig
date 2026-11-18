@@ -276,6 +276,7 @@ fn writeStruct(
     pointer_align: usize,
 ) !void {
     _ = api;
+    _ = real_name;
     try writer.print("pub const {s} = extern struct {{\n", .{class.name});
     try names.writeGodotClassName(writer, class.name);
 
@@ -287,7 +288,7 @@ fn writeStruct(
             try writer.writeAll("    ");
             try names.writeRawIdent(writer, member.member);
             try writer.writeAll(": ");
-            try types.writeMetaType(writer, member.meta, real_name);
+            try types.writeMetaType(writer, member.meta);
             try writer.writeAll(",\n");
         }
     } else {
@@ -379,7 +380,7 @@ fn writeVarargMethod(
     try writer.writeAll(" {\n");
 
     if (!method.is_static) {
-        try writer.writeAll("    var self_variant = Variant.fromPtr(dispatcher, ");
+        try writer.writeAll("    var self_variant = Variant.wrap(dispatcher, ");
         try writer.writeAll(class.name);
         try writer.writeAll(", ");
         try writer.writeAll("self");
@@ -389,7 +390,7 @@ fn writeVarargMethod(
     if (fixed_count != 0) {
         try writer.print("    var fixed: [{d}]Variant = undefined;\n", .{fixed_count});
         for (method.arguments, 0..) |argument, index| {
-            try writer.print("    fixed[{d}] = Variant.fromPtr(dispatcher, @TypeOf(", .{index});
+            try writer.print("    fixed[{d}] = Variant.wrap(dispatcher, @TypeOf(", .{index});
             try names.writeArgName(writer, argument.name, 0);
             try writer.writeAll("), &");
             try names.writeArgName(writer, argument.name, 0);
@@ -410,7 +411,7 @@ fn writeVarargMethod(
 
     const returns_void = std.mem.eql(u8, method.return_type, "void") or std.mem.eql(u8, method.return_type, "Nil");
     if (!returns_void) {
-        try writer.writeAll("    var result: Variant = Variant.nil();\n");
+        try writer.writeAll("    var result: Variant = Variant.nil;\n");
     }
     try writer.writeAll("    var err: interface.CallError = undefined;\n");
     try writer.writeAll("    var method_name = StringName.fromComptimeLatin1(dispatcher, \"");

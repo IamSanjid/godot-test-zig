@@ -98,7 +98,9 @@ pub fn OnReadyCall(comptime T: type, comptime p_func: anytype, comptime args: an
 
     const FuncT = @TypeOf(func);
     const fn_info = @typeInfo(FuncT).@"fn";
-    if (fn_info.return_type == null or fn_info.return_type != ValueT)
+    const ReturnT = fn_info.return_type orelse
+        @compileError("The .func doesn't return the type: " ++ @typeName(ValueT));
+    if (ReturnT != ValueT)
         @compileError("The .func doesn't return the type: " ++ @typeName(ValueT));
     if (fn_info.param_types.len != args.len)
         @compileError(std.fmt.comptimePrint(
@@ -220,10 +222,9 @@ pub fn findOnReadyFieldNames(comptime T: type) []const [:0]const u8 {
                 const is_self_type_info = @typeInfo(@TypeOf(isSelf));
                 if (is_self_type_info != .@"fn") continue;
                 const fn_info = is_self_type_info.@"fn";
-                if (fn_info.return_type == null or
-                    fn_info.param_types.len == 0 or
-                    fn_info.param_types[0] == null) continue;
-                if (fn_info.param_types[0].? != type) continue;
+                if (fn_info.param_types.len == 0) continue;
+                const self_param = fn_info.param_types[0] orelse continue;
+                if (self_param != type) continue;
                 if (!isSelf(F)) continue;
                 names[n] = name;
                 n += 1;
@@ -235,10 +236,6 @@ pub fn findOnReadyFieldNames(comptime T: type) []const [:0]const u8 {
 }
 
 const std = @import("std");
-
-const SafeGuard = @import("internal/safe_guard.zig");
-const annot_base = @import("base.zig");
-const findBaseFieldName = annot_base.findBaseFieldName;
 
 const reflect = @import("../reflect/reflect.zig");
 const classes = @import("../classes/classes.zig");

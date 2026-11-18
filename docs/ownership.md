@@ -65,7 +65,10 @@ the Variant must be copied with the appropriate engine copy/duplicate operation.
 Variant returns are moved into `r_ret`. The user must construct an owned
 Variant. Returning an argument Variant directly is unsafe without cloning.
 
-A future Variant helper can expose `clone`/`duplicate` and `deinit` explicitly.
+Variant ownership and conversion are documented in
+[variants.md](variants.md). In short: `wrap` is borrowed, `init` is owning,
+`as` has typed extraction ownership rules, and `clone`/`deinit` manage owning
+Variants.
 
 ## Builtins and codegen types
 

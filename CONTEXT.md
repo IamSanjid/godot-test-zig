@@ -50,11 +50,14 @@ src/godot/                hand-written runtime layer
   godot.zig               public facade imported as `godot`
   abi.zig                 canonical ptrcall slot/read/write helpers
   heap.zig                engine-backed allocator
-  reflect/                type, inheritance, and function helpers
+  reflect/                type, hierarchy, object, and function helpers
     reflect.zig
+    hierarchy.zig
     meta.zig
     functions.zig
-    inheritance.zig
+    base.zig
+    objects.zig
+    extension.zig
     defaults.zig
   annotations/            opt-in markers
     annotations.zig
@@ -63,6 +66,7 @@ src/godot/                hand-written runtime layer
     init_callback.zig
     deinit_callback.zig
     notification_callback.zig
+    override.zig
     internal/safe_guard.zig
   registration/           optional lifecycle and virtual registration
     Registry.zig
@@ -71,7 +75,7 @@ src/godot/                hand-written runtime layer
     create_instance.zig
     notification.zig
     virtuals.zig
-  bindings/               bindgen output (generated, not committed)
+  bindings/               bindgen output + hand-written bindings.zig module root
   classes/                codegen class output (generated)
   builtins/               hand-written and generated builtins
   utility/                generated utility wrappers
@@ -132,11 +136,17 @@ godot.classes.core.Node
 godot.builtins.Variant
 godot.utility.general
 
-godot.reflect.isEngineClass(T)
+godot.reflect.isExtensionClass(T)
+godot.reflect.objectTarget(T)
+godot.reflect.EngineBaseType(T)
 godot.reflect.initFieldsDefault(T, child)
 
 godot.abi.readArgument(T, ptr)
 godot.abi.writeReturn(T, ptr, value)
+
+godot.builtins.Variant.wrap(T, value)
+godot.builtins.Variant.init(T, value)
+godot.builtins.Variant.as(T)
 
 godot.annotations.OnReady(...)
 godot.annotations.Base(Extends)
@@ -196,3 +206,5 @@ implicit side effect of registering a class.
 4. [docs/annotations.md](docs/annotations.md) — opt-in marker behavior.
 5. [docs/virtuals.md](docs/virtuals.md) — virtual metadata and ABI callbacks.
 6. [docs/ownership.md](docs/ownership.md) — borrowed arguments, returned ownership, Variant and RefCounted rules.
+7. [docs/variants.md](docs/variants.md) — `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
+8. [docs/properties.md](docs/properties.md) — planned `Property` field schema, usage flags, accessors, and Variant prerequisite.

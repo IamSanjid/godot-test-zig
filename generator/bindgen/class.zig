@@ -241,6 +241,7 @@ fn loadClassCustom(
         .imports = own.imports,
         .structs = try arena.dupe(custom_code.StructSection, structs[0..count]),
         .methods = own.methods,
+        .replacements = own.replacements,
     };
 }
 
@@ -313,20 +314,39 @@ fn emitClass(
 
     var emitted_names: [4096][]const u8 = undefined;
     var emitted_count: usize = 0;
+    var replacement_used: [64]bool = @splat(false);
 
     try writeVirtualStruct(writer, arena, resolver, info, real_name, sections, &imports);
 
     for (class.methods) |*method| {
         if (method.is_virtual) {
             if (!method.is_required) {
-                try writeOwnMethod(writer, arena, resolver, class, method, real_name, sections, resolver.virtualName(info, method.name), &imports);
+                const generated_name = resolver.virtualName(info, method.name);
+                if (try writeCustomReplacement(writer, sections, &replacement_used, generated_name, 4)) {
+                    emitted_names[emitted_count] = method.name;
+                    emitted_count += 1;
+                    continue;
+                }
+                try writeOwnMethod(writer, arena, resolver, class, method, real_name, sections, generated_name, &imports);
                 emitted_names[emitted_count] = method.name;
                 emitted_count += 1;
             }
             continue;
         }
         if (method.is_vararg) {
+            const generated_name = try names.camel(arena, method.name);
+            if (try writeCustomReplacement(writer, sections, &replacement_used, generated_name, 4)) {
+                emitted_names[emitted_count] = method.name;
+                emitted_count += 1;
+                continue;
+            }
             try writeVarargMethod(writer, arena, resolver, class, method, real_name, &imports);
+            emitted_names[emitted_count] = method.name;
+            emitted_count += 1;
+            continue;
+        }
+        const generated_name = try names.camel(arena, method.name);
+        if (try writeCustomReplacement(writer, sections, &replacement_used, generated_name, 4)) {
             emitted_names[emitted_count] = method.name;
             emitted_count += 1;
             continue;
@@ -344,12 +364,24 @@ fn emitClass(
             if (method.is_virtual) {
                 if (method.is_required) continue;
                 if (hasMethodName(emitted_names[0..emitted_count], method.name)) continue;
-                try writeForwardedMethod(writer, arena, resolver, class, base.class, method, real_name, resolver.virtualName(info, method.name), resolver.virtualName(base, method.name), &imports);
+                const generated_name = resolver.virtualName(info, method.name);
+                if (try writeCustomReplacement(writer, sections, &replacement_used, generated_name, 4)) {
+                    emitted_names[emitted_count] = method.name;
+                    emitted_count += 1;
+                    continue;
+                }
+                try writeForwardedMethod(writer, arena, resolver, class, base.class, method, real_name, generated_name, resolver.virtualName(base, method.name), &imports);
                 emitted_names[emitted_count] = method.name;
                 emitted_count += 1;
                 continue;
             }
             if (hasMethodName(emitted_names[0..emitted_count], method.name)) continue;
+            const generated_name = try names.camel(arena, method.name);
+            if (try writeCustomReplacement(writer, sections, &replacement_used, generated_name, 4)) {
+                emitted_names[emitted_count] = method.name;
+                emitted_count += 1;
+                continue;
+            }
             if (method.is_vararg) {
                 try writeForwardedVarargMethod(writer, arena, resolver, class, base.class, method, real_name, &imports);
             } else {
@@ -361,6 +393,12 @@ fn emitClass(
         base_info = resolver.baseInfo(base);
     }
 
+    for (sections.replacements, 0..) |section, index| {
+        if (!replacement_used[index]) {
+            std.log.err("Unknown custom class replacement `{s}` in {s}", .{ section.name, class.name });
+            return error.UnknownCustomReplacement;
+        }
+    }
     try custom_code.writeIndented(writer, sections.codeForStruct(class.name), 4);
     var template_names: [64][]const u8 = undefined;
     var template_count: usize = 0;
@@ -399,6 +437,18 @@ fn emitClass(
     try writeImports(writer, arena, resolver, info, &imports);
 }
 
+fn writeCustomReplacement(
+    writer: *Io.Writer,
+    sections: custom_code.Sections,
+    replacement_used: *[64]bool,
+    generated_name: []const u8,
+    indent: usize,
+) !bool {
+    const index = sections.replacementIndex(generated_name) orelse return false;
+    replacement_used[index] = true;
+    try custom_code.writeIndented(writer, sections.replacements[index].code, indent);
+    return true;
+}
 fn isSingleton(api: ExtensionApiJson, name: []const u8) bool {
     for (api.singletons) |singleton| {
         if (std.mem.eql(u8, singleton.type, name)) return true;
@@ -911,16 +961,22 @@ fn writeVarargMethod(
             const resolved = try resolver.resolve(argument.type, .argument);
             try writer.print("        fixed[{d}] = ", .{index});
             if (resolved.kind == .class_ptr) {
-                try writer.writeAll("builtins.Variant.fromPtr(dispatcher, @TypeOf(");
-                try names.writeArgName(writer, argument.name, 0);
-                try writer.writeAll(".*), ");
+                // `@TypeOf(arg.*)` would load an opaque class type. Use the
+                // resolved class type instead; argument class pointers are `*C`.
+                if (!std.mem.startsWith(u8, resolved.zig, "*")) {
+                    std.log.err("Vararg class argument `{s}` has unexpected type `{s}`", .{ argument.name, resolved.zig });
+                    return error.UnsupportedVarargClassArgument;
+                }
+                try writer.writeAll("builtins.Variant.wrap(dispatcher, ");
+                try writer.writeAll(resolved.zig[1..]);
+                try writer.writeAll(", ");
                 try names.writeArgName(writer, argument.name, 0);
                 try writer.writeAll(");\n");
             } else if (resolved.kind == .variant) {
                 try names.writeArgName(writer, argument.name, 0);
                 try writer.writeAll(";\n");
             } else {
-                try writer.writeAll("builtins.Variant.fromPtr(dispatcher, @TypeOf(");
+                try writer.writeAll("builtins.Variant.wrap(dispatcher, @TypeOf(");
                 try names.writeArgName(writer, argument.name, 0);
                 try writer.writeAll("), &");
                 try names.writeArgName(writer, argument.name, 0);
@@ -945,7 +1001,7 @@ fn writeVarargMethod(
     if (resolved_return.kind == .void) {
         result_is_void = true;
     } else {
-        try writer.writeAll("        var result: builtins.Variant = builtins.Variant.nil();\n");
+        try writer.writeAll("        var result: builtins.Variant = builtins.Variant.nil;\n");
         try writer.writeAll("        var err: interface.CallError = undefined;\n");
     }
 

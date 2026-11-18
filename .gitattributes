@@ -1,0 +1,43 @@
+# Normalize text files in the repository to LF so checkouts are identical on
+# Linux, macOS, Android, and Windows. Editors on Windows handle LF fine; only
+# files that genuinely require CRLF should override this.
+* text=auto eol=lf
+
+# Windows command scripts need CRLF when executed by legacy cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets must never be normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.bmp binary
+*.tga binary
+*.exr binary
+*.hdr binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.flac binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.tar binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.exe binary
+*.pdb binary
+*.wasm binary
+*.glb binary
+*.gltf binary
+*.res binary

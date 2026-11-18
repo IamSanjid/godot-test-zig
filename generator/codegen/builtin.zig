@@ -211,6 +211,7 @@ fn writeStruct(
     resolver: *const ClassResolver,
     options: Options,
 ) !void {
+    _ = real_name;
     try writer.writeAll("pub const ");
     try names.writeRawIdent(writer, class.name);
     try writer.writeAll(" = extern struct {\n");
@@ -224,8 +225,8 @@ fn writeStruct(
             try writer.writeAll("    ");
             try names.writeRawIdent(writer, member.member);
             try writer.writeAll(": ");
-            try writeMetaType(writer, resolver, imports, member.meta, real_name, class.name);
-            try writeMemberInitializer(writer, options.api.member_initialization, resolver, imports, member.meta, real_name, class.name);
+            try writeMetaType(writer, resolver, imports, member.meta, class.name);
+            try writeMemberInitializer(writer, options.api.member_initialization, resolver, imports, member.meta, class.name);
             try writer.writeAll(",\n");
         }
     } else if (expected_size) |size| {
@@ -242,7 +243,6 @@ fn writeMemberInitializer(
     resolver: *const ClassResolver,
     imports: *ImportSet,
     raw: []const u8,
-    real_name: []const u8,
     self_name: []const u8,
 ) !void {
     switch (initialization) {
@@ -250,7 +250,7 @@ fn writeMemberInitializer(
         .undefined => try writer.writeAll(" = undefined"),
         .zero => {
             try writer.writeAll(" = std.mem.zeroes(");
-            try writeMetaType(writer, resolver, imports, raw, real_name, self_name);
+            try writeMetaType(writer, resolver, imports, raw, self_name);
             try writer.writeAll(")");
         },
     }
@@ -261,13 +261,9 @@ fn writeMetaType(
     resolver: *const ClassResolver,
     imports: *ImportSet,
     meta: []const u8,
-    real_name: []const u8,
     self_name: []const u8,
 ) !void {
-    if (std.mem.eql(u8, meta, "float")) return writer.writeAll(real_name);
-    if (std.mem.eql(u8, meta, "int32")) return writer.writeAll("i32");
-    if (std.mem.eql(u8, meta, "int64")) return writer.writeAll("i64");
-    if (std.mem.eql(u8, meta, "bool")) return writer.writeAll("bool");
+    if (try types.writeMetaPrimitive(writer, meta)) return;
     return writeType(writer, resolver, imports, meta, .argument, self_name, false);
 }
 

@@ -6,7 +6,7 @@
 /// Besides `self`, `foo` may take a std.mem.Allocator (the one used to create it),
 /// a *Base pointer, or both, in any order (each at most once).
 pub fn InitCallback(comptime T: type, comptime method: anytype) type {
-    if (!reflect.isEngineClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an Engine class type.");
+    if (!reflect.isExtensionClass(T)) @compileError("'" ++ @typeName(T) ++ "' is not an extension class type.");
 
     const MethodT = @TypeOf(method);
     const type_info = @typeInfo(MethodT);
@@ -93,9 +93,7 @@ pub fn callInitCallback(
     base: *B,
     allocator: std.mem.Allocator,
 ) !void {
-    const MarkerOpt = comptime findInitCallback(T);
-    if (MarkerOpt == null) return;
-    const Marker = MarkerOpt.?;
+    const Marker = findInitCallback(T) orelse return;
     comptime if (B != Marker.TExtends)
         @compileError("Base type mismatch: expected '" ++ @typeName(Marker.TExtends) ++
             "', got '" ++ @typeName(B) ++ "'.");

@@ -63,9 +63,15 @@ pub fn isNormalFunction(comptime function: anytype) bool {
 }
 
 /// True for `?*T` and `?*const T` pointer optionals.
+///
+/// Only single-item pointer optionals qualify: optional many-pointers
+/// (`?[*]T`, `?[*:0]T`) and optional slices (`?[]T`) are not pointer optionals.
 pub fn isOptionalPointer(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        .optional => |info| @typeInfo(info.child) == .pointer,
+        .optional => |info| switch (@typeInfo(info.child)) {
+            .pointer => |pointer| pointer.size == .one,
+            else => false,
+        },
         else => false,
     };
 }
@@ -92,6 +98,19 @@ pub fn FnReturnType(comptime f: anytype) ?type {
     const info = if (F == type) @typeInfo(f) else @typeInfo(F);
     if (info != .@"fn") @compileError("Expected a fn but found: " ++ @typeName(@TypeOf(f)));
     return info.@"fn".return_type;
+}
+
+test "isOptionalPointer accepts single-item pointer optionals only" {
+    try std.testing.expect(isOptionalPointer(?*u32));
+    try std.testing.expect(isOptionalPointer(?*const u32));
+    try std.testing.expect(isOptionalPointer(?*anyopaque));
+    try std.testing.expect(!isOptionalPointer(*u32));
+    try std.testing.expect(!isOptionalPointer(*const u32));
+    try std.testing.expect(!isOptionalPointer(u32));
+    try std.testing.expect(!isOptionalPointer(?u32));
+    try std.testing.expect(!isOptionalPointer(?[*]u32));
+    try std.testing.expect(!isOptionalPointer(?[*:0]u32));
+    try std.testing.expect(!isOptionalPointer(?[]u32));
 }
 
 const std = @import("std");
