@@ -165,7 +165,7 @@ fn writeIndent(writer: *Io.Writer, indent: usize) !void {
     for (0..indent) |_| try writer.writeByte(' ');
 }
 
-fn isDuplicate(values: []const ExtensionApiJson.GlobalEnumValue, index: usize) bool {
+fn isDuplicate(values: []const ExtensionApiJson.GlobalEnumMember, index: usize) bool {
     for (values[0..index]) |previous| {
         if (previous.value == values[index].value) return true;
     }
@@ -177,7 +177,7 @@ test "bitfield selects a backing integer wide enough for its values" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const values = [_]ExtensionApiJson.GlobalEnumValue{
+    const values = [_]ExtensionApiJson.GlobalEnumMember{
         .{ .name = "FLAG_LOW", .value = 1 },
         .{ .name = "FLAG_HIGH", .value = 1 << 35 },
         .{ .name = "MASK", .value = 7 },
@@ -202,7 +202,7 @@ test "extension code is inserted before the closing brace" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const values = [_]ExtensionApiJson.GlobalEnumValue{
+    const values = [_]ExtensionApiJson.GlobalEnumMember{
         .{ .name = "FLAG_A", .value = 1 },
         .{ .name = "FLAG_B", .value = 2 },
     };
@@ -232,11 +232,11 @@ test "extension code is inserted before the closing brace" {
 }
 
 const std = @import("std");
+const naming = @import("naming");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
 const names = @import("names.zig");
-const naming = @import("naming");
 const docs = @import("docs.zig");
 const custom = @import("custom.zig");
 const enum_utils = @import("enum_utils.zig");

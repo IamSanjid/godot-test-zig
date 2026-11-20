@@ -63,18 +63,22 @@ src/godot/                hand-written runtime layer
     annotations.zig
     base.zig
     on_ready.zig
+    property.zig
+    init.zig
+    marker.zig
     init_callback.zig
     deinit_callback.zig
     notification_callback.zig
     override.zig
-    internal/safe_guard.zig
-  registration/           optional lifecycle and virtual registration
+    internal/SafeGuard.zig
+  registration/           optional lifecycle, virtual, and property registration
     Registry.zig
-    AddClassData.zig
+    ClassRegistration.zig
     instance.zig
     create_instance.zig
     notification.zig
     virtuals.zig
+    property.zig
   bindings/               bindgen output + hand-written bindings.zig module root
   classes/                codegen class output (generated)
   builtins/               hand-written and generated builtins
@@ -87,9 +91,11 @@ src/godot/                hand-written runtime layer
 ```
 
 `reflect` contains hand-written reflection helpers. `annotations` contains
-opt-in markers. `registration` contains optional lifecycle and virtual dispatch.
+opt-in markers. `registration` contains optional lifecycle, virtual dispatch, and
+property registration.
 `initFieldsDefault` belongs to `reflect/defaults.zig`; annotation field setup
-belongs to `annotations.initAnnotFieldsDefault`.
+belongs to `annotations.initAnnotFieldsDefault`. Property `.init` values are
+creation-time initializers run by `annotations.initPropertyFields`.
 
 ## Bootstrap
 
@@ -147,14 +153,25 @@ godot.abi.writeReturn(T, ptr, value)
 godot.builtins.Variant.wrap(T, value)
 godot.builtins.Variant.init(T, value)
 godot.builtins.Variant.as(T)
+godot.builtins.Variant.objectInstance()
+godot.builtins.Variant.isNullObject()
+godot.builtins.Variant.typeFor(T)
 
 godot.annotations.OnReady(...)
+godot.annotations.Property(T, .{ .usage = ..., .read_only = true, .type = .object })
+godot.enums.PropertyUsageFlags.exported
+godot.annotations.Init(T, func, args)
+godot.annotations.Property(T, options).Init(func, args)
+godot.annotations.initPropertyFields(T, Base, owner, base)
+godot.annotations.descriptors(T)
+godot.annotations.deinitPropertyFields(T, instance)
 godot.annotations.Base(Extends)
 godot.annotations.Override("_get_cursor_shape", fn)
 
 godot.registration.Registry
+godot.Registry
 godot.registration.ClassOptions
-godot.registration.AddClassData
+godot.registration.ClassRegistration
 godot.registration.virtuals
 ```
 
@@ -167,15 +184,28 @@ A registered extension class receives:
 - `notification_func`
 - `get_virtual_func`
 - `is_exposed = true`
+- `set_func` / `get_func` when the class declares at least one
+  `annotations.Property` field
+- `get_property_list_func` / `free_property_list_func` when at least one
+  property has non-zero usage
 
 Extension instance creation uses `classdb_construct_object3` (no implicit
 post-initialize, RefCounted refcount 1), attaches the Zig instance, then sends
 `NOTIFICATION_POSTINITIALIZE` once when the engine requests it.
 
-Virtual overrides, instance construction/free, and notifications are wired
-automatically. Zig methods, properties, signals, and integer constants are not
-registered for GDScript yet. Adding those surfaces is deliberate work, not an
-implicit side effect of registering a class.
+`Property` options also include read-only dispatch (`.read_only`) and eager
+creation-time values (`.init`, assigned after the `Base` marker and before
+`InitCallback`); neither is `OnReady`-coupled or changes cleanup policy.
+
+Virtual overrides, instance construction/free, notifications, and dynamic
+property callbacks are wired automatically from the markers. Zig methods, static
+ClassDB properties, signals, and integer constants are not registered for
+GDScript yet. Adding those surfaces is deliberate work, not an implicit side
+effect of registering a class. Property lifetime is explicit: the default setter
+manages only known managed builtins and `RefCounted` references, and free-time
+cleanup is opt-in through `ClassOptions.auto_property_cleanup` or a manual
+`annotations.deinitPropertyFields` call. Dynamic `Property` semantics are
+documented in [docs/properties.md](docs/properties.md).
 
 ## Boundaries
 
@@ -188,7 +218,7 @@ implicit side effect of registering a class.
 - Annotations are optional. Missing annotations do not prevent registration.
 - `Registry` is optional; its creation/free/notification/virtual builders are
   usable directly.
-- No forced pooling or creation strategy. `AddClassData.create_allocator` and
+- No forced pooling or creation strategy. `ClassRegistration.create_allocator` and
   `gpa` are inputs, not policy.
 - No per-virtual user wrappers. User classes declare normal Zig methods matching
   the generated virtual signature.
@@ -200,11 +230,12 @@ implicit side effect of registering a class.
 
 ## Start here
 
-1. [docs/architecture.md](docs/architecture.md) — layer boundaries and file ownership.
-2. [docs/reflect.md](docs/reflect.md) — reflection helpers and field defaults.
-3. [docs/registration.md](docs/registration.md) — class registration, options, lifecycle.
-4. [docs/annotations.md](docs/annotations.md) — opt-in marker behavior.
-5. [docs/virtuals.md](docs/virtuals.md) — virtual metadata and ABI callbacks.
-6. [docs/ownership.md](docs/ownership.md) — borrowed arguments, returned ownership, Variant and RefCounted rules.
-7. [docs/variants.md](docs/variants.md) — `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
-8. [docs/properties.md](docs/properties.md) — planned `Property` field schema, usage flags, accessors, and Variant prerequisite.
+1. [docs/architecture.md](docs/architecture.md) - layer boundaries and file ownership.
+2. [docs/reflect.md](docs/reflect.md) - reflection helpers and field defaults.
+3. [docs/registration.md](docs/registration.md) - class registration, options, lifecycle.
+4. [docs/annotations.md](docs/annotations.md) - opt-in marker behavior.
+5. [docs/virtuals.md](docs/virtuals.md) - virtual metadata and ABI callbacks.
+6. [docs/ownership.md](docs/ownership.md) - borrowed arguments, returned ownership, Variant and RefCounted rules.
+7. [docs/variants.md](docs/variants.md) - `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
+8. [docs/properties.md](docs/properties.md) - `Property` field annotation, dynamic registration backend, usage flags, and lifetime cleanup.
+9. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, and established exceptions.

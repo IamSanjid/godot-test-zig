@@ -19,6 +19,7 @@ test {
     _ = @import("model/enum_emit.zig");
     _ = @import("model/builtin_names.zig");
     _ = @import("model/resolver.zig");
+    _ = @import("model/variant_support.zig");
 
     _ = @import("bindgen/Options.zig");
     _ = @import("bindgen/Registry.zig");
@@ -38,6 +39,7 @@ test {
     _ = @import("bindgen/native.zig");
     _ = @import("bindgen/utility.zig");
     _ = @import("bindgen/builtin_catalog.zig");
+    _ = @import("bindgen/traits.zig");
 
     _ = @import("codegen/Options.zig");
     _ = @import("codegen/type_mapping.zig");

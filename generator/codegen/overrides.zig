@@ -12,7 +12,7 @@ pub fn write(
     templates: *const template_mod.Set,
     replacement_used: *[64]bool,
     generated_name: []const u8,
-    context: template_mod.RenderContext,
+    context: template_mod.RenderInputs,
     indent: usize,
 ) !bool {
     if (custom_sections.replacementIndex(generated_name)) |index| {

@@ -162,12 +162,12 @@ are converted to binding Variants before the binding call.
 
 ## Artifacts
 
-- `constants.zig` — global constant values (literal values because the bindings
+- `constants.zig` - global constant values (literal values because the bindings
   aggregate does not currently expose `bindings.constants`)
-- `enums.zig` — aliases to `bindings.enums`, so bindgen enum-body extensions
+- `enums.zig` - aliases to `bindings.enums`, so bindgen enum-body extensions
   (for example `PropertyUsageFlags.exported`) are inherited
-- `native.zig` — aliases to `bindings.native`
-- `singletons.zig` — cached singleton accessors using binding singleton helpers
+- `native.zig` - aliases to `bindings.native`
+- `singletons.zig` - cached singleton accessors using binding singleton helpers
 
 ## Function metadata
 

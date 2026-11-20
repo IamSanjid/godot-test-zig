@@ -1,34 +1,9 @@
-//! Process-wide runtime state and engine lifecycle.
-//!
-//! This module owns the dispatcher, the optional class registry, the engine
-//! initialization/deinitialization callbacks, and the `std_options` log function.
-//! Generated dispatch code imports this file as `runtime`:
-//!
-//! ```zig
-//! const runtime = @import("../../runtime.zig");
-//! runtime.dispatcher();
-//! runtime.dispatch(.some_proc, .{});
-//! runtime.reflect.inheritsFrom(T, Base);
-//! ```
-//!
-//! User code should import the public facade in `godot.zig` instead; the facade
-//! re-exports everything here plus the generated type modules.
-//!
-//! The import graph is intentionally cyclic in narrow places:
-//!
-//! - generated wrappers call `dispatcher()`/`dispatch()`/`reflect` while this
-//!   module owns that process-wide state;
-//! - the hand-written registration callbacks call `dispatch()` while this module
-//!   owns the `Registry` global;
-//! - `heap.zig` dispatches through this module while `richLogFn` allocates with
-//!   the engine allocator from `heap.zig`.
-//!
-//! None of these edges requires comptime information from the other side, so the
-//! cycles are legal and do not change struct layout. See `docs/architecture.md`.
+//! Process-wide dispatcher/registry state and engine lifecycle callbacks.
+//! Generated dispatch code imports this file; user code imports `godot.zig`.
 
-var _dispatcher: DefaultDispatcher = undefined;
+var dispatcher_instance: DefaultDispatcher = undefined;
 var dispatcher_initialized = false;
-var _registry: Registry = undefined;
+var registry_instance: Registry = undefined;
 var registry_initialized = false;
 
 pub fn initializeDispatcher(
@@ -39,24 +14,24 @@ pub fn initializeDispatcher(
     if (dispatcher_initialized) {
         return;
     }
-    _dispatcher = try .init(getProcAddress, p_library, diags);
+    dispatcher_instance = try .init(getProcAddress, p_library, diags);
     dispatcher_initialized = true;
 }
 
 pub fn initializeRegistry(allocator: std.mem.Allocator) void {
     if (registry_initialized) return;
-    _registry = .{ .arena = .init(allocator) };
+    registry_instance = .{ .arena = .init(allocator) };
     registry_initialized = true;
 }
 
 pub inline fn dispatcher() *const DefaultDispatcher {
     assert(dispatcher_initialized);
-    return &_dispatcher;
+    return &dispatcher_instance;
 }
 
 pub inline fn registry() *Registry {
     assert(registry_initialized);
-    return &_registry;
+    return &registry_instance;
 }
 
 pub inline fn dispatch(
@@ -174,6 +149,7 @@ pub fn deinitialize(_: ?*anyopaque, p_level: interface.InitializationLevel) call
 
 const std = @import("std");
 const assert = std.debug.assert;
+pub const is_wasm = @import("builtin").cpu.arch.isWasm();
 
 const bindings = @import("bindings");
 const interface = bindings.interface;
@@ -183,12 +159,10 @@ const build_options = @import("build_options");
 
 pub const reflect = @import("reflect/reflect.zig");
 
-pub const registration = @import("registration/Registry.zig");
-pub const Registry = registration.Registry;
+const registration = @import("registration/registration.zig");
+const Registry = registration.Registry;
 
 const builtins = @import("builtins/builtins.zig");
 const utility = @import("utility/utility.zig");
 
 pub const engine_allocator = @import("heap.zig").engine_allocator;
-
-pub const is_wasm = @import("builtin").cpu.arch.isWasm();

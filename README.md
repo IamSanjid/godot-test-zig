@@ -22,10 +22,19 @@ is forced.
 git submodule update --init
 zig build gen
 zig build
+zig build test-generator
+zig build test-godot
 ```
 
 Generated bindings and codegen output are not committed, so `zig build` requires
-`zig build gen` on a fresh checkout.
+`zig build gen` on a fresh checkout. `test-godot` regenerates the selected
+configuration first, runs the hand-written runtime tests, and forces the
+generated bindings/codegen through semantic analysis.
+
+The builtin layout configuration defaults from the target pointer width:
+`float_32` for 32-bit targets and `float_64` otherwise. Override it with
+`-Dgdext_builtin_build_conf=...`. Cross-target test binaries are compiled and
+semantically analyzed; they run only when the host can execute them.
 
 The example export function is `test_zig_init` in `src/entrypoint.zig`. Point the
 extension's `.gdextension` entry symbol at it. `build.zig` installs the shared
@@ -59,12 +68,15 @@ docs/                     design overview
   layer (`wrap`, `init`, `as`, `clone`, `deinit`).
 - `src/godot/reflect` contains type, hierarchy, and object helpers.
 - `src/godot/annotations` contains opt-in markers.
-- `src/godot/registration` contains optional class lifecycle and virtual
-  registration.
+- `src/godot/registration` contains optional class lifecycle, virtual, and
+  dynamic property registration.
 - `src/godot/godot.zig` is the public facade; user code imports it as `godot`.
 
 A registered class gets construction/free callbacks, notification dispatch, and
-virtual overrides. Methods, properties, signals, and constants are not exposed
-to GDScript yet.
+virtual overrides. Classes that declare `Property` fields also get dynamic
+set/get callbacks, plus property-list callbacks when at least one property is
+visible; static ClassDB methods/properties, signals, and constants are not
+exposed to GDScript yet.
 
-See [CONTEXT.md](CONTEXT.md) and [docs/](docs/).
+See [CONTEXT.md](CONTEXT.md) for the project map, [docs/style.md](docs/style.md)
+for naming and formatting conventions, and [docs/](docs/) for design details.

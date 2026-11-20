@@ -1,7 +1,7 @@
 //! Port of Godot's bundled `ok_color.h` subset used by `Color` OKHSL
-//! conversion. Only the OKHSL ↔ sRGB paths are implemented.
+//! conversion. Only the OKHSL <-> sRGB paths are implemented.
 //!
-//! Original algorithm: Björn Ottosson, public domain / MIT-style header.
+//! Original algorithm: Bjorn Ottosson, public domain / MIT-style header.
 
 pub const Rgb = struct {
     r: f32,

@@ -3,15 +3,36 @@
 Registration is an optional convenience layer. The low-level pieces are usable
 without `Registry`.
 
+## Public surface
+
+The facade exposes the registration layer as a module plus a convenience type:
+
+```zig
+godot.registration.Registry
+godot.registration.ClassOptions
+godot.registration.ClassRegistration
+godot.registration.create_instance
+godot.registration.instance
+godot.registration.notification
+godot.registration.property
+godot.registration.virtuals
+
+godot.Registry // == godot.registration.Registry
+```
+
+Standalone users can import `registration/*.zig` helpers directly; `Registry`
+only adds grouping and lifecycle convenience.
+
 ## Class data vs class options
 
 ```zig
 pub const ClassOptions = struct { // comptime
     auto_onready: bool = false,
+    auto_property_cleanup: bool = false,
     // is_virtual, is_abstract later, once creation modes exist
 };
 
-pub const AddClassData = struct { // runtime, heap-stored per addClasses call
+pub const ClassRegistration = struct { // runtime, heap-stored per addClasses call
     create_allocator: Allocator,
     gpa: ?Allocator = null,
     register_at_level: interface.InitializationLevel = .scene,
@@ -19,11 +40,17 @@ pub const AddClassData = struct { // runtime, heap-stored per addClasses call
 ```
 
 - `ClassOptions` is comptime because it changes generated/runtime callback shape.
-- `AddClassData` is the runtime value stored through `class_userdata`.
+- `ClassRegistration` is the runtime value stored through `class_userdata`.
 - `create_allocator` creates and frees the user instance.
 - `gpa` is passed to `InitCallback` and `DeinitCallback`. If null,
   `create_allocator` is used. `OnReady` initialization receives owner/base, not
   an allocator.
+- `auto_property_cleanup` is compile-time policy and off by default. `Registry`
+  passes it to `FreeInstance(T, Base, auto_property_cleanup)`. When true, the
+  free-instance callback runs `annotations.deinitPropertyFields` on the class's
+  `Property` fields after `DeinitCallback`. Property fields are user-managed
+  without it. Standalone users pass the boolean directly to `FreeInstance`, or
+  call the helper from their own free callback.
 - Different groups can have different allocators and registration levels.
 
 ## Grouped registration
@@ -48,7 +75,7 @@ One class is simply a one-element group:
 registry.addClasses(.{A}, .{}, .{ .create_allocator = allocator });
 ```
 
-`addClasses` allocates one `AddClassData` for the call. All classes in that call
+`addClasses` allocates one `ClassRegistration` for the call. All classes in that call
 share it. Use another call for another group.
 
 The class name is `T.GodotClassName` when present, otherwise the short Zig type
@@ -76,13 +103,15 @@ A user who wants a different registration model can use the builders directly:
 - virtual lookup callback
 
 Then they can call `classdb_register_extension_class6` themselves. No pooling,
-arena, or instance-creation policy is forced by `Registry`.
+arena, or instance-creation policy is forced by `Registry`. For property cleanup,
+pass `true` to `FreeInstance`, or call `annotations.deinitPropertyFields` from
+the free callback directly.
 
 ## Where registration runs
 
 - `godot.init` installs the initialize/deinitialize callbacks and creates the
   process-wide `Registry`.
-- `godot.initialize` registers each class at its `AddClassData.register_at_level`.
+- `godot.initialize` registers each class at its `ClassRegistration.register_at_level`.
 - `godot.deinitialize` unregisters only classes belonging to that level and keeps
   the rest. At the configured minimum level it unregisters any remaining classes,
   frees the registry arena, and marks the registry uninitialized.
@@ -98,21 +127,42 @@ Creation order for a registered class:
    post-initialize; RefCounted already has refcount 1).
 2. Allocate the user instance with `create_allocator`.
 3. Initialize field defaults (`reflect.initFieldsDefault`).
-4. Initialize annotation fields (`annotations.initAnnotFieldsDefault`).
+4. Initialize annotation fields (`annotations.initAnnotFieldsDefault`, the
+   `OnReady` wrappers).
 5. Initialize the `Base` marker field.
-6. Call the optional `InitCallback`.
-7. Set the engine instance binding.
-8. Send post-initialize notification only when `p_notify_postinitialize` is true.
+6. Run eager `Property` `.init` initializers (`annotations.initPropertyFields`).
+7. Call the optional `InitCallback`.
+8. Record the extension pointer and instance binding on the engine base
+   (`setInstance`), only after all Zig-side initialization succeeded.
+9. Send post-initialize notification only when `p_notify_postinitialize` is true.
+
+The `.init` property initializers therefore run after the ordinary defaults,
+`OnReady` wrappers, and `Base` marker are in place, and before user init code, so
+`InitCallback` can rely on every property value already being assigned. They are
+creation-time values, not OnReady: they never wait for scene-tree events, and
+scene-dependent values use custom getters or `OnReady` fields.
+
+If `InitCallback` returns an error, creation fails: the engine base and user
+instance are destroyed without running `DeinitCallback` or property cleanup, even
+when `auto_property_cleanup` is enabled. This includes values already assigned by
+`Property` `.init` initializers, which run before `InitCallback`. Init code must
+release anything it created, including those initialized values, before
+returning the error.
 
 Freeing:
 
 1. Call the optional `DeinitCallback`.
-2. Destroy the user instance with `create_allocator`.
+2. When `FreeInstance` is built with `auto_property_cleanup = true`, call
+   `annotations.deinitPropertyFields(T, instance)`: best-effort per-field cleanup
+   (custom `.deinit` hook, then a value type's `deinit`, then a `RefCounted`
+   reference release).
+3. Destroy the user instance with `create_allocator`.
 
 `reflect.initFieldsDefault` only initializes fields that declare defaults.
 Fields without defaults are the user's responsibility: provide a default,
-initialize them in `InitCallback`, or accept that they are undefined until set.
-The runtime does not force a zero-initialization policy.
+initialize them with a `.init` initializer or in `InitCallback`, or accept that
+they are undefined until set. The runtime does not force a zero-initialization
+policy.
 
 For a class extending `RefCounted`, `construct` returns an object
 with refcount 1, which the engine create-instance contract expects. Do not call
@@ -149,6 +199,28 @@ Auto-OnReady is opt-in. A non-`Node` class that enables it with `OnReady` fields
 is rejected with a compile error, because only `Node` sends the
 `post_enter_tree` notification it waits for. The notification route remains
 available.
+
+## Properties
+
+When a class declares `Property` fields, registration installs the dynamic
+`ClassCreationInfo6` property callbacks: `set_func`/`get_func` always, and
+`get_property_list_func`/`free_property_list_func` only when at least one
+property has non-zero usage. The property list is a lazy per-class static table
+with process lifetime; it is never freed.
+
+Property options also cover read-only dispatch and eager creation-time values:
+`.read_only` keeps the getter but makes `set_func` reject engine sets (it cannot
+be combined with a custom `.set`), and `.init` assigns the value during creation
+(step 6 above). Neither changes lifetime policy: values must still start valid
+and cleanup stays explicit. See [properties.md](properties.md) for the option
+table and initializer rules.
+
+Property values are not cleaned up on free by default: the free-instance callback
+only calls `annotations.deinitPropertyFields` when `auto_property_cleanup` is
+enabled. The default setter manages known managed builtins and `Variant`
+(deinitializes the previous value on overwrite) and `RefCounted` references
+(retain new, release previous); everything else is assigned as-is. Custom accessors are user code. See
+[properties.md](properties.md) for the helper semantics and free order.
 
 ## Namespace detection
 

@@ -1,47 +1,13 @@
-//! Canonical Godot ptrcall marshalling.
-//!
-//! Godot does not transport scalar values at their public Zig width:
-//!
-//! - integers, enums and packed flag structs -> `i64` (or `u64` for 64-bit
-//!   unsigned backing)
-//! - `f32` / `f64` -> `f64`
-//! - `bool` -> `u8`
-//!
-//! Everything else keeps its declared layout and is read/written directly.
-//! This is the same rule for virtual callbacks and any future ptrcall-facing
-//! code. It is type-driven: there is no per-value slot enum or generated slot
-//! metadata. `Box(T)` is the single source of truth for the mapping;
-//! `readArgument` / `writeReturn` are implemented in terms of it.
-//!
-//! `RefCounted` values are the exception: they travel as `Ref<T>` storage and
-//! need `ref_get_object` / `ref_set_object`. That conversion belongs to the
-//! extension-method/virtual layer, not here.
+//! Canonical ptrcall marshalling: ints/enums/bitfields -> `i64` (`u64` for
+//! unsigned 64-bit), floats -> `f64`, bool -> `u8`; other types keep their
+//! layout. `RefCounted` values travel as `Ref<T>`.
 
-/// Canonical slot conversion for `T`.
-///
-/// `Box(T)` answers "how does Godot transport a `T`?" by type alone:
-///
-/// - `Box(T).Raw` is the canonical slot/storage type. Scalars widen to `i64`,
-///   `u64`, `f64` or `u8`; every other type keeps its declared layout, so
-///   `Box(T).Raw == T` for builtins, pointers and optionals.
-/// - `Box(T).canonical` is `true` for scalars (`bool`, integers, floats, enums
-///   and packed bitfields), i.e. exactly when the canonical slot is not the
-///   declared value type.
-/// - `Box(T).widen(value)` converts a public value to its canonical slot value.
-/// - `Box(T).narrow(raw)` converts a canonical slot value back to the public
-///   value.
-///
-/// There is deliberately no slot enum: the Zig type decides everything.
+/// Canonical slot conversion for `T`: `Raw`, `canonical`, `widen`, `narrow`.
 pub fn Box(comptime T: type) type {
     return struct {
-        /// Canonical slot/storage type.
         pub const Raw = RawType(T);
-
-        /// Whether `T` travels at a canonical scalar width instead of its
-        /// declared layout.
         pub const canonical = isCanonical(T);
 
-        /// Converts the public value to its canonical slot/storage form.
         pub fn widen(value: T) Raw {
             switch (@typeInfo(T)) {
                 .bool => return @intFromBool(value),
@@ -59,7 +25,6 @@ pub fn Box(comptime T: type) type {
             }
         }
 
-        /// Converts a canonical slot/storage value back to `T`.
         pub fn narrow(raw: Raw) T {
             switch (@typeInfo(T)) {
                 .bool => return raw != 0,
@@ -175,7 +140,7 @@ test "enum and bitfield slots are int64" {
 
     const Flags = bitpack struct(u32) {
         first: bool = false,
-        _pad0: u31 = 0,
+        padding0: u31 = 0,
     };
     const flags: Flags = .{ .first = true };
     var flags_slot: i64 = 0;
@@ -231,7 +196,7 @@ test "Box widens and narrows enums and bitfields" {
 
     const Flags = bitpack struct(u32) {
         first: bool = false,
-        _pad0: u31 = 0,
+        padding0: u31 = 0,
     };
     try std.testing.expect(comptime Box(Flags).Raw == i64);
     try std.testing.expectEqual(@as(i64, 1), comptime Box(Flags).widen(.{ .first = true }));
@@ -240,7 +205,7 @@ test "Box widens and narrows enums and bitfields" {
     const WideFlags = bitpack struct(u64) {
         low: bool = false,
         high: bool = false,
-        _pad0: u62 = 0,
+        padding0: u62 = 0,
     };
     const wide: WideFlags = .{ .high = true };
     try std.testing.expect(comptime Box(WideFlags).Raw == i64);

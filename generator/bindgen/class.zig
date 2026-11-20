@@ -930,6 +930,13 @@ fn writeVarargMethod(
     real_name: []const u8,
     imports: *ImportSet,
 ) !void {
+    for (method.arguments) |argument| {
+        const resolved = try resolver.resolve(argument.type, .argument);
+        if (!variant_support.supportsFixedArgument(resolved)) {
+            std.log.err("Unsupported raw Variant fixed argument type `{s}` in {s}.{s}", .{ argument.type, class.name, method.name });
+            return error.UnsupportedVarargFixedArgument;
+        }
+    }
     const fixed_count = method.arguments.len;
 
     try docs.write(writer, arena, method.description, 4, "///");
@@ -1361,7 +1368,7 @@ fn customMethodCollides(
 fn resolvePublic(
     resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: class_resolver.TypeContext,
+    context: class_resolver.TypePosition,
     real_name: []const u8,
     meta: ?[]const u8,
 ) !class_resolver.ResolvedType {
@@ -1397,7 +1404,7 @@ fn resolveWrite(
     writer: *Io.Writer,
     resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: class_resolver.TypeContext,
+    context: class_resolver.TypePosition,
     real_name: []const u8,
 ) !void {
     _ = real_name;
@@ -1417,7 +1424,7 @@ fn addImportResolved(
     imports: *ImportSet,
     resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: class_resolver.TypeContext,
+    context: class_resolver.TypePosition,
 ) !void {
     const resolved = try resolver.resolve(raw, context);
     if (resolved.import_class) |name| try imports.add(name);
@@ -1482,6 +1489,7 @@ const names = @import("../model/names.zig");
 const types = @import("../model/types.zig");
 const result_init = @import("../model/result_init.zig");
 const class_resolver = @import("../model/resolver.zig");
+const variant_support = @import("../model/variant_support.zig");
 const class_templates = @import("class_templates.zig");
 const ExtensionApiJson = @import("../model/ExtensionApiJson.zig");
 const Options = @import("Options.zig");

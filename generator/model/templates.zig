@@ -32,7 +32,7 @@ pub const TemplateMatch = struct {
     method: []const u8,
 };
 
-pub const RenderContext = struct {
+pub const RenderInputs = struct {
     artifact: Artifact,
     method: []const u8,
     class_name: ?[]const u8 = null,
@@ -284,7 +284,7 @@ fn parseTargets(
     return targets.items;
 }
 
-pub fn render(arena: Allocator, template: Template, context: RenderContext) ![]const u8 {
+pub fn render(arena: Allocator, template: Template, context: RenderInputs) ![]const u8 {
     var aw: Io.Writer.Allocating = .init(arena);
     var index: usize = 0;
     while (index < template.code.len) {
@@ -304,7 +304,7 @@ pub fn render(arena: Allocator, template: Template, context: RenderContext) ![]c
     return aw.writer.buffered();
 }
 
-fn placeholderValue(placeholder: []const u8, context: RenderContext) ![]const u8 {
+fn placeholderValue(placeholder: []const u8, context: RenderInputs) ![]const u8 {
     if (std.mem.eql(u8, placeholder, "dispatcher")) return context.dispatcher;
     if (std.mem.eql(u8, placeholder, "method")) return context.method;
     if (std.mem.eql(u8, placeholder, "Class")) {

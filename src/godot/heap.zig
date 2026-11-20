@@ -8,8 +8,6 @@ pub const engine_allocator: Allocator = .{
     },
 };
 
-const pad_align = @import("builtin").mode == .debug;
-
 fn alloc(_: *anyopaque, len: usize, alignment: Alignment, _: usize) ?[*]u8 {
     if (alignment == .@"1") {
         return @ptrCast(runtime.dispatch(.mem_alloc2, .{ len, pad_align }) orelse return null);
@@ -72,6 +70,7 @@ fn free(_: *anyopaque, memory: []u8, alignment: Alignment, _: usize) void {
 }
 
 const std = @import("std");
+const pad_align = @import("builtin").mode == .debug;
 const Alignment = std.mem.Alignment;
 const Allocator = std.mem.Allocator;
 

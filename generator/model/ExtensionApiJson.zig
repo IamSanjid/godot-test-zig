@@ -107,10 +107,10 @@ pub const GlobalConstant = struct {
 pub const GlobalEnum = struct {
     name: []const u8,
     is_bitfield: bool = false,
-    values: []const GlobalEnumValue = &.{},
+    values: []const GlobalEnumMember = &.{},
 };
 
-pub const GlobalEnumValue = struct {
+pub const GlobalEnumMember = struct {
     name: []const u8,
     value: i64,
     description: ?[]const u8 = null,
@@ -182,12 +182,12 @@ pub const ClassMethod = struct {
     is_required: bool = false,
     hash: u32 = 0,
     hash_compatibility: []const u32 = &.{},
-    return_value: ?ReturnValue = null,
+    return_value: ?ReturnSpec = null,
     arguments: []const Argument = &.{},
     description: ?[]const u8 = null,
 };
 
-pub const ReturnValue = struct {
+pub const ReturnSpec = struct {
     type: []const u8,
     /// Original C++ type metadata (`float`/`double`, `int32`/`int64`, ...).
     /// Needed so an API `float` return that is a true `double` keeps an `f64`

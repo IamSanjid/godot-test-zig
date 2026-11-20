@@ -4,13 +4,13 @@
 //! single place that decides how a value crosses that boundary.
 
 pub const ResolvedType = resolver.ResolvedType;
-pub const TypeContext = resolver.TypeContext;
+pub const TypePosition = resolver.TypePosition;
 pub const Scope = resolver.Scope;
 
 pub fn resolve(
     class_resolver: *const resolver.ClassResolver,
     raw: []const u8,
-    context: TypeContext,
+    context: TypePosition,
 ) !ResolvedType {
     return class_resolver.resolveFor(raw, context, .class_file);
 }
@@ -18,7 +18,7 @@ pub fn resolve(
 pub fn resolveBuiltin(
     class_resolver: *const resolver.ClassResolver,
     raw: []const u8,
-    context: TypeContext,
+    context: TypePosition,
 ) !ResolvedType {
     return class_resolver.resolveFor(raw, context, .builtin_file);
 }
@@ -26,7 +26,7 @@ pub fn resolveBuiltin(
 pub fn resolveUtility(
     class_resolver: *const resolver.ClassResolver,
     raw: []const u8,
-    context: TypeContext,
+    context: TypePosition,
 ) !ResolvedType {
     return class_resolver.resolveFor(raw, context, .utility_file);
 }
@@ -39,7 +39,7 @@ pub fn resolveUtility(
 pub fn resolvePublicUtility(
     class_resolver: *const resolver.ClassResolver,
     raw: []const u8,
-    context: TypeContext,
+    context: TypePosition,
 ) !ResolvedType {
     var resolved = try resolveUtility(class_resolver, raw, context);
     if (abi.utilityScalar(raw, class_resolver.real_type)) |scalar_value| resolved.zig = scalar_value.public_type;

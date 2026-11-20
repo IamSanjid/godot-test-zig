@@ -1,21 +1,4 @@
-//! Object class reflection: engine object classes versus Zig extension classes,
-//! object-pointer targets, and RefCounted classification.
-//!
-//! Vocabulary:
-//! - *engine object class*: an opaque generated class declaration such as
-//!   `classes.core.Node`. These are the classes the engine itself owns and
-//!   creates.
-//! - *extension class*: a Zig struct declaring `Extends`; its `Extends` chain
-//!   must end in an engine object class. The chain may pass through other
-//!   extension classes. Zero-field extension declarations are valid.
-//! - *class type*: either of the above.
-//!
-//! This module knows only class kinds and object pointers. Base marker
-//! discovery lives in `base.zig`; the extension -> engine base policy lives in
-//! `extension.zig`; neither annotations nor registration are imported here.
-//!
-//! Everything here is comptime-only: nothing allocates, registers classes, or
-//! changes ownership.
+//! Engine/extension object class reflection and object-pointer classification.
 
 const hierarchy = @import("hierarchy.zig");
 
@@ -141,13 +124,11 @@ fn targetOf(comptime Class: type, comptime optional: bool, comptime is_const: bo
     };
 }
 
-// ---------------------------------------------------------------------------
 // Compile-only coverage with fake extension classes over real engine classes.
 //
 // The fakes classify types only: extension -> engine base resolution (and the
 // Base markers it requires) is covered by `extension.zig`. `comptime` evaluation
 // below runs on every build that references `reflect`.
-// ---------------------------------------------------------------------------
 
 const EngineObject = classes.core.Object;
 const EngineNode = classes.core.Node;

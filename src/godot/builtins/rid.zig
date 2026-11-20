@@ -7,7 +7,7 @@
 pub const RID = extern struct {
     pub const GodotClassName = "RID";
 
-    id: u64 = 0,
+    id: u64 align(@alignOf(bindings.builtins.RID)) = 0,
 
     const Self = @This();
 

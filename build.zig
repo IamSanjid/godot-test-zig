@@ -34,11 +34,15 @@ pub fn build(b: *std.Build) !void {
         "gdext_extension_api_json",
         "Path to the Godot extension_api.json file.",
     ) orelse "gd_interface/extension_api.json";
+    const default_builtin_build_conf: generator.BuiltinBuildConf = if (target.result.ptrBitWidth() == 32)
+        .float_32
+    else
+        .float_64;
     const gdext_builtin_build_conf = b.option(
         generator.BuiltinBuildConf,
         "gdext_builtin_build_conf",
-        "Builtin class layout build configuration.",
-    ) orelse .float_64;
+        "Builtin class layout build configuration; defaults from the target pointer width.",
+    ) orelse default_builtin_build_conf;
     const gdext_bindgen_output_dir = b.option(
         []const u8,
         "gdext_bindgen_output_dir",
@@ -126,6 +130,7 @@ pub fn build(b: *std.Build) !void {
     const build_options = b.addOptions();
     build_options.addOption(InitializationLevel, "minimum_initialization_level", minimum_initialization_level);
     build_options.addOption(struct { os_tag: std.Target.Os.Tag }, "target", .{ .os_tag = target.result.os.tag });
+    const build_options_module = build_options.createModule();
 
     const bindings = b.createModule(.{
         .root_source_file = b.path("src/godot/bindings/bindings.zig"),
@@ -139,13 +144,33 @@ pub fn build(b: *std.Build) !void {
     const godot = b.createModule(.{
         .root_source_file = b.path("src/godot/godot.zig"),
         .imports = &.{
-            .{ .name = "build_options", .module = build_options.createModule() },
+            .{ .name = "build_options", .module = build_options_module },
             .{ .name = "bindings", .module = bindings },
             .{ .name = "naming", .module = naming },
         },
         .target = target,
         .optimize = optimize,
     });
+
+    const godot_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/godot/tests.zig"),
+            .imports = &.{
+                .{ .name = "build_options", .module = build_options_module },
+                .{ .name = "bindings", .module = bindings },
+                .{ .name = "naming", .module = naming },
+            },
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_godot_tests = b.addRunArtifact(godot_tests);
+    // Cross-target test binaries cannot always run on the host; still compile
+    // and semantically analyze them for the requested target.
+    run_godot_tests.skip_foreign_checks = true;
+    run_godot_tests.step.dependOn(&run_all.step);
+    const test_godot_step = b.step("test-godot", "Run runtime tests and analyze generated bindings/codegen");
+    test_godot_step.dependOn(&run_godot_tests.step);
 
     const lib = b.addLibrary(.{
         .name = @tagName(build_zon.name),

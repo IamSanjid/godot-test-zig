@@ -604,7 +604,7 @@ fn writeType(
     resolver: *const ClassResolver,
     imports: *ImportSet,
     raw: []const u8,
-    context: type_mapping.TypeContext,
+    context: type_mapping.TypePosition,
     self_name: []const u8,
     top_level: bool,
 ) !void {

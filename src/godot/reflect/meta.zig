@@ -76,15 +76,51 @@ pub fn isOptionalPointer(comptime T: type) bool {
     };
 }
 
-pub fn ValueType(comptime T: type) type {
+pub fn UnwrappedType(comptime T: type) type {
     const info = @typeInfo(T);
     return switch (info) {
-        .pointer => |p| ValueType(p.child),
-        .optional => |o| ValueType(o.child),
-        .array => |a| ValueType(a.child),
-        .vector => |v| ValueType(v.child),
+        .pointer => |p| UnwrappedType(p.child),
+        .optional => |o| UnwrappedType(o.child),
+        .array => |a| UnwrappedType(a.child),
+        .vector => |v| UnwrappedType(v.child),
         else => T,
     };
+}
+
+/// Returns a copy of struct type `S` with one extra field appended.
+///
+/// Used by comptime option chaining (for example `Property(...).Init(...)`).
+/// The new field must not already exist. Existing field order, layout, types,
+/// and attributes are preserved; the appended field has default attributes.
+pub fn AppendStructField(
+    comptime S: type,
+    comptime field_name: [:0]const u8,
+    comptime FieldT: type,
+) type {
+    const info = @typeInfo(S);
+    if (info != .@"struct" or info.@"struct".is_tuple) {
+        @compileError("AppendStructField expects a non-tuple struct type, found: " ++ @typeName(S));
+    }
+    if (@hasField(S, field_name)) {
+        @compileError("AppendStructField: '" ++ @typeName(S) ++ "' already has field '" ++ field_name ++ "'");
+    }
+
+    const fields = info.@"struct";
+    const Attr = std.lang.Type.Struct.FieldAttributes;
+    var names: [fields.field_names.len + 1][:0]const u8 = undefined;
+    var types: [fields.field_names.len + 1]type = undefined;
+    var attrs: [fields.field_names.len + 1]Attr = undefined;
+
+    inline for (fields.field_names, fields.field_types, fields.field_attrs, 0..) |name, F, attr, i| {
+        names[i] = name;
+        types[i] = F;
+        attrs[i] = attr;
+    }
+    names[fields.field_names.len] = field_name;
+    types[fields.field_names.len] = FieldT;
+    attrs[fields.field_names.len] = .{};
+
+    return @Struct(fields.layout, fields.backing_integer, &names, &types, &attrs);
 }
 
 pub fn isFn(comptime f: anytype) bool {

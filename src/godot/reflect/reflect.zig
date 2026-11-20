@@ -43,7 +43,8 @@ pub const isSelfPtrType = meta.isSelfPtrType;
 pub const hasAllDefaults = meta.hasAllDefaults;
 pub const isOptionalPointer = meta.isOptionalPointer;
 pub const isNormalFunction = meta.isNormalFunction;
-pub const ValueType = meta.ValueType;
+pub const UnwrappedType = meta.UnwrappedType;
+pub const AppendStructField = meta.AppendStructField;
 pub const isFn = meta.isFn;
 pub const FnReturnType = meta.FnReturnType;
 

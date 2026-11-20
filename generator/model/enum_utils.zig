@@ -16,7 +16,7 @@ pub fn variantName(name: []const u8, prefix_len: usize) []const u8 {
 }
 
 /// Longest common prefix ending on a word boundary. Works with any slice whose
-/// elements have a `name` field (`InterfaceJson.EnumValue`, global enum values).
+/// elements have a `name` field (`InterfaceJson.EnumMember`, global enum values).
 pub fn commonPrefixLen(values: anytype) usize {
     if (values.len == 0) return 0;
 

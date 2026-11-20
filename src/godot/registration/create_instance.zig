@@ -1,3 +1,6 @@
+//! `create_instance_func` for one extension class: construct the engine base,
+//! create the extension struct, and run Zig-side initialization.
+
 pub fn CreateInstance(
     comptime T: type,
     comptime Base: type,
@@ -20,7 +23,7 @@ pub fn CreateInstance(
     }
     return &struct {
         fn f(userdata: ?*anyopaque, p_notify_postinitialize: bool) callconv(.c) interface.ObjectPtr {
-            const p_options: *AddClassData = @ptrCast(@alignCast(userdata orelse return null));
+            const p_options: *ClassRegistration = @ptrCast(@alignCast(userdata orelse return null));
             const allocator: Allocator = p_options.create_allocator;
             const gpa: Allocator = p_options.gpa orelse allocator;
             const base = Base.construct() orelse return null;
@@ -29,9 +32,15 @@ pub fn CreateInstance(
                 destroyBase(Base, base);
                 return null;
             };
+
             reflect.initFieldsDefault(T, child);
             annotations.initAnnotFieldsDefault(T, Base, child, base);
             annotations.initBase(T, Base, child, base);
+            // Eager `Property` `.init` initializers run after ordinary field
+            // defaults and the Base marker are in place, and before the user
+            // `InitCallback`, so init code can rely on every property value
+            // already being assigned.
+            annotations.initPropertyFields(T, Base, child, base);
             annotations.callInitCallback(T, Base, child, base, gpa) catch |e| {
                 std.log.err("Failed to create {s}: {}", .{ @typeName(T), e });
                 allocator.destroy(child);
@@ -58,12 +67,46 @@ fn destroyBase(comptime Base: type, base: *Base) void {
     }
     runtime.dispatch(.object_destroy, .{base});
 }
+
+// Compile-only coverage.
+//
+// `InitPropertyOwner` is never instantiated or registered. The container-level
+// `comptime` block takes the address of `checkCreateInstance`, which analyzes
+// its body; that reference instantiates the create-instance callback for the
+// fixture, so the creation order above (including the eager `Property` `.init`
+// call) must stay compilable. Analysis only: no engine runtime function runs.
+
+/// Initializer covers both pointer placeholders: `owner` is the extension
+/// instance and `base` is the constructed engine base the callback forwards.
+fn seededHealth(owner: *InitPropertyOwner, base: *classes.core.Node) i32 {
+    _ = owner;
+    _ = base;
+    return 100;
+}
+
+const InitPropertyOwner = struct {
+    pub const Extends = classes.core.Node;
+    base: annotations.Base(Extends) = .{},
+    health: annotations.Property(i32, .{
+        .usage = .exported,
+        .init = annotations.Init(i32, seededHealth, .{ .owner, .base }),
+    }) = .init(0),
+};
+
+fn checkCreateInstance() void {
+    _ = &CreateInstance(InitPropertyOwner, InitPropertyOwner.Extends);
+}
+
+comptime {
+    _ = &checkCreateInstance;
+}
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const AddClassData = @import("AddClassData.zig");
-
 const bindings = @import("bindings");
+
+const ClassRegistration = @import("ClassRegistration.zig");
 const interface = bindings.interface;
 const classes = @import("../classes/classes.zig");
 

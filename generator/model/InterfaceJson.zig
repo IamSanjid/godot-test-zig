@@ -16,7 +16,7 @@ pub const Deprecated = struct {
 
 // ---- payloads for each `kind` ----------------------------------------
 
-pub const EnumValue = struct {
+pub const EnumMember = struct {
     name: []const u8,
     value: i64,
     description: ?Description = null,
@@ -24,7 +24,7 @@ pub const EnumValue = struct {
 
 pub const EnumType = struct {
     is_bitfield: bool = false,
-    values: []const EnumValue,
+    values: []const EnumMember,
 };
 
 pub const HandleType = struct {
@@ -53,13 +53,13 @@ pub const Argument = struct {
     description: ?Description = null,
 };
 
-pub const ReturnValue = struct {
+pub const ReturnSpec = struct {
     type: []const u8,
     description: ?Description = null,
 };
 
 pub const FunctionType = struct {
-    return_value: ?ReturnValue = null,
+    return_value: ?ReturnSpec = null,
     arguments: []const Argument,
 };
 
@@ -133,7 +133,7 @@ pub const TypeDecl = struct {
 
 pub const InterfaceFunction = struct {
     name: []const u8,
-    return_value: ?ReturnValue = null,
+    return_value: ?ReturnSpec = null,
     arguments: []const Argument,
     description: Description,
     since: []const u8,

@@ -1,22 +1,4 @@
-//! Generic base-marker field discovery for extension classes.
-//!
-//! An extension class records its direct parent instance in a *base marker*
-//! field. The annotation layer builds those field types with
-//! `annotations.Base(T)`, but this module is the shared, annotation-free layer:
-//! `Variant` and registration use it too, so it must not import annotations.
-//! Markers are recognized structurally instead:
-//!
-//! - the marker type is a normal Zig struct,
-//! - it declares `BaseFor`, the direct parent class type it points at,
-//! - it declares `get`/`set` accessor functions (the operations `basePointer`
-//!   and `annotations.initBase` use).
-//!
-//! A struct that only happens to expose `BaseFor` is not a marker.
-//!
-//! An extension class has exactly one direct parent, so more than one marker
-//! field on one struct is a compile error.
-
-const meta = @import("meta.zig");
+//! Annotation-free discovery of Base marker fields.
 
 /// A discovered base-marker field.
 pub const BaseField = struct {
@@ -101,26 +83,24 @@ fn isFunctionDecl(comptime T: type, comptime name: [:0]const u8) bool {
     return @typeInfo(@TypeOf(@field(T, name))) == .@"fn";
 }
 
-// ---------------------------------------------------------------------------
 // Compile-only coverage with fake markers.
 //
 // The fake marker mirrors the annotation's public shape without importing the
 // annotation layer. `comptime` evaluation below runs on every build that
 // references `reflect`, so the helper contracts stay checked.
-// ---------------------------------------------------------------------------
 
 fn FakeMarker(comptime B: type) type {
     return struct {
         pub const BaseFor = B;
 
-        _ptr: *B = undefined,
+        base_ptr: *B = undefined,
 
         pub fn get(self: *const @This()) *B {
-            return self._ptr;
+            return self.base_ptr;
         }
 
         pub fn set(self: *@This(), value: *B) void {
-            self._ptr = value;
+            self.base_ptr = value;
         }
     };
 }
@@ -203,3 +183,4 @@ test "basePointer returns the recorded parent instance" {
 }
 
 const std = @import("std");
+const meta = @import("meta.zig");

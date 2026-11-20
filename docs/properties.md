@@ -1,133 +1,128 @@
 # Properties
 
-This document defines the intended `Property` schema and the design constraints
-around it. Properties are not implemented yet.
+`Property` is an opt-in field annotation that exposes a Zig field as an engine
+property. The implemented backend uses dynamic `ClassCreationInfo6` callbacks;
+bindgen/codegen play no part in it.
 
 Status:
 
-- **Variant conversion foundation is in place**; properties are not implemented yet.
-- Dynamic class-creation property hooks are the first intended backend.
-- Static ClassDB property registration is a later optional backend.
-- Bindgen/codegen are not expected to change for extension properties.
+- Dynamic `ClassCreationInfo6` backend implemented: `set_func`, `get_func`,
+  `get_property_list_func`, `free_property_list_func`.
+- Property lifetime is explicit: the default setter manages only known managed
+  builtins and `RefCounted` references; free-time cleanup is opt-in per class.
+- Read-only properties (`.read_only`) and eager creation-time initializers
+  (`.init`) are implemented on the same field annotation.
+- Static ClassDB property registration and extension method registration remain
+  future work.
+- Coverage is compile-time only. The runtime callbacks are analyzed by the
+  build, but the repository's build/test steps do not execute them in an engine.
 
 ## Why a field type
 
 `Property` is a **direct field type**, like `OnReady`, not a separate
-`pub const` declaration.
+`pub const` declaration:
 
 ```zig
 health: godot.annotations.Property(i32, .{
-    .usage = godot.annotations.PropertyUsage.exported,
+    .usage = .exported,
     .hint = .range,
     .hint_string = "0,100",
 }) = .init(100),
 ```
 
-This keeps the property and its storage together and makes field discovery a
-normal struct-field scan.
+This keeps the property and its storage together and makes discovery a normal
+struct-field scan. There is no naming dictionary, no separate registration
+declaration, and no annotation namespace of property names.
 
-No naming dictionary, no separate registration declaration, no annotation
-namespace of property names.
+Every field keeps an ordinary field default (`.init(...)`) where the value type
+allows one; `reflect.initFieldsDefault` assigns it during instance creation.
+Values that cannot be expressed as a comptime field default, such as
+runtime-constructed builtins, use the `.init` option instead:
+`annotations.initPropertyFields` runs those initializers eagerly as part of
+creation (see [Creation-time initializers](#creation-time-initializers)).
 
 ## Type shape
 
 ```zig
-pub fn Property(comptime T: type, comptime strategy: anytype) type
+pub fn Property(comptime T: type, comptime options: anytype) type
 ```
 
-The returned wrapper must:
+The returned wrapper:
 
-- store a `value: T`
-- expose `init(value: T) Self`
-- expose Zig-side `get()` / `set(value)` accessors for the stored value
-- expose `PropertyFor = T`
-- expose the original `strategy`
-- expose an `isSelf` function so Registry can identify marked fields
-- not require annotation-field initialization
+- stores `value: T`
+- exposes `init(value: T) Self`
+- exposes Zig-side `get()` / `set(value)` accessors for the stored value (these
+  are not the engine accessors)
+- exposes `PropertyFor = T`
+- exposes the original `options` plus normalized option constants (`name`,
+  `usage`, `hint`, `hint_string`, `type`, `read_only`,
+  `has_custom_get`, `has_custom_set`, `has_custom_init`, `has_custom_deinit`)
+- exposes `marker = marker.Kind.property` for discovery
 
-A field must be initialized normally:
+Unknown option names, wrong option value types, a missing `.usage`, and invalid
+accessor shapes are compile errors.
 
-```zig
-health: godot.annotations.Property(i32, .{ ... }) = .init(100),
-```
-
-`reflect.initFieldsDefault` handles the field default; no new annotation
-initialization pass is required for `Property`.
-
-## Strategy schema
-
-The initial strategy keys are:
+## Options
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `usage` | `enums.PropertyUsageFlags` | yes | Godot property usage flags |
+| `usage` | `enums.PropertyUsageFlags`, a named flag literal, or an anonymous struct of flags | yes | Engine property usage flags |
 | `name` | `?[:0]const u8` | no | Exact engine property name; defaults from the field name |
-| `hint` | `enums.PropertyHint` | no | Inspector hint |
-| `hint_string` | `[]const u8` | no | Inspector hint string |
-| `get` | function | no | Custom getter; defaults to field value |
-| `set` | function | no | Custom setter; defaults to field value |
+| `hint` | `enums.PropertyHint` or an enum literal such as `.range` | no | Inspector hint; `.none` when omitted |
+| `hint_string` | `[]const u8` | no | Inspector hint string; empty when omitted, copied at comptime |
+| `type` | `interface.VariantType` or an enum literal such as `.object` | no | Explicit engine Variant type; defaults to `Variant.typeFor(T)` |
+| `get` | `fn (*Owner) T` or `fn (*const Owner) T` | no | Custom getter; defaults to reading the field value |
+| `set` | `fn (*Owner, T) void` | no | Custom setter; defaults to writing the field value |
+| `read_only` | `bool` | no | Rejects engine set dispatch while keeping the getter; cannot be combined with `.set` |
+| `init` | `Init(T, func, args)` type from `annotations/init.zig` | no | Eager creation-time initializer for the stored value |
+| `deinit` | `fn (*Owner) void` | no | Cleanup hook for `deinitPropertyFields`; overrides that field's automatic cleanup |
 
-A future additive key is:
-
-| Key | Type | Meaning |
-|---|---|---|
-| `group` | `[:0]const u8` | Property group/subgroup path; not implemented yet |
-
-There is no `.export` key and no custom `PropertyUsage` enum.
+There is no `.export` key (`export` is a Zig keyword), no `.ownership` option,
+and no `group` key yet. Groups and other new options must be additive and must
+not change the annotation shape.
 
 ## Usage flags
 
-Use the generated Godot flags directly:
+Use the generated Godot flags directly. There is no separate usage enum or
+mapping layer.
+
+`enums.PropertyUsageFlags.exported` is the storage + editor preset.
+`enums.PropertyUsageFlags.default` is engine `PROPERTY_USAGE_DEFAULT`, which
+currently has the same bits. Arbitrary combined flags are allowed; the backend
+does not pattern-match the presets.
+
+Accepted forms:
 
 ```zig
-const enums = @import("../enums.zig");
-
-pub const PropertyUsage = struct {
-    pub const none: enums.PropertyUsageFlags = .none;
-    pub const default: enums.PropertyUsageFlags = .default;
-    pub const exported: enums.PropertyUsageFlags = .{
-        .storage = true,
-        .editor = true,
-    };
-};
-```
-
-`exported` is a named convenience constant, not a separate enum value or a
-mapping layer. `export` is a Zig keyword, so the constant is named `exported`.
-
-Usage examples:
-
-```zig
-.usage = godot.annotations.PropertyUsage.none,
-.usage = godot.annotations.PropertyUsage.default,
-.usage = godot.annotations.PropertyUsage.exported,
-.usage = .{ .storage = true, .editor = true },
+.usage = .exported,                              // named flag literal
+.usage = godot.enums.PropertyUsageFlags.exported, // generated value
+.usage = .{ .storage = true, .editor = true },   // explicit flags
+.usage = .none,                                  // hidden from the property list
 ```
 
 Semantics:
 
-- `none` / zero flags: property is not included in `get_property_list`; it
-  remains available through set/get dispatch. It does not appear in the
-  inspector and is not serialized.
-- `default`: engine `PROPERTY_USAGE_DEFAULT`.
-- `exported`: storage + editor, the normal exported-property preset.
-- Arbitrary combined flags are allowed; Registry does not pattern-match
-  `none`/`default`/`exported`.
+- Zero usage: the property is omitted from `get_property_list`, but set/get
+  dispatch still matches it.
+- Non-zero usage: the property is included in `get_property_list` in field
+  declaration order.
+- Only the usage bits decide list visibility. No other flag combination is
+  special.
 
-Godot routes direct `Object.set`/`Object.get` through the extension
-`set_func`/`get_func` callbacks before native property lookup; property-list
-membership is not consulted. A zero-usage property can therefore be omitted
-from `get_property_list` entirely and still be reachable by direct engine
-`set`/`get`. A runtime regression test should still assert both halves:
-omitted from the list, and still settable/gettable.
+`Object.set`/`Object.get` route through the extension `set_func`/`get_func`
+callbacks before native property lookup and do not consult the property list, so
+a zero-usage property stays reachable programmatically while staying out of the
+inspector and serialization. This engine contract is the reason hidden
+properties are omitted rather than rejected; the repository's coverage of it is
+compile-time only.
 
 ## Custom get/set
 
-Custom accessors are direct function values in the strategy:
+Custom accessors are direct function values in the options:
 
 ```zig
 health: godot.annotations.Property(i32, .{
-    .usage = godot.annotations.PropertyUsage.exported,
+    .usage = .exported,
     .get = getHealth,
     .set = setHealth,
 }) = .init(100),
@@ -141,70 +136,183 @@ fn setHealth(self: *@This(), value: i32) void {
 }
 ```
 
-The wrapper does not know the owner type, so Registry validates accessors when
-the owner class is registered.
+- Accepted getter shapes: `fn (*Owner) T` and `fn (*const Owner) T`.
+- Accepted setter shape: `fn (*Owner, T) void`.
+- Both must be normal runtime functions, not generic ones.
+- No getter: the default reads `.value`. No setter: the default writes `.value`.
+- A custom getter without a custom setter reads through the getter and writes
+  the default `.value`; add `.read_only = true` to reject engine writes. A
+  custom setter without a custom getter keeps the default getter and stays
+  writable.
+- `.read_only = true` is the explicit read-only form; see
+  [Read-only properties](#read-only-properties).
+- `.value` is always the storage field; accessors do not replace it.
+- The wrapper does not know the owner type, so owner-pointer shapes are
+  validated when descriptors are collected for the owning class (compile time).
 
-Accepted getter shapes:
+Custom-accessor fields are user-managed: the backend forwards the engine value
+through the declared accessor but does not manage the field's lifetime; see
+[Lifetime](#lifetime).
+
+## Read-only properties
+
+`.read_only = true` rejects engine set dispatch while keeping the getter active:
 
 ```zig
-fn(*Owner) T
-fn(*const Owner) T
+sealed: godot.annotations.Property(u32, .{
+    .usage = .exported,
+    .read_only = true,
+}) = .init(9),
 ```
 
-Accepted setter shapes:
+- The default getter still reads `.value`; a custom `.get` is used when
+  declared.
+- `set_func` returns false for the property, so engine `Object.set` does not
+  change it. The property still appears in `get_property_list` according to its
+  `usage` bits.
+- `.read_only` cannot be combined with a custom `.set`; that combination is a
+  compile error.
+- `.read_only = true` is the only read-only form. It can be used alone or with a
+  custom getter. A custom getter without a custom setter remains writable through
+  the default `.value` writer unless `.read_only` is set.
+- `.read_only` is dispatch policy only. It does not set
+  `enums.PropertyUsageFlags.read_only`; that flag is inspector and
+  serialization metadata and stays whatever `.usage` declares.
+- Zig-side access is unaffected: the wrapper's `set()` method and direct field
+  writes still store values.
+
+## Creation-time initializers
+
+`.init = Init(T, func, args)` assigns a property value eagerly during instance
+creation, before user `InitCallback` code runs:
 
 ```zig
-fn(*Owner, T) void
+name: godot.annotations.Property(godot.builtins.StringName, .{
+    .usage = .exported,
+    .init = godot.annotations.Init(
+        godot.builtins.StringName,
+        .fromLatin1,
+        .{ "hero", false },
+    ),
+}) = .init(undefined),
+
+label: godot.annotations.Property(godot.builtins.String, .{
+    .usage = .exported,
+    .init = godot.annotations.Init(godot.builtins.String, .fromLatin1, .{"Hero"}),
+}) = .init(undefined),
 ```
 
-A missing getter defaults to reading `.value`. A missing setter defaults to
-writing `.value`. A getter-only property is read-only from Godot's point of
-view.
+The same initializer can be chained with `.Init(...)`:
 
-If custom accessors are used, `.value` is still the storage field. It is not
-replaced by the accessors.
+```zig
+the_name: godot.annotations.Property(godot.builtins.StringName, .{
+    .usage = .exported,
+}).Init(.fromLatin1, .{ "hero", false }),
+```
+
+`.Init(func, args)` appends the equivalent `.init = Init(T, func, args)` option.
+The chain may be applied once; a property that already declares `.init` cannot
+use `.Init(...)` again.
+
+When the value type cannot be built at comptime, declare the wrapper default as
+`.init(undefined)`; the creation-time initializer replaces it before any user
+code can observe the field.
+
+The option value must be a type produced by `annotations.Init(T, func, args)`
+whose `InitFor` is exactly the property value type `T`; any other value or a
+mismatched `InitFor` is a compile error. `func` may be a function value or an
+enum literal naming a method on `T`, such as `.fromLatin1`. It must be a normal
+runtime function (not generic), it receives one parameter per element of `args`,
+and it must return `T` (or the child of `?T`, when the property type is
+optional). Initializers are infallible; fallible creation-time work belongs in
+`InitCallback`.
+
+`args` is a comptime tuple. Each element is one of:
+
+- a plain value, passed through unchanged;
+- `.owner` or `.base`, forwarding the owning instance (`*T`) or the engine base
+  pointer;
+- `.{ .field = "name" }`, reading an owner field;
+- a function receiving owner/base pointers, whose return value is passed;
+- another `Init(...)` type, called before the outer initializer.
+
+Only fields declaring `.init` are written; every other property keeps its field
+default, and a class without `.init` properties is a no-op. Initializers run
+after ordinary field defaults, `OnReady` wrapper defaults, and the `Base` marker,
+and before `InitCallback`, in field declaration order, so user init code can rely
+on the values already being assigned.
+
+`initPropertyFields` runs before the engine instance binding is installed. An
+initializer must not trigger engine callbacks that require the extension
+instance binding; the same limitation applies to `InitCallback`. A static-form
+`InitCallback` replaces the whole instance and therefore overwrites `.init`
+values; use the member form when `.init` values must survive.
+
+`.init` is not engine dispatch and is not coupled to `OnReady`: it never runs on
+`_ready` or any scene-tree event. Values that depend on the scene tree use a
+custom getter or an `OnReady` field instead.
+
+### Initializer ownership
+
+The initializer result is stored directly in `.value`; custom accessors are not
+called, and the backend applies no conversion, retain, or cleanup. The returned
+value must be valid and owned according to the field's cleanup model:
+
+- managed builtins must come from owning constructors
+  (`String.fromLatin1`, `StringName.fromLatin1(..., false)`, ...), never a cached
+  `fromComptimeLatin1` literal;
+- a `RefCounted` pointer must own the reference the field promises, or be a null
+  optional pointer;
+- a user struct value with `deinit` must be fully initialized.
+
+Cleanup stays explicit: the default setter's overwrite handling and
+`deinitPropertyFields`/`auto_property_cleanup` apply to initialized values as
+usual (see [Lifetime](#lifetime)).
+
+## Property type override
+
+`.type` overrides the engine-facing `PropertyInfo` type:
+
+```zig
+value: Property(u32, .{
+    .usage = .none,
+    .type = .string, // enum literal
+}),
+```
+
+The value must be a concrete `interface.VariantType` value or an enum literal
+such as `.int`, `.string`, or `.object`. `.nil` and `.variant_max` are rejected.
+
+This is a metadata override, not a conversion hook: storage and conversion still
+use the declared `PropertyFor` (`Variant.as`/`Variant.init`). Use it only when
+the value type and the desired engine type are consistent; future custom-type
+adapter hooks can layer on top of it and the rest of the property pipeline keeps
+its normal behavior.
 
 ## Engine property name
 
-The default engine name comes from the field name using the existing naming
-layer:
+The default engine name comes from the field name through the naming layer:
 
 ```zig
 naming.comptimeConvert(.godot, .property, field_name)
 ```
 
-Examples:
+Examples: `health` -> `"health"`, `healthBar` -> `"health_bar"`.
 
-```text
-health      -> "health"
-health_bar  -> "health_bar"
-```
+An explicit `.name` is used verbatim and must not be empty. Two fields on the
+same class that produce the same engine name are a compile error, so set/get
+dispatch can key on the name without ambiguity.
 
-`name` overrides the default and is used verbatim. No Pascal or snake fallback
-is applied to explicit names.
+## Discovery and descriptors
 
-## Field discovery
+`findPropertyFieldNames(T)` scans only fields declared directly on `T`. Identity
+comes from `marker.Kind.property`. Marker filtering keeps `Property` fields from
+being initialized as `OnReady` fields and vice versa; lookalike structs without
+the marker are ignored. Inherited engine properties come from ClassDB; inherited
+Zig fields are not scanned.
 
-Registry scans `T`'s fields for the `Property` wrapper.
-
-Discovery must use explicit marker identity, for example:
-
-```zig
-if (comptime reflect.isNormalStruct(F) and @hasDecl(F, "isSelf")) {
-    if (F.isSelf(F)) {
-        // property field
-    }
-}
-```
-
-The wrapper must not be mistaken for `OnReady` or `Base`.
-
-Only fields declared directly on the registered class are considered for the
-first implementation. Inherited engine properties already come from ClassDB.
-
-## Property metadata
-
-Comptime registration produces a per-class property table:
+`descriptors(T)` returns the per-class comptime descriptor table in field
+declaration order:
 
 ```zig
 pub const PropertyDescriptor = struct {
@@ -213,136 +321,216 @@ pub const PropertyDescriptor = struct {
     value_type: type,
     usage: enums.PropertyUsageFlags,
     hint: enums.PropertyHint,
-    hint_string: []const u8,
-    getter: ?...,
-    setter: ?...,
+    hint_string: [:0]const u8,
+    type: ?interface.VariantType,
 };
 ```
 
-`PropertyInfo` construction needs:
+Accessors are not part of the descriptor. The backend resolves them through the
+`getterFn`/`setterFn` helpers, which also validate the owner pointer shapes and
+derive whether a field is read-only; `.read_only` is part of that same decision.
+`hasCustomDeinit`/`deinitFn` are the same shape check for the optional `.deinit`
+hook, and `deinitPropertyFields` is the cleanup tool built on them.
+`hasCustomInitializer` reports the optional `.init` option, and
+`initPropertyFields` is the pass that runs it.
 
-- `type`: the Variant type for `value_type`
-- `name`: engine property StringName
-- `class_name`: class StringName for object properties
-- `hint`: raw hint value
-- `hint_string`: String
-- `usage`: raw packed usage bits
+## Dynamic backend
 
-This mapping belongs to the Variant/property bridge, not bindgen or codegen.
+Registration installs the callbacks built by `registration/property.zig` into
+`ClassCreationInfo6` (through `Registry`):
 
-## First backend: dynamic class callbacks
+| Callback | Installed when |
+|---|---|
+| `set_func`, `get_func` | the class declares at least one `Property` field |
+| `get_property_list_func`, `free_property_list_func` | at least one descriptor has non-zero usage |
 
-Use `ClassCreationInfo6`:
+A class with no `Property` fields leaves all four null. A class whose properties
+are all zero-usage still gets set/get, but no property list.
 
-```zig
-set_func
-get_func
-get_property_list_func
-free_property_list_func
-```
+- `set_func` matches the incoming engine `StringName` against every descriptor,
+  including zero-usage ones, converts the borrowed `Variant` with `Variant.as`,
+  and calls the setter. Unknown names, read-only properties (`.read_only` or a
+  getter-only property), and type mismatches return false. `nil` is accepted for
+  optional object pointers.
+  Engine object values are additionally checked at runtime with `Object.isClass`
+  against the declared engine class (engine subclasses are accepted) before the
+  backend stores or retains the pointer; a Variant holding an object of the
+  wrong class is rejected and takes no reference. Extension-class targets need
+  no extra check because `Variant.as` resolves only that exact registered
+  extension instance.
+- `get_func` calls the getter and writes an owned `Variant` built with
+  `Variant.init` into the engine return slot.
+- `get_property_list_func` returns a lazy per-class, process-lifetime static
+  table of `PropertyInfo` entries for the non-zero-usage descriptors, in
+  declaration order. First-use initialization is unsynchronized, matching the
+  other static literal caches; initialize/register classes before cross-thread
+  use.
+- `free_property_list_func` is a no-op: the table and its `StringName`/`String`
+  storage are process-lifetime and never freed. The engine copies a
+  `PropertyInfo` by dereferencing its pointers, so every entry points at stable
+  storage.
 
-Registry installs these only when the class has at least one `Property` field.
+`PropertyInfo` contents are derived at comptime:
 
-Behavior:
+- `type` from `.type` when provided, otherwise `Variant.typeFor(value_type)`
+  for every descriptor, including zero-usage ones: hidden properties still
+  dispatch through set/get, so a value type with no Variant mapping (for example
+  `Variant` itself) is a compile error even when omitted from the list unless an
+  explicit `.type` is supplied. `Property(Variant)` is supported with an explicit
+  `.type`; the default setter deinitializes the previous Variant on overwrite.
+  Supported default values are scalars,
+  enums, packed bitfields, codegen builtins, and engine/extension object class
+  pointers.
+- `name` from the engine property name.
+- `class_name` from `reflect.objectTarget`/`reflect.className` for object
+  properties (the extension class name for extension classes); empty otherwise.
+- `hint`, `hint_string`, and `usage` from the descriptor.
 
-- `get_property_list_func` returns entries whose usage is not zero.
-- Entries with zero usage are omitted from the list but remain in set/get
-  dispatch.
-- `set_func` matches the exact engine property name and converts the incoming
-  `Variant` to the field value type.
-- `get_func` converts the field value to an owned `Variant`.
-- Property-list storage and its `PropertyInfo`/`StringName`/`String` pointers
-  must have a stable lifetime. A lazy per-class static table is acceptable for
-  the first implementation.
-- `free_property_list_func` can be a no-op for the static table.
+No `classdb_register_extension_class_property*` call is made. The backend is
+dynamic only.
 
-No `classdb_register_extension_class_property` and no method registration in
-this first backend.
+## Lifetime
 
-## Later backend: static ClassDB properties
+Property values are not cleaned up automatically when an instance is freed. The
+default setter manages only the value families the backend understands;
+everything else, including cleanup at free, is the owner's decision.
 
-If extension method registration is added later, fixed properties can also be
-registered with ClassDB:
+### Default setter
 
-```text
-classdb_register_extension_class_property
-classdb_register_extension_class_property_indexed
-classdb_register_extension_class_property_group
-classdb_register_extension_class_property_subgroup
-```
+A field uses the default setter when it declares no custom `.set`. A custom
+`.get` changes only the read path; unless `.read_only = true`, the default setter
+still writes `.value` using this type-driven policy. On each engine set the
+converted value is stored type-driven:
 
-That backend requires registered getter/setter methods. It should reuse the same
-`Property` field schema and descriptor table; backend choice is an internal
-registration concern, not an annotation concern.
+- managed builtin (`annotations.isKnownManagedBuiltin`, generated from
+  `extension_api.json` `has_destructor`) or `Variant`: the previous field value
+  is deinitialized, then the new value is stored. `Property(Variant)` requires an
+  explicit `.type` override.
+- `RefCounted` object pointer: the new reference is retained before the previous
+  one is released, so assigning the current value back is safe. The value from
+  `Variant.as` is borrowed and ownership follows the declared type, so only
+  `RefCounted` pointer types are retained/released; non-`RefCounted` object
+  pointers (for example `*Object` or `*Node`) are borrowed and stored unchanged.
+- everything else (scalars, enums, bitfields, plain value builtins, arbitrary
+  user structs): plain assignment. The backend does not guess ownership for user
+  types, even when they declare `deinit`.
 
-Dynamic hooks remain useful for computed or instance-dependent property lists
-even after static registration exists.
+Plain value builtins such as `Vector2` and user structs are not managed by the
+setter. `Variant` is handled separately because it is not a codegen builtin with
+`toBinding` conversion. The policy is exposed through
+`annotations.isKnownManagedBuiltin`, `annotations.retainRefCounted`, and
+`annotations.releaseRefCounted`.
 
-## Grouping
+### Custom accessors
 
-Groups are additive and not part of the first implementation.
+A custom `.get` overrides only the read path. A custom `.set` overrides only the
+write path. When only `.get` is present, writes still go through the default
+setter and its type-driven lifetime policy unless `.read_only` is set.
 
-Future strategy key:
+- a custom `.set` for a deinit type receives the value owned by `Variant.as`; it
+  must store, transfer, or deinitialize it;
+- object pointers from `Variant.as` are borrowed, so a custom setter is not
+  handed a reference;
+- a custom getter must return a borrowed handle for deinit types: return the
+  stored value (a shallow copy is fine), not a freshly constructed owned
+  `String`/`Array`. `Variant.init` copies the returned value and the backend
+  does not deinit it, so returning a fresh owned value leaks one reference per
+  read;
+- a custom getter for an object pointer returns a borrowed pointer;
+  `Variant.init` takes a Variant-owned `RefCounted` reference or stores a
+  borrowed non-`RefCounted` pointer, so the object must stay valid for the
+  lifetime of the returned Variant.
 
-```zig
-.group = "Gameplay/Stats",
-```
+### Explicit cleanup
 
-Possible backends:
+`annotations.deinitPropertyFields(T, instance)` is an unconditional best-effort
+helper. Per `Property` field, in order:
 
-- dynamic: property-list group/category/subgroup entries
-- static: native ClassDB group/subgroup procedures
+1. a custom `.deinit` hook is called (it handles null and any other state);
+2. otherwise a struct value type declaring `deinit` is deinitialized;
+3. otherwise a `RefCounted` object pointer releases its reference (a null
+   optional pointer is skipped, never read as non-null);
+4. otherwise nothing happens.
 
-The annotation shape must not change when grouping is added.
+The helper ignores custom accessors, usage flags, and engine dispatch: it walks
+the declared fields directly. It does not free the instance or its storage, and
+it does not track what was already cleaned, so call it once per instance. The
+caller guarantees that the fields hold valid values: never call it while a field
+still holds `undefined`. A class without `Property` fields is a no-op; a
+non-struct type is a compile error.
 
-## Why Variant conversion comes first
+`.deinit` is a normal `fn (*Owner) void` option. Its shape is validated when the
+`Property` is declared and its owner pointer when the field is resolved for the
+owning class (`descriptors` or cleanup). It runs only when cleanup is requested
+(a manual `deinitPropertyFields` call or the opt-in class flag), not on engine
+set: the default setter's overwrite handling is unchanged. It overrides the
+automatic rules above for its field, so it must handle everything that field
+needs, including null. A custom-accessor field gets automatic best-effort cleanup
+unless it declares `.deinit`; add a `.deinit` hook when the generic rules are
+wrong for that field.
 
-Both property backends are Variant-based:
+Nothing calls the helper automatically unless the class opts in:
 
-- `get_func` writes an owned `Variant`
-- `set_func` receives a borrowed `Variant`
-- static getter/setter methods also use Variant callbacks
+- default (`ClassOptions.auto_property_cleanup = false`, passed to `FreeInstance`
+  as `false` by `Registry`): after the optional `DeinitCallback`, the instance
+  memory is destroyed and property values are left as-is. Release them in `DeinitCallback`, either by calling
+  `deinitPropertyFields` or by releasing the fields directly:
 
-Required Variant layer:
+  ```zig
+  pub const Deinit = godot.annotations.DeinitCallback(@This(), deinit);
 
-```zig
-Variant.init(T, value) -> Variant
-Variant.as(T) -> ?T
-Variant.deinit()
-Variant.typeFor(T)
-```
+  fn deinit(self: *@This()) void {
+      godot.annotations.deinitPropertyFields(@This(), self);
+  }
+  ```
 
-It must cover:
+- `ClassOptions.auto_property_cleanup = true` (passed to `FreeInstance` as a
+  comptime parameter): the free-instance callback calls
+  `annotations.deinitPropertyFields(T, instance)` after `DeinitCallback`, then
+  destroys the instance. Do not also clean the same fields manually in
+  `DeinitCallback` when the flag is on, or they are cleaned twice.
 
-- canonical scalar slot widths
-- enums and packed bitfields
-- `real_t` / `f64`
-- codegen builtins and binding builtins
-- String/StringName/Array ownership
-- Object and RefCounted rules
-- property type and class-name mapping
+The default setter still expects valid values on set: a field it manages must
+hold a valid owned value. An owned `RefCounted` pointer must start as `null` or
+already own a reference. Engine builtin fields cannot use a normal field default,
+because builtin construction is a runtime dispatcher call; initialize them with a
+`.init` initializer or in `InitCallback` with owned constructors
+(`String.fromLatin1`, `String.fromUtf8`, `StringName.fromLatin1(..., false)`,
+...). Never store a cached literal from `fromComptimeLatin1` in such a field: the
+setter deinitializes the previous value on overwrite, cleanup deinitializes it on
+free, and cached literals must never be deinitialized.
 
-Properties must not be implemented before that layer is usable.
+If `InitCallback` fails after creating owned values, extension creation fails and
+the instance is destroyed without running `DeinitCallback` or property cleanup,
+even when `auto_property_cleanup` is enabled. This includes values already assigned
+by `Property` `.init` initializers, which run before `InitCallback`. Init code
+must release anything it created, including those initialized values, before
+returning the error.
 
-## Explicit non-goals for the first property milestone
+## Non-goals
 
-- no exported-property declaration blocks
-- no separate `pub const` property declarations
-- no custom `PropertyUsage` enum or matching table
-- no bindgen/codegen changes
-- no static ClassDB property registration yet
-- no extension method registration yet
-- no property groups yet
-- no indexed properties yet
-- no `property_can_revert` / `property_get_revert` yet
+- no static ClassDB property registration
+- no extension method registration
+- no property groups/subgroups (a future additive `.group` option)
+- no indexed or array properties
+- no `property_can_revert` / `property_get_revert`
 - no signals
+- no per-instance or computed property lists; the list is a static per-class
+  table
+- no inheritance of annotation fields (only fields declared directly on the
+  class)
+- no `OnReady` coupling for properties; `.init` is creation-time only, and
+  scene-dependent values use custom getters or `OnReady` fields
+- no lazy or per-access property initializers
+- no automatic value tracking or implicit cleanup; the lifetime tools are
+  explicit (see [Lifetime](#lifetime))
+- no bindgen/codegen changes for extension properties
 
-## Open questions
+## Future work
 
-1. ~~Verify that zero-usage properties are reachable through `Object.set/get`
-   when omitted from `get_property_list`.~~ Resolved by Godot source:
-   `Object::set`/`Object::get` invoke extension callbacks before native lookup,
-   independent of the property list. Keep it as a runtime regression test.
-2. Decide exact getter/setter error behavior for wrong Variant types.
-3. Decide ownership for RefCounted-backed property fields.
-4. Decide when to add the static ClassDB backend.
+- Add the static ClassDB backend once extension method registration exists;
+  reuse the same field annotation and descriptor table.
+- Add property groups and revert callbacks.
+- Add a runtime integration test against a real engine: property list
+  registration, direct `Object.set`/`get` on a zero-usage property, and
+  setter/cleanup round-trips for deinit types and `RefCounted` pointers.

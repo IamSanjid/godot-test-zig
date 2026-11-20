@@ -9,7 +9,7 @@ does not register classes.
 reflect/
   reflect.zig       public aggregator
   hierarchy.zig     Extends traversal (inheritsFrom, extendsType)
-  meta.zig          type predicates and ValueType
+  meta.zig          type predicates and UnwrappedType
   functions.zig     function-shape helpers
   base.zig          annotation-free Base marker discovery
   objects.zig       class kinds, object pointers, RefCounted classification

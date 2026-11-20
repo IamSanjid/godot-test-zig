@@ -7,7 +7,7 @@ pub const TargetModifier = shared.TargetModifier;
 pub const Target = shared.Target;
 pub const Template = shared.Template;
 pub const TemplateMatch = shared.TemplateMatch;
-pub const RenderContext = shared.RenderContext;
+pub const RenderInputs = shared.RenderInputs;
 pub const Set = shared.Set;
 pub const render = shared.render;
 

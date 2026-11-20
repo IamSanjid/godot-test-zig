@@ -35,8 +35,8 @@ pub const reflect = runtime.reflect;
 pub const annotations = @import("annotations/annotations.zig");
 pub const abi = @import("abi.zig");
 
-pub const registration = runtime.registration;
-pub const Registry = runtime.Registry;
+pub const registration = @import("registration/registration.zig");
+pub const Registry = registration.Registry;
 
 // Codegen related
 pub const builtins = @import("builtins/builtins.zig");

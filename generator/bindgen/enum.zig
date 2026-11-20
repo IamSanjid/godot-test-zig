@@ -167,7 +167,7 @@ fn bitLessThan(_: void, a: Bit, b: Bit) bool {
     return a.pos < b.pos;
 }
 
-fn isDuplicate(values: []const InterfaceJson.EnumValue, index: usize) bool {
+fn isDuplicate(values: []const InterfaceJson.EnumMember, index: usize) bool {
     for (values[0..index]) |previous| {
         if (previous.value == values[index].value) return true;
     }
@@ -178,7 +178,7 @@ test "plain enums keep aliases for duplicate values" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
 
-    const values = [_]InterfaceJson.EnumValue{
+    const values = [_]InterfaceJson.EnumMember{
         .{ .name = "GDEXTENSION_CALL_OK", .value = 0 },
         .{ .name = "GDEXTENSION_CALL_ERROR_INVALID_METHOD", .value = 1, .description = &.{"Bad method."} },
         .{ .name = "GDEXTENSION_CALL_ERROR_INVALID_ARGUMENT", .value = 2 },
@@ -210,7 +210,7 @@ test "interface enums append extension code before the closing brace" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
 
-    const values = [_]InterfaceJson.EnumValue{
+    const values = [_]InterfaceJson.EnumMember{
         .{ .name = "GDEXTENSION_CALL_OK", .value = 0 },
         .{ .name = "GDEXTENSION_CALL_ERROR", .value = 1 },
     };
@@ -239,7 +239,7 @@ test "bitfields pad gaps and expose aliases" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
 
-    const values = [_]InterfaceJson.EnumValue{
+    const values = [_]InterfaceJson.EnumMember{
         .{ .name = "GDEXTENSION_METHOD_FLAG_NORMAL", .value = 1 },
         .{ .name = "GDEXTENSION_METHOD_FLAG_EDITOR", .value = 2 },
         .{ .name = "GDEXTENSION_METHOD_FLAG_CONST", .value = 4 },

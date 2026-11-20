@@ -17,6 +17,16 @@ pub fn pointerAlign(conf: api_options.BuiltinBuildConf) usize {
     };
 }
 
+/// Alignment of an opaque generated builtin.
+///
+/// Most engine builtins use the configuration's pointer/real alignment, but
+/// `Variant` is `alignas(8)` in every precision configuration (Godot's
+/// `Variant::_data` alignment), including 32-bit targets.
+pub fn builtinAlignment(conf: api_options.BuiltinBuildConf, name: []const u8) usize {
+    if (std.mem.eql(u8, name, "Variant")) return 8;
+    return pointerAlign(conf);
+}
+
 pub fn isPrimitive(raw: []const u8) bool {
     return std.mem.eql(u8, raw, "float") or
         std.mem.eql(u8, raw, "int") or
@@ -86,6 +96,12 @@ test "builtin member meta precision" {
     try std.testing.expect(try writeMetaPrimitive(&aw.writer, "int64"));
     try std.testing.expect(try writeMetaPrimitive(&aw.writer, "bool"));
     try std.testing.expect(!try writeMetaPrimitive(&aw.writer, "Vector3"));
+}
+
+test "Variant alignment is independent of pointer width" {
+    try std.testing.expectEqual(@as(usize, 8), builtinAlignment(.float_32, "Variant"));
+    try std.testing.expectEqual(@as(usize, 8), builtinAlignment(.float_64, "Variant"));
+    try std.testing.expectEqual(@as(usize, 4), builtinAlignment(.float_32, "AABB"));
 }
 
 test {

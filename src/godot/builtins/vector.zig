@@ -1,14 +1,4 @@
-//! Pure-Zig implementations of Godot's Vector types.
-//!
-//! The generated extension interface can construct these through engine calls,
-//! but all of the math below is implemented locally, following Godot's
-//! `core/math/vector*.h/.cpp` semantics. The types are laid out exactly like
-//! their engine counterparts (`extern struct`), so they can cross the
-//! GDExtension ABI without conversion on the float types.
-//!
-//! Method names are Zig-style camelCase versions of the `extension_api.json`
-//! names. Constants that would collide with method names (`MIN`/`MAX` vs
-//! `min`/`max`) are spelled `minValue`/`maxValue`.
+//! Pure-Zig Godot Vector math, laid out like the engine counterparts.
 
 pub fn Vector(comptime T: type, comptime dimension: comptime_int) type {
     if (dimension < 2 or dimension > 4) {

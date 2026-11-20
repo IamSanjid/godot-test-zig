@@ -141,10 +141,10 @@ changing every emitter.
 
 ## Start here
 
-1. [abi.md](docs/abi.md) — primitive, pointer/value, result, enum, default rules.
-2. [bindgen.md](docs/bindgen.md) — raw binding generation.
-3. [codegen.md](docs/codegen.md) — classes, generated builtins, utility, overlays.
-4. [status.md](docs/status.md) — implemented state and remaining gaps.
+1. [abi.md](docs/abi.md) - primitive, pointer/value, result, enum, default rules.
+2. [bindgen.md](docs/bindgen.md) - raw binding generation.
+3. [codegen.md](docs/codegen.md) - classes, generated builtins, utility, overlays.
+4. [status.md](docs/status.md) - implemented state and remaining gaps.
 
 ## Validation
 

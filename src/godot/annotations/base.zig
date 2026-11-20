@@ -1,27 +1,29 @@
-/// Basically a marker, which marks a field as a pointer to the Base, and usually will be set during initialization.
+/// Base marker: stores the direct parent instance and is initialized during creation.
 pub fn Base(comptime T: type) type {
     return struct {
         pub const BaseFor = T;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.base;
 
-        _ptr: *T = undefined,
-        _safe_guard: SafeGuard = .{},
+        base_ptr: *T = undefined,
+        safe_guard: SafeGuard = .{},
 
         const Self = @This();
 
         pub fn get(self: *const Self) *T {
-            return self._safe_guard.getGuard(*T, getImpl, .{self});
+            return self.safe_guard.getGuard(*T, getImpl, .{self});
         }
 
         fn getImpl(self: *const Self) *T {
-            return self._ptr;
+            return self.base_ptr;
         }
 
         pub fn set(self: *Self, value: *T) void {
-            self._safe_guard.setGuard(setImpl, .{ self, value });
+            self.safe_guard.setGuard(setImpl, .{ self, value });
         }
 
         fn setImpl(self: *Self, value: *T) void {
-            self._ptr = value;
+            self.base_ptr = value;
         }
     };
 }
@@ -49,11 +51,9 @@ pub fn findBaseFieldName(comptime T: type, comptime B: type) ?[:0]const u8 {
     return field.name;
 }
 
-// ---------------------------------------------------------------------------
 // Compile-time coverage: markers built by this annotation must stay discoverable
 // by the annotation-free reflect layer, because `Variant` and registration use
 // that layer. This runs on every build that references annotations.
-// ---------------------------------------------------------------------------
 
 const TestParent = struct { value: u32 = 0 };
 
@@ -68,6 +68,8 @@ fn checkAnnotationMarker() void {
     if (!std.mem.eql(u8, field.name, "base")) @compileError("reflect.base reports the wrong Base marker field name");
     if (findBaseFieldName(TestExtension, TestParent) == null)
         @compileError("findBaseFieldName must keep finding annotation markers");
+    if (!marker_kind.is(@FieldType(TestExtension, "base"), .base))
+        @compileError("annotations.Base must declare marker.Kind.base");
 }
 
 comptime {
@@ -86,8 +88,9 @@ test "reflect.base discovers annotations.Base markers" {
     try std.testing.expectEqual(&parent, pointer.?);
 }
 
-const SafeGuard = @import("internal/safe_guard.zig");
-
 const std = @import("std");
 
 const reflect_base = @import("../reflect/base.zig");
+
+const marker_kind = @import("marker.zig");
+const SafeGuard = @import("internal/SafeGuard.zig");

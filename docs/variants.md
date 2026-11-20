@@ -6,11 +6,13 @@ The hand-written `Variant` layer is the bridge between Zig values and Godot's
 ## API
 
 ```zig
-Variant.wrap(T, value)   // borrowed view
+Variant.wrap(T, value)   // borrowed view (raw or pointer)
 Variant.init(T, value)   // owned Variant
 Variant.as(T)            // typed extraction
 Variant.clone()          // owning shallow copy
 Variant.deinit()         // destroy an owning Variant
+Variant.objectInstance() // validated live object pointer or null
+Variant.isNullObject()   // true for engine OBJECT-null payload
 Variant.typeFor(T)       // VariantType or null
 ```
 
@@ -28,28 +30,53 @@ bindings.builtins.Variant.wrap(dispatcher, T, value)
 ```
 
 It has the same borrowed contract but takes `dispatcher` for object instance
-ids and supports only the fixed-argument types generated call sites need.
-Generated vararg code uses it; it is not the user-facing codegen API.
+ids. It accepts pointer arguments for every inline builtin, class pointer,
+scalar, enum and bitfield, and rejects packed arrays and heap-backed builtins.
+The raw-value `wrap` forms described below belong to the hand-written `Variant`;
+this generated-bindings helper remains pointer-based. Generated vararg code uses
+it; it is not the user-facing codegen API.
 
 ## Ownership
 
-`wrap`:
+`wrap` accepts either a pointer or, where safe, a raw value:
 
-- borrows pointer/engine-managed payloads; inline scalar and plain-value
-  builtins are copied into the Variant payload
+```zig
+const scalar = Variant.wrap(i32, @as(i32, 42));
+const point = Variant.wrap(Vector2, Vector2.zero);
+const node_variant = Variant.wrap(*Node, node);       // borrowed pointer
+const nil_variant = Variant.wrap(?*Node, null);
+const borrowed = Variant.wrap(StringName, &name);     // borrowed pointer
+```
+
+- raw scalars, enums, packed bitfields, and inline plain-value builtins are
+  copied into the Variant payload; they have no source lifetime
+- untyped literals are accepted when the target type is unambiguous:
+  `Variant.wrap(i32, 7)`, `Variant.wrap(?*Node, null)`,
+  `Variant.wrap(Mode, .b)`
+- raw object pointers are borrowed exactly like the pointer form
+- pointer forms borrow the pointed payload
 - performs no engine allocation
 - changes no reference counts
 - must never be passed to `deinit`
-- is valid only while the source value is alive
-- rejects packed arrays
+- a borrowed payload is valid only while the source value is alive
+- rejects packed arrays (`PackedByteArray`, ...), including raw values
 - rejects builtins the engine stores behind an owned heap allocation
   (`AABB`, `Basis`, `Projection`, `Transform2D`, `Transform3D`)
+- owned deinit-types (`String`, `StringName`, `NodePath`, `Callable`, `Signal`,
+  `Array`, `Dictionary`) are inline in Variant storage but own an internal
+  refcounted buffer; they must be passed by pointer to be borrowed so the source
+  lifetime is explicit. A raw value
+  is rejected because copying it would alias engine-owned storage
 
-Use `init` for those types.
+Use `init` for packed arrays, heap-backed builtins, and owned raw deinit-types.
+Those are value types in Zig, but their Variant representation is an engine-owned
+allocation or refcounted header, so a borrowed raw wrap is not possible.
 
 `init`:
 
-- returns an owning Variant
+- returns an owning Variant and accepts a raw value for every supported type,
+  including `Transform2D`, `Transform3D`, `PackedArray`, and other types that
+  `wrap` rejects
 - copies non-trivial builtins through the engine Variant constructors; object
   data is constructed explicitly (see the object rules below)
 - leaves the input argument owned by the caller
@@ -57,7 +84,9 @@ Use `init` for those types.
 - for `RefCounted` object pointers, takes one owning reference through the
   ClassDB `reference` path; `deinit` releases it. RefCounted-ness is read from
   the runtime engine instance ID, so an upcast `*Object` that points at a
-  `RefCounted` is handled
+  `RefCounted` is handled. This adds a reference rather than consuming a
+  creation reference: if the pointer came from `construct()`/a fresh creation,
+  the caller must claim or release that creation reference separately
 - for non-`RefCounted` object pointers, stores a borrowed object reference
 - for extension class pointers, resolves the ultimate engine base object through
   the `Base` marker chain and applies the rules above to that engine object; the
@@ -65,6 +94,7 @@ Use `init` for those types.
 
 `as`:
 
+- returns a raw value already; no wrapping step is needed
 - returns `null` on an exact tag mismatch; no implicit Variant conversion
 - integer, enum and bitfield targets also return `null` when the Variant `i64`
   payload is out of range for the requested type; exhaustive enums also reject
@@ -73,13 +103,22 @@ Use `init` for those types.
 - scalars and plain value builtins are returned by value
 - `String`, `StringName`, `NodePath`, `Callable`, `Signal`, `Array`,
   `Dictionary`, and packed arrays are returned owned; deinit them
-- object pointers are borrowed from the Variant. The object tag is checked, but
-  the runtime class and object lifetime are not; the Variant must hold a live
-  object of the requested class
+- object pointers are borrowed from the Variant. `as` validates the stored
+  instance id against ObjectDB and returns `null` for a stale or null object;
+  the declared runtime class is not checked, so a live object of the wrong class
+  can still be returned
 - extension class pointers resolve the stored engine base object and return the
   registered Zig instance through that base's `asInstance(Extension)`; the
   instance is borrowed and `null` means no matching instance binding
 - pass non-optional object pointers (`as(*Node)`, not `as(?*Node)`)
+
+`objectInstance()` is the validated object read: it checks the object tag, the
+stored instance id, and the ObjectDB lookup before returning a pointer. It is
+separate from `as(*C)`, which now also uses the same validation before returning
+the object pointer. Engine null objects (`OBJECT` tag with empty ObjData) return
+`null`; `isNullObject()` exposes that state. `wrap`/`init` of a typed null
+optional object currently produce `Variant.nil`, so both null representations
+must be accepted by callers.
 
 `clone` uses `variant_new_copy`: shallow Variant copy, but the copy owns its own
 references. It is also how a borrowed `wrap` becomes owning.
@@ -149,7 +188,10 @@ Rules:
 Ptrcall slots use canonical widths (bool -> `u8`, ints/enums/bitfields -> `i64`,
 float/double -> `f64`). The Variant payload follows the same classification, not
 the slot widths: bool goes to `data.bool`, integers to `data.int` (`i64`, with
-u64-backed values bit-cast), floats to `data.float`.
+u64-backed values bit-cast), floats to `data.float`. Unsigned 64-bit integers
+use a `u64` canonical ptrcall slot (`abi.Box(u64).Raw`), unlike narrower
+unsigned integers which widen to `i64`; Variant payloads still store both as the
+bit-preserving `i64` payload.
 
 Variant from-type and to-type constructors are resolved lazily once per
 `VariantType` and cached for the dispatcher lifetime; this is a first-use
@@ -158,13 +200,15 @@ optimization, not part of the conversion contract.
 ## Variant layout
 
 A Variant is **24 bytes** when `real_t` is `f32` and **40 bytes** when `real_t`
-is `f64`. That size comes from `_mem[sizeof(real_t) * 4]` and the generated
-builtin member sizes, not from the `float` payload. The `float` field stays
-`f64` in both layouts.
+is `f64`: 4-byte tag plus padding to offset 8, then
+`max(sizeof(ObjData), sizeof(real_t) * 4)`. The `float` field stays `f64` in both
+layouts. The data union is `alignas(8)` in every configuration, including 32-bit
+targets.
 
-The generated binding Variant takes its opaque size and `checkTypeLayout`
-expectation from the selected `--builtin-build-conf`. Bindgen emits a 40-byte
-Variant for `double_64` and a 24-byte Variant for `float_64`.
+The generated binding Variant owns the payload layout and `checkTypeLayout`
+expectation; hand-written `Variant.Data` aliases it. Bindgen emits a 40-byte
+Variant for `double_64` and a 24-byte Variant for `float_64`. Generated
+`builtins/traits.zig` classifies builtins for both layers.
 
 The codegen builtins select their single/double aliases from
 `bindings.is_double_precision`, which is derived from the generated Variant
@@ -178,12 +222,16 @@ Variant size from `Data.float`.
 - codegen builtin types
 - engine object class pointers and Zig extension class pointers (including
   optional pointers) -> `object`
-- bool, ints, floats
-- enums and packed bitfields
+- bool, ints, floats narrower than or equal to 64 bits
+- enums and packed bitfields up to 64 bits
 - `Variant` itself (`null`, transparent storage)
 
-It only reports the Variant type. Per-class object metadata (class name,
-properties) is a future property-layer concern and is not built here.
+Canonical scalars wider than 64 bits return `null`; they cannot fit the engine's
+`i64`/`f64` payload and are rejected rather than mis-reported. It only reports
+the Variant type; it does not carry per-class object metadata.
+The dynamic property backend derives `PropertyInfo` type and class names from
+`Variant.typeFor` plus `reflect.objectTarget`/`reflect.className`; see
+[properties.md](properties.md).
 
 Codegen builtins bridge through `toBinding` / `fromBinding`. Generated bindings
 are not used as public property/user types.

@@ -1,13 +1,4 @@
-//! Generic `Extends` hierarchy traversal: the pure class-hierarchy primitive.
-//!
-//! A class declaration records its direct parent as `pub const Extends = Parent`
-//! (generated engine classes and Zig extension classes both do this; generated
-//! root classes declare `Extends = void`). This module only walks that
-//! declaration. It knows nothing about generated engine classes, extension
-//! classes, Base markers, or registration; `objects.zig` and `extension.zig`
-//! add that policy on top.
-//!
-//! Everything here is comptime-only.
+//! Generic `Extends` hierarchy traversal.
 
 /// The direct parent declared by `T.Extends`, or null when `T` declares no
 /// `Extends` or its `Extends` value is not a type.
@@ -38,11 +29,9 @@ pub fn inheritsFrom(comptime T: type, comptime Base: type) bool {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Compile-only coverage with fake declarations. Higher layers (`objects.zig`,
 // `extension.zig`) check generated classes; this check keeps the primitive
 // itself honest on every build that references `reflect`.
-// ---------------------------------------------------------------------------
 
 const FakeRoot = struct {};
 

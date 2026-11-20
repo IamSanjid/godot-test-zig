@@ -48,7 +48,7 @@ No generated file references annotations or registration.
 - A failed `InitCallback` destroys the user instance and engine base.
 - `godot.engine_allocator` is the engine-backed allocator.
 - The `Registry` arena is allocated from the allocator passed to `godot.init`.
-- Per-instance creation uses `AddClassData.create_allocator`; callback allocation
+- Per-instance creation uses `ClassRegistration.create_allocator`; callback allocation
   uses `gpa`, falling back to `create_allocator`.
 - Cached `String`/`StringName`/`NodePath` literals are process-lifetime and
   unsynchronized; initialize them before cross-thread use.
@@ -68,27 +68,31 @@ parameters, interface structs, builtin layouts, and class methods.
 - class/virtual metadata
 - `MemberFunctions` / `StaticFunctions` metadata
 
-Codegen does not own registration or class-instance lifecycle.
+Codegen does not own registration, class-instance lifecycle, or property
+registration.
 
 ## What is hand-written
 
-- `runtime.zig` — process-wide dispatcher/registry state, engine
+- `runtime.zig` - process-wide dispatcher/registry state, engine
   initialize/deinitialize callbacks, `init`, and `richLogFn`.
-- `godot.zig` — public facade re-exporting `runtime.zig` and the codegen type
+- `godot.zig` - public facade re-exporting `runtime.zig` and the codegen type
   modules; the entry point imports it as `godot`.
-- `abi.zig` — canonical ptrcall widths and shared argument/return marshalling.
-- `reflect/` — type/object predicates, inheritance traversal, Base-marker
+- `abi.zig` - canonical ptrcall widths and shared argument/return marshalling.
+- `reflect/` - type/object predicates, inheritance traversal, Base-marker
   discovery, function-shape helpers, generic field-default initialization.
-- `annotations/` — optional markers such as `Base`, `OnReady`, `InitCallback`,
-  `DeinitCallback`, `NotificationCallback`.
-- `registration/` — optional `Registry`, class creation/free, notification
-  dispatch, virtual-method registration.
-- `heap.zig` — engine allocator.
+- `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
+  `InitCallback`, `DeinitCallback`, `NotificationCallback`.
+- `registration/` - optional `Registry`, class creation/free, notification
+  dispatch, virtual-method registration, and dynamic property callbacks.
+- `heap.zig` - engine allocator.
 - hand-written builtins and the hand-written builtin aggregate.
 
 ## Naming decisions
 
-- `reflect`, not `reflection`: shorter and consistent with Zig’s `meta` style.
+Project-wide naming, import-order, and formatting rules live in
+[docs/style.md](style.md).
+
+- `reflect`, not `reflection`: shorter and consistent with Zig's `meta` style.
 - `annotations`, not `annot`: the abbreviation buys little and obscures the
   concept.
 - `registration/`, not a `Registry/` implementation directory, because the
@@ -114,7 +118,7 @@ facade.
 
 ## Design principles
 
-- Do not force an “ABI” convention on user classes beyond the minimum needed to
+- Do not force an "ABI" convention on user classes beyond the minimum needed to
   identify an engine class (`Extends`).
 - Annotations are opt-in. A class with no annotations still registers.
 - `Registry` is a convenience collector, not a requirement.

@@ -1113,7 +1113,7 @@ fn writePublicCodegenType(
     resolver: *const ClassResolver,
     imports: *ImportSet,
     raw: []const u8,
-    context: type_mapping.TypeContext,
+    context: type_mapping.TypePosition,
     meta: ?[]const u8,
 ) !void {
     const resolved = try resolvePublicCodegen(resolver, raw, context, resolver.real_type, meta);
@@ -1125,7 +1125,7 @@ fn writeCodegenType(
     resolver: *const ClassResolver,
     imports: *ImportSet,
     raw: []const u8,
-    context: type_mapping.TypeContext,
+    context: type_mapping.TypePosition,
 ) !void {
     const resolved = try type_mapping.resolve(resolver, raw, context);
     try writer.writeAll(resolved.zig);
@@ -1142,7 +1142,7 @@ fn writeCodegenType(
 fn resolvePublicCodegen(
     resolver: *const ClassResolver,
     raw: []const u8,
-    context: type_mapping.TypeContext,
+    context: type_mapping.TypePosition,
     real_name: []const u8,
     meta: ?[]const u8,
 ) !type_mapping.ResolvedType {
@@ -1156,7 +1156,7 @@ fn writePublicType(
     resolver: *const ClassResolver,
     imports: *ImportSet,
     raw: []const u8,
-    context: type_mapping.TypeContext,
+    context: type_mapping.TypePosition,
     real_name: []const u8,
     meta: ?[]const u8,
 ) !void {

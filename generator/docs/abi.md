@@ -194,4 +194,7 @@ Bindgen wrappers build the final engine pointer array from:
 - the codegen-converted binding Variant `vargs`
 
 Unsupported vararg return types now fail generation with
-`error.UnsupportedVarargReturn` instead of emitting a broken fallback.
+`error.UnsupportedVarargReturn` instead of emitting a broken fallback. Fixed
+argument types are validated against the raw Variant.wrap subset up front, so an
+unsupported future API type fails generation with
+`error.UnsupportedVarargFixedArgument` rather than a lazy compile error.

@@ -238,7 +238,7 @@ fn resolvePublicType(
     writer: *Io.Writer,
     resolver: *const class_resolver.ClassResolver,
     raw: []const u8,
-    context: class_resolver.TypeContext,
+    context: class_resolver.TypePosition,
     real_name: []const u8,
 ) !void {
     const resolved = try resolver.resolveFor(raw, context, .utility_file);

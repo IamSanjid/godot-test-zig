@@ -16,6 +16,7 @@ binding function takes an explicit `dispatcher: anytype`.
   singletons.zig
   utility/
   builtins/
+    traits.zig       # generated managed/packed/heap classification
   classes/
 ```
 
@@ -147,8 +148,11 @@ builtins implement their own.
 - Vararg fixed arguments are converted with `Variant.wrap`; the `vargs`
   received by bindgen must already be binding Variants. Codegen produces those
   from the library utility's codegen Variants. Bindgen only assembles the final
-  engine Variant pointer array. `Variant.wrap` currently supports the fixed
-  argument types present in the binding implementation.
+  engine Variant pointer array. `Variant.wrap` supports scalars, enums,
+  bitfields, class pointers, and all inline builtins; packed arrays and
+  heap-backed builtins require the owning constructor and are rejected. Bindgen
+  validates fixed argument types during generation, so an API bump fails with
+  `error.UnsupportedVarargFixedArgument` instead of emitting lazily broken code.
 - Vararg return conversion is intentionally limited to the cases generated today;
   unsupported types now fail generation explicitly.
 - Enum and bitfield slots are canonical; see `abi.md`.

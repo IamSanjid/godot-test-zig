@@ -1,4 +1,4 @@
-_state: Guard = if (is_safe_mode) Guard.init(unset) else {},
+state: Guard = if (is_safe_mode) Guard.init(unset) else {},
 
 const Self = @This();
 const unset = 0;
@@ -12,7 +12,7 @@ pub inline fn getGuard(
     comptime getFn: anytype,
     args: anytype,
 ) RetT {
-    if (comptime is_safe_mode) assert(self._state.load(.acquire) == ready);
+    if (comptime is_safe_mode) assert(self.state.load(.acquire) == ready);
     return @call(.always_inline, getFn, args);
 }
 
@@ -23,10 +23,10 @@ pub inline fn setGuard(
 ) void {
     if (comptime is_safe_mode) {
         // null == swap succeeded; anything else is the value that was already there
-        assert(self._state.cmpxchgStrong(unset, setting, .acquire, .monotonic) == null);
+        assert(self.state.cmpxchgStrong(unset, setting, .acquire, .monotonic) == null);
     }
     @call(.always_inline, setFn, args);
-    if (comptime is_safe_mode) self._state.store(ready, .release);
+    if (comptime is_safe_mode) self.state.store(ready, .release);
 }
 
 const std = @import("std");

@@ -3,37 +3,42 @@
 //!
 //! `Registry` is an optional convenience collector, not a requirement. The
 //! individual registration helpers (`instance.zig`, `notification.zig`,
-//! `AddClassData.zig`) are standalone and can be passed to
+//! `ClassRegistration.zig`) are standalone and can be passed to
 //! `classdb_register_extension_class6` directly.
 
-classes: std.ArrayList(ClassInfo) = .empty,
+classes: std.ArrayList(RegisteredClass) = .empty,
 class_names: std.StringHashMapUnmanaged(void) = .empty,
 arena: std.heap.ArenaAllocator,
 
-pub const Registry = @This();
+const Registry = @This();
 
 /// Compile-time options shared by every class in one `addClasses` group.
 ///
-/// These change the shape of the runtime callbacks, so they are compile-time
-/// values rather than fields of `AddClassData`.
+/// They are supplied with the call, not with the runtime `ClassRegistration`.
+/// Both flags change callback shape and are passed as comptime parameters.
 pub const ClassOptions = struct {
     /// When true, `OnReady` fields are initialized automatically once the node
     /// receives `NOTIFICATION_POST_ENTER_TREE`. The class must then declare a
     /// `Base` marker field; otherwise registration is a compile error.
     auto_onready: bool = false,
+    /// When true, the free-instance callback runs
+    /// `annotations.deinitPropertyFields` on the class's `Property` fields after
+    /// the deinit callback. Off by default: property fields are user-managed.
+    /// Passed to `FreeInstance` as a comptime parameter.
+    auto_property_cleanup: bool = false,
     // TODO: `is_virtual` / `is_abstract` are future compile-time options. They
     // exist only once their callback behavior is implemented; they are not dead
     // runtime flags.
 };
 
-pub const AddClassData = @import("AddClassData.zig");
+pub const ClassRegistration = @import("ClassRegistration.zig");
 pub const virtuals = @import("virtuals.zig");
 
-pub const ClassInfo = struct {
+pub const RegisteredClass = struct {
     creation_info: interface.ClassCreationInfo6,
-    /// Heap-stored `AddClassData` shared by the `addClasses` call that
+    /// Heap-stored `ClassRegistration` shared by the `addClasses` call that
     /// registered this class. Passed to the engine as `class_userdata`.
-    data: *AddClassData,
+    data: *ClassRegistration,
     class_name: builtins.StringName, // static, no need to free/deinit
     parent_class_name: builtins.StringName, // static, no need to free/deinit
 };
@@ -47,13 +52,13 @@ pub fn deinit(self: *Registry) void {
 /// If a namespace is provided only the first level of public struct declarations is checked.
 ///
 /// All classes in one call share `class_options` and one heap-stored
-/// `AddClassData`. Use another call for a group with different options,
+/// `ClassRegistration`. Use another call for a group with different options,
 /// allocators, or registration level.
 pub fn addClasses(
     self: *Registry,
     comptime p_classes: anytype,
     comptime class_options: ClassOptions,
-    data: AddClassData,
+    data: ClassRegistration,
 ) !void {
     const ClassesT = @TypeOf(p_classes);
 
@@ -62,8 +67,8 @@ pub fn addClasses(
     comptime if (p_classes.len == 0)
         @compileError("Please provide at least one class or namespace.");
 
-    const p_data = try self.arena.allocator().create(AddClassData);
-    p_data.* = data;
+    const p_registration = try self.arena.allocator().create(ClassRegistration);
+    p_registration.* = data;
 
     @setEvalBranchQuota(50000);
     inline for (0..p_classes.len) |i| {
@@ -77,9 +82,9 @@ pub fn addClasses(
         // shape check (zero-field struct), so a valid zero-field extension class
         // stays an extension class; only the remaining shape is a namespace.
         if (comptime reflect.isExtensionClass(Class)) {
-            try self.addClass(Class, Class.Extends, class_options, p_data);
+            try self.addClass(Class, Class.Extends, class_options, p_registration);
         } else if (comptime reflect.isLikelyNamespace(Class)) {
-            try self.addClassesFromNamespace(Class, class_options, p_data);
+            try self.addClassesFromNamespace(Class, class_options, p_registration);
         } else {
             @compileError("'" ++ @typeName(Class) ++ "' must be an extension class (a struct declaring `Extends`) or a namespace struct of extension classes.");
         }
@@ -91,7 +96,7 @@ fn addClassesFromNamespace(
     self: *Registry,
     comptime T: type,
     comptime class_options: ClassOptions,
-    data: *AddClassData,
+    data: *ClassRegistration,
 ) !void {
     // `addClasses` only calls this for a type `reflect.isLikelyNamespace`
     // accepted, which already guarantees a zero-field struct.
@@ -109,7 +114,7 @@ fn addClass(
     comptime T: type,
     comptime Base: type,
     comptime class_options: ClassOptions,
-    data: *AddClassData,
+    data: *ClassRegistration,
 ) !void {
     const c_class_name = comptime reflect.className(T);
     if (comptime reflect.isExtensionClass(Base)) {
@@ -130,12 +135,17 @@ fn addClass(
     else
         null;
 
+    const property_callbacks = property.callbacks(T);
     const class_creation_info: interface.ClassCreationInfo6 = .{
         .is_exposed = true,
         .create_instance_func = CreateInstance(T, Base),
-        .free_instance_func = FreeInstance(T, Base),
+        .free_instance_func = FreeInstance(T, Base, class_options.auto_property_cleanup),
         .get_virtual_func = get_virtual_func,
         .notification_func = Notification(T, Base, class_options.auto_onready),
+        .set_func = property_callbacks.set_func,
+        .get_func = property_callbacks.get_func,
+        .get_property_list_func = property_callbacks.get_property_list_func,
+        .free_property_list_func = property_callbacks.free_property_list_func,
         .class_userdata = data,
     };
 
@@ -148,6 +158,12 @@ fn addClass(
     };
 }
 
+comptime {
+    // Keep the dynamic property backend's compile-only coverage analyzed even
+    // when the example registers no property.
+    property.comptimeSelfCheck();
+}
+
 const std = @import("std");
 
 const bindings = @import("bindings");
@@ -156,6 +172,8 @@ const interface = bindings.interface;
 const reflect = @import("../reflect/reflect.zig");
 
 const builtins = @import("../builtins/builtins.zig");
+
+const property = @import("property.zig");
 
 const CreateInstance = @import("instance.zig").CreateInstance;
 const FreeInstance = @import("instance.zig").FreeInstance;

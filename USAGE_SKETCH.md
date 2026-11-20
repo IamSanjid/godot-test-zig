@@ -1,7 +1,7 @@
 Foo.zig:
 ```zig
-some_value: OnReady(i32, .{ .call = .{ struct{ fn f() i32 { return 69; }.f, .{} } } }),
-some_node: OnReady(Node, .{ .node = "<path>" }),
+some_value: OnReady(i32).Call(struct{ fn f() i32 { return 69; } }.f, .{}),
+some_node: OnReady(Node).Node("<path>"),
 
 pub const Extends = godot.classes.core.Sprit2D;
 

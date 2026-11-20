@@ -7,7 +7,7 @@ pub const Scope = enum {
     native_file,
 };
 
-pub const TypeContext = enum {
+pub const TypePosition = enum {
     argument,
     return_value,
 };
@@ -223,11 +223,11 @@ pub const ClassResolver = struct {
         return if (info.class.api_type == null) "../" else "../../";
     }
 
-    pub fn resolve(self: ClassResolver, raw: []const u8, context: TypeContext) !ResolvedType {
+    pub fn resolve(self: ClassResolver, raw: []const u8, context: TypePosition) !ResolvedType {
         return self.resolveFor(raw, context, .class_file);
     }
 
-    pub fn resolveFor(self: ClassResolver, raw: []const u8, context: TypeContext, scope: Scope) !ResolvedType {
+    pub fn resolveFor(self: ClassResolver, raw: []const u8, context: TypePosition, scope: Scope) !ResolvedType {
         var name = std.mem.trim(u8, raw, " ");
         if (std.mem.startsWith(u8, name, "const ")) name = std.mem.trim(u8, name["const ".len..], " ");
 
@@ -306,7 +306,7 @@ pub const ClassResolver = struct {
         return std.fmt.allocPrint(self.arena, "classes.{s}", .{info.class.name});
     }
 
-    fn classPointer(self: ClassResolver, scope: Scope, info: *const Info, context: TypeContext) !ResolvedType {
+    fn classPointer(self: ClassResolver, scope: Scope, info: *const Info, context: TypePosition) !ResolvedType {
         if (scope == .class_file) {
             const zig = if (context == .return_value)
                 try std.fmt.allocPrint(self.arena, "?*{s}", .{self.zigClassName(info.class.name)})
@@ -346,7 +346,7 @@ pub const ClassResolver = struct {
         };
     }
 
-    fn resolveEnum(self: ClassResolver, raw: []const u8, context: TypeContext, scope: Scope) !ResolvedType {
+    fn resolveEnum(self: ClassResolver, raw: []const u8, context: TypePosition, scope: Scope) !ResolvedType {
         _ = context;
         const rest = if (std.mem.startsWith(u8, raw, "enum::")) raw["enum::".len..] else raw["bitfield::".len..];
 
@@ -728,7 +728,7 @@ fn buildRenames(arena: Allocator, api: ExtensionApiJson) ![]const Rename {
     return renames[0..rename_count];
 }
 
-fn bitfieldBits(values: []const ExtensionApiJson.GlobalEnumValue) u8 {
+fn bitfieldBits(values: []const ExtensionApiJson.GlobalEnumMember) u8 {
     var max_value: u64 = 0;
     for (values) |value| {
         if (value.value > 0) {

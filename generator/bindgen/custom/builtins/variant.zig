@@ -10,14 +10,14 @@ fn PackedArrayRef(comptime T: type) type {
     return opaque {};
 }
 
-const Data = extern union {
+pub const Data = extern union {
     aabb: *AABB,
-    array: *Array,
+    array: Array,
     basis: *Basis,
     bool: bool,
     callable: Callable,
     color: Color,
-    dictionary: *Dictionary,
+    dictionary: Dictionary,
     // Engine layout fact: `Variant::_data._float` is C++ `double` in every
     // build configuration. This field does not determine the Variant size;
     // `_mem[sizeof(real_t) * 4]` and the generated builtin members do.
@@ -71,6 +71,7 @@ const VariantWrapped = extern struct {
 comptime {
     std.debug.assert(@sizeOf(VariantWrapped) == @sizeOf(Variant));
     std.debug.assert(@alignOf(VariantWrapped) == @alignOf(Variant));
+    std.debug.assert(@offsetOf(VariantWrapped, "data") == 8);
 }
 
 // @section_end artifact Data
@@ -87,14 +88,16 @@ comptime {
 /// Scalars are written in their canonical Variant payload form: `bool` ->
 /// `bool`, every integer/enum/packed bitfield -> canonical `i64` payload
 /// (unsigned 64-bit backings bit-cast), `float` -> C++ `double` payload.
-/// Inline builtins currently handled here are `String`, `StringName`,
-/// `Callable`, `Signal` and `Vector2`; any generated opaque class pointer is
-/// handled as an object. This raw-layer helper is intentionally a subset of the
-/// public codegen `Variant.wrap`; unsupported fixed-argument types are a
-/// generation/compile error.
+/// All inline builtins are handled here (`String`, `StringName`, `NodePath`,
+/// `RID`, `Callable`, `Signal`, `Array`, `Dictionary`, the vector/rect types,
+/// `Plane`, `Quaternion`, and `Color`); any generated opaque class pointer is
+/// handled as an object. This raw-layer helper remains pointer-based and is a
+/// subset of the public codegen `Variant.wrap`.
 ///
-/// Packed arrays compile-error: their Variant payload is an engine-owned
-/// copy-on-write ref, so they need the owning Variant constructors.
+/// Packed arrays and heap-backed builtins (`AABB`, `Basis`, `Projection`,
+/// `Transform2D`, `Transform3D`) compile-error: their Variant payload is an
+/// engine-owned allocation or copy-on-write ref, so they need the owning
+/// Variant constructors.
 pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
     const VT = @TypeOf(value);
     if (VT != *const T and
@@ -106,9 +109,13 @@ pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
             .{ @typeName(T), @typeName(VT) },
         ));
 
-    if (comptime isPackedArray(T)) {
+    if (comptime traits.isPackedArray(T)) {
         @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
             ": packed arrays are copy-on-write engine values. Use the owning Variant constructor instead.");
+    }
+    if (comptime traits.isHeapBuiltin(T)) {
+        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+            ": the engine keeps it behind an owned heap allocation. Use the owning Variant constructor instead.");
     }
 
     const v = if (VT == ?*T or VT == ?*const T) blk: {
@@ -121,9 +128,6 @@ pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
     switch (T) {
         String => return borrowed(.string, .{ .string = v.* }),
         StringName => return borrowed(.string_name, .{ .string_name = v.* }),
-        Callable => return borrowed(.callable, .{ .callable = v.* }),
-        Signal => return borrowed(.signal, .{ .signal = v.* }),
-        Vector2 => return borrowed(.vector2, .{ .vector2 = v.* }),
         classes.core.Object => {
             const object: *classes.core.Object = @constCast(@as(*const classes.core.Object, @ptrCast(v)));
             const instance_id = classes.core.Object.getInstanceId(object, dispatcher);
@@ -134,6 +138,23 @@ pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
                 },
             });
         },
+        NodePath => return borrowed(.node_path, .{ .node_path = v.* }),
+        RID => return borrowed(.rid, .{ .rid = v.* }),
+        Callable => return borrowed(.callable, .{ .callable = v.* }),
+        Signal => return borrowed(.signal, .{ .signal = v.* }),
+        Array => return borrowed(.array, .{ .array = v.* }),
+        Dictionary => return borrowed(.dictionary, .{ .dictionary = v.* }),
+        Vector2 => return borrowed(.vector2, .{ .vector2 = v.* }),
+        Vector2i => return borrowed(.vector2i, .{ .vector2i = v.* }),
+        Vector3 => return borrowed(.vector3, .{ .vector3 = v.* }),
+        Vector3i => return borrowed(.vector3i, .{ .vector3i = v.* }),
+        Vector4 => return borrowed(.vector4, .{ .vector4 = v.* }),
+        Vector4i => return borrowed(.vector4i, .{ .vector4i = v.* }),
+        Rect2 => return borrowed(.rect2, .{ .rect2 = v.* }),
+        Rect2i => return borrowed(.rect2i, .{ .rect2i = v.* }),
+        Plane => return borrowed(.plane, .{ .plane = v.* }),
+        Quaternion => return borrowed(.quaternion, .{ .quaternion = v.* }),
+        Color => return borrowed(.color, .{ .color = v.* }),
         else => if (comptime @typeInfo(T) == .@"opaque" and @hasDecl(T, "GodotClassName")) {
             // Any generated engine class pointer is a Variant object. This is
             // intentionally broader than the exact Object case above so future
@@ -180,26 +201,6 @@ fn canonicalInt(comptime T: type, value: T) i64 {
     return @intCast(value);
 }
 
-/// True for builtins whose Variant payload is an engine-managed copy-on-write
-/// reference instead of inline data.
-fn isPackedArray(comptime T: type) bool {
-    inline for (.{
-        PackedByteArray,
-        PackedColorArray,
-        PackedFloat32Array,
-        PackedFloat64Array,
-        PackedInt32Array,
-        PackedInt64Array,
-        PackedStringArray,
-        PackedVector2Array,
-        PackedVector3Array,
-        PackedVector4Array,
-    }) |Packed| {
-        if (T == Packed) return true;
-    }
-    return false;
-}
-
 // @section_end artifact wrap
 // @section artifact nil
 /// Precomputed nil Variant value. It owns no engine-managed references; copy it
@@ -231,4 +232,5 @@ pub fn asCallable(self: Variant) Callable {
 // @section file
 const classes = @import("../classes/classes.zig");
 const native = @import("../native.zig");
+const traits = @import("traits.zig");
 // @section_end file

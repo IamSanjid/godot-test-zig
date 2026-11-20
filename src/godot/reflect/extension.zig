@@ -1,24 +1,4 @@
-//! Extension-class engine-base policy.
-//!
-//! An extension class (see `objects.zig`) wraps an opaque engine object class.
-//! Its `Extends` chain may pass through other extension classes; every
-//! extension level records its direct parent instance in a Base marker field
-//! (built by `annotations.Base`). This module resolves that chain:
-//!
-//! - `EngineBaseType(T)` finds the terminal opaque engine class at compile time;
-//! - `engineBasePointer(T, instance)` walks the runtime Base markers to the
-//!   borrowed engine object the engine owns.
-//!
-//! The terminal engine class needs no marker: the engine owns that object
-//! directly. Marker discovery itself is annotation-free (`base.zig`); this
-//! module only applies the extension-class policy, so annotations are never
-//! imported here.
-//!
-//! Everything here is comptime-only or borrows pointers: no ownership changes.
-
-const base = @import("base.zig");
-const hierarchy = @import("hierarchy.zig");
-const objects = @import("objects.zig");
+//! Extension-class to engine-base resolution.
 
 /// The ultimate opaque engine object class behind class type `T`.
 ///
@@ -87,13 +67,11 @@ fn engineBasePointerStep(comptime T: type, instance: *anyopaque) *anyopaque {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Compile-only coverage with fake extensions over a real engine class.
 //
 // The fake marker mirrors the annotation's structural shape without importing
 // annotations. `comptime` evaluation below runs on every build that references
 // `reflect`.
-// ---------------------------------------------------------------------------
 
 const classes = @import("../classes/classes.zig");
 
@@ -101,14 +79,14 @@ fn FakeMarker(comptime B: type) type {
     return struct {
         pub const BaseFor = B;
 
-        _ptr: *B = undefined,
+        base_ptr: *B = undefined,
 
         pub fn get(self: *const @This()) *B {
-            return self._ptr;
+            return self.base_ptr;
         }
 
         pub fn set(self: *@This(), value: *B) void {
-            self._ptr = value;
+            self.base_ptr = value;
         }
     };
 }
@@ -174,3 +152,7 @@ test "engineBasePointer walks extension -> extension -> engine" {
 }
 
 const std = @import("std");
+
+const base = @import("base.zig");
+const hierarchy = @import("hierarchy.zig");
+const objects = @import("objects.zig");
