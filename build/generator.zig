@@ -7,21 +7,16 @@ pub const MemberInitialization = api_options.MemberInitialization;
 pub const RunBindgenOptions = struct {
     api: ApiOptions,
     generator: *std.Build.Step.Compile,
-    interface_json: []const u8 = "",
-    output_dir: []const u8 = "",
+    interface_json: []const u8,
+    output_dir: []const u8,
     interface_import: []const u8 = "godot_interface",
 };
 
 pub const RunCodegenOptions = struct {
     api: ApiOptions,
     generator: *std.Build.Step.Compile,
-    output_dir: []const u8 = "",
+    output_dir: []const u8,
     bindings_module: []const u8 = "bindings",
-};
-
-pub const RunAllOptions = struct {
-    bindgen: RunBindgenOptions,
-    codegen: RunCodegenOptions,
 };
 
 pub const BuildTestOptions = struct {
@@ -63,17 +58,6 @@ pub fn runCodegen(b: *std.Build, opt: RunCodegenOptions) *std.Build.Step.Run {
     run.addPassthruArgs();
 
     return run;
-}
-
-pub fn runAll(
-    b: *std.Build,
-    opt: RunAllOptions,
-) *std.Build.Step.Run {
-    const run_bindgen = runBindgen(b, opt.bindgen);
-    const run_codegen = runCodegen(b, opt.codegen);
-
-    run_codegen.step.dependOn(&run_bindgen.step);
-    return run_codegen;
 }
 
 pub fn buildAndRunTests(

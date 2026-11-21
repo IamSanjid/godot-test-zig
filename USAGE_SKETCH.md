@@ -1,3 +1,9 @@
+# Usage sketch (historical)
+
+This file is an early design sketch kept for project history. It is not current
+API documentation. Use [README.md](README.md), [docs/build.md](docs/build.md),
+and [docs/registration.md](docs/registration.md) instead.
+
 Foo.zig:
 ```zig
 some_value: OnReady(i32).Call(struct{ fn f() i32 { return 69; } }.f, .{}),
@@ -19,7 +25,7 @@ pub fn _physicsProcess(delta: f32) callconv(.c) void {
 }
 ```
 
-`scanForClassesToRegister` during build should find all the .zig files with some excluding rules, if a .zig file contains at least one line `pub const Extends = <BaseT>;` and a field with type `*<BaseT>` it will be marked as a module to look for "classes" to register.
+`zig build scan` / `class_files.scanAndGenerate` finds `.zig` files containing `pub const Extends =` with configurable excludes and generates a namespace module.
 
 
 the `src/godot/bindings` for internal classes and their methods + op will try to follow this format:

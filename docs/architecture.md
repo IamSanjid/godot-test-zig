@@ -2,43 +2,53 @@
 
 ## Dependency direction
 
-```text
-bindings/          generated raw ABI; no dependency on the runtime
-      ^
-codegen output     generated dispatcher wrappers, codegen types, virtual metadata
-      ^
-runtime.zig        process-wide dispatcher/registry state and engine lifecycle
-      ^
-abi.zig / reflect / annotations / registration / heap.zig
-      ^
-godot.zig          public facade: re-exports runtime and codegen modules
-```
+| Layer | May import | Notes |
+|---|---|---|
+| `bindings/` | `godot_interface` only | Raw ABI wrappers; no runtime or facade dependency. |
+| codegen output | `bindings`, `runtime.zig`, `reflect` | Generated dispatcher wrappers, typed classes, virtual metadata. Never imports `godot.zig`, annotations, or registration. |
+| `runtime.zig` | `bindings`, codegen builtins/utility, `registration`, `reflect` | Process-wide dispatcher/registry state and engine lifecycle. |
+| hand-written support | `runtime.zig`, `bindings`, `reflect` | `abi.zig`, `heap.zig`, annotations, registration helpers. |
+| `godot.zig` | `runtime.zig` and codegen modules | Facade only; nothing else imports it. |
+| user entrypoint | `godot.zig`, or the raw `bindings` module | The bindings-only path skips the runtime and codegen layers. |
 
-The upward arrows are the normal dependency direction: a lower layer imports a
-higher one. `godot.zig` is a facade only: user code imports it, and nothing else
-under `src/godot` imports it, so the facade adds no cycle of its own.
+`godot.zig` is a facade only: user code imports it, and nothing else under
+`src/godot` imports it, so the facade adds no cycle of its own.
 
 Generated wrappers import `runtime.zig` directly as `runtime` for
 `dispatcher()`/`dispatch()` and, for generated class helpers,
-`reflect.inheritsFrom`. They must not depend on annotations or registration
-policy. `runtime.zig` owns the process-wide dispatcher and registry state those
-wrappers call into, so generated output and `runtime.zig` are mutually dependent
-by design.
+`runtime.reflect.inheritsFrom`. They must not depend on annotations or
+registration policy. `runtime.zig` owns the process-wide dispatcher and
+registry state those wrappers call into, so generated output and `runtime.zig`
+are mutually dependent by design.
 
 The hand-written registration layer imports `runtime.zig` directly for
 dispatcher access and imports `reflect`/`annotations` modules directly; it does
 not round-trip through the facade. `runtime.zig` imports the registration layer
 for the `Registry` type and the builtins/utility modules used by `richLogFn`.
 `heap.zig` dispatches through `runtime.zig` while `runtime.richLogFn` allocates
-with `heap.engine_allocator`, which leaves one narrow `runtime.zig` <->
-`heap.zig` cycle.
+with `heap.engine_allocator`, which leaves one narrow `runtime.zig` <-> `heap.zig`
+cycle.
 
 These cycles are legal because no edge is needed to compute struct layout or
 other comptime information; they are file-level import cycles only. If the
 dispatcher cycle is ever removed, split dispatcher access into a small
 `dispatch.zig`; do not move lifecycle policy into generated code.
 
-No generated file references annotations or registration.
+No bindgen/codegen output references annotations or registration. Scanner output
+imports user class files and is a separate generated artifact.
+
+## Template ownership
+
+The repository is a clone-first template, so keep these categories explicit:
+
+| Category | Files | Copy behavior |
+|---|---|---|
+| durable support | `src/godot/` hand-written files, `build/`, `generator/`, `gd_interface/`, durable docs | Keep in a copied project. |
+| example scaffold | `src/entrypoint.zig`, `src/example/`, example scan wiring in `build.zig`, `src/example.gen.zig` | Rewrite or remove during project generation. |
+| generated output | bindgen/codegen subtrees, `*.gen.zig` modules | Never edit; regenerate per Godot version/configuration. |
+
+The planned project-generation contract and after-cloning checklist live in
+[docs/build.md](build.md) and the repository [README](../README.md).
 
 ## Errors and allocation
 
@@ -48,8 +58,8 @@ No generated file references annotations or registration.
 - A failed `InitCallback` destroys the user instance and engine base.
 - `godot.engine_allocator` is the engine-backed allocator.
 - The `Registry` arena is allocated from the allocator passed to `godot.init`.
-- Per-instance creation uses `ClassRegistration.create_allocator`; callback allocation
-  uses `gpa`, falling back to `create_allocator`.
+- Per-instance creation uses `ClassRegistration.instance_allocator`; callback
+  allocation uses `gpa`, falling back to `instance_allocator`.
 - Cached `String`/`StringName`/`NodePath` literals are process-lifetime and
   unsynchronized; initialize them before cross-thread use.
 
@@ -68,6 +78,11 @@ parameters, interface structs, builtin layouts, and class methods.
 - class/virtual metadata
 - `MemberFunctions` / `StaticFunctions` metadata
 
+`src/*.gen.zig` class-file namespace modules are produced by the `scan` build
+step, already included in `zig build gen`. They are ignored and must be
+regenerated, not edited. They import user class files, so scanner output may
+reference annotations and registration even though generator output does not.
+
 Codegen does not own registration, class-instance lifecycle, or property
 registration.
 
@@ -82,15 +97,16 @@ registration.
   discovery, function-shape helpers, generic field-default initialization.
 - `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
   `InitCallback`, `DeinitCallback`, `NotificationCallback`.
-- `registration/` - optional `Registry`, class creation/free, notification
-  dispatch, virtual-method registration, and dynamic property callbacks.
+- `registration/` - optional `Registry`, class creation/free, notification,
+  virtual-method registration, and dynamic property callbacks.
 - `heap.zig` - engine allocator.
 - hand-written builtins and the hand-written builtin aggregate.
 
 ## Naming decisions
 
 Project-wide naming, import-order, and formatting rules live in
-[docs/style.md](style.md).
+[style.md](style.md). These are maintainer conventions for the durable
+runtime and generator; game code may follow or replace them.
 
 - `reflect`, not `reflection`: shorter and consistent with Zig's `meta` style.
 - `annotations`, not `annot`: the abbreviation buys little and obscures the
@@ -130,8 +146,13 @@ facade.
 - Avoid per-virtual user wrappers. User classes declare normal Zig methods with
   generated virtual signatures; registration supplies the C callback.
 
-## Demo code
+## Example scaffold
 
-`TestNode` and `test_zig_init` are examples, not library code. They belong in
-`entrypoint.zig` or a separate example consumer. `godot.zig` should not ship a
-demo class.
+`src/entrypoint.zig`, `src/example/`, and the generated `src/example.gen.zig`
+are a working example, not durable runtime API. Replace the entry symbol, class
+scan paths, and example registration when starting a project. `godot.zig` must
+not acquire example-only declarations; keep demo classes in `src/example/`.
+
+`USAGE_SKETCH.md` is a historical design sketch, not current API. Use
+[docs/build.md](build.md) and [docs/registration.md](registration.md) for the
+implemented behavior.

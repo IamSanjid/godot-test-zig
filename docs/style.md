@@ -2,7 +2,9 @@
 
 Follow the official [Zig style guide](https://ziglang.org/documentation/master/#Style-Guide).
 This page records the project-specific additions and the few established
-exceptions.
+exceptions. They apply to the durable runtime, generator, and build helpers;
+game code in a copied project may follow or replace them. Generated files are
+exempt.
 
 ## Names
 
@@ -27,6 +29,9 @@ Established exceptions:
   (`_pad0`) and opaque payload fields (`_opaque`).
 - `Variant.Data` is the engine payload layout, not a catch-all data type.
   Generator JSON unions named `Data` mirror their input schema.
+- Scanner-generated namespace modules (`*.gen.zig`) own their file-stem alias
+  names and header; if the optional scanner is kept, run `zig build scan`
+  instead of editing them.
 
 ## Comments
 

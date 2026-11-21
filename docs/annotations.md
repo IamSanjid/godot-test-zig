@@ -132,7 +132,7 @@ Called during instance creation.
   the member form for classes that use `Base` markers or `Property` `.init`.
 - Errors abort creation.
 - The allocator is `ClassRegistration.gpa` when present, otherwise
-  `create_allocator`.
+  `instance_allocator`.
 
 ### `DeinitCallback(T, f)`
 
@@ -141,7 +141,7 @@ Called before the user instance is freed.
 - Must be a member function.
 - May accept an `Allocator`.
 - Must return `void`.
-- Does not free the instance; `create_allocator.destroy` follows.
+- Does not free the instance; `instance_allocator.destroy` follows.
 - Property fields are not released automatically; release them here (for example
   with `annotations.deinitPropertyFields`) or enable
   `ClassOptions.auto_property_cleanup`, which runs cleanup after this callback.

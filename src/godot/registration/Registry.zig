@@ -13,9 +13,6 @@ arena: std.heap.ArenaAllocator,
 const Registry = @This();
 
 /// Compile-time options shared by every class in one `addClasses` group.
-///
-/// They are supplied with the call, not with the runtime `ClassRegistration`.
-/// Both flags change callback shape and are passed as comptime parameters.
 pub const ClassOptions = struct {
     /// When true, `OnReady` fields are initialized automatically once the node
     /// receives `NOTIFICATION_POST_ENTER_TREE`. The class must then declare a
@@ -26,6 +23,15 @@ pub const ClassOptions = struct {
     /// the deinit callback. Off by default: property fields are user-managed.
     /// Passed to `FreeInstance` as a comptime parameter.
     auto_property_cleanup: bool = false,
+    /// Expose the class in ClassDB and editor listings.
+    is_exposed: bool = true,
+    /// Register only in-game, not in editor/tools.
+    is_runtime: bool = true,
+    /// Editor class icon path.
+    icon_path: ?[:0]const u8 = null,
+    /// Namespace nesting depth to expand; 1 registers direct extension classes
+    /// only, 2 also descends one namespace level.
+    depth: u8 = 2,
     // TODO: `is_virtual` / `is_abstract` are future compile-time options. They
     // exist only once their callback behavior is implemented; they are not dead
     // runtime flags.
@@ -48,8 +54,8 @@ pub fn deinit(self: *Registry) void {
     self.* = undefined;
 }
 
-/// `data.create_allocator` owner must out-live each class's "init"/"create" function call.
-/// If a namespace is provided only the first level of public struct declarations is checked.
+/// The group's `instance_allocator`/`gpa` must out-live all instances and callbacks.
+/// A namespace scans only its first level of public struct declarations.
 ///
 /// All classes in one call share `class_options` and one heap-stored
 /// `ClassRegistration`. Use another call for a group with different options,
@@ -70,6 +76,22 @@ pub fn addClasses(
     const p_registration = try self.arena.allocator().create(ClassRegistration);
     p_registration.* = data;
 
+    const IconPathStorage = struct {
+        var value: builtins.String = undefined;
+        var initialized: bool = false;
+    };
+    const icon_path: ?*const builtins.String = blk: {
+        if (comptime class_options.icon_path) |path_str| {
+            if (!IconPathStorage.initialized) {
+                IconPathStorage.value = .fromComptimeLatin1(path_str);
+                IconPathStorage.initialized = true;
+            }
+            break :blk &IconPathStorage.value;
+        }
+        break :blk null;
+    };
+
+    if (comptime class_options.depth == 0) @compileError("ClassOptions.depth must be at least 1.");
     @setEvalBranchQuota(50000);
     inline for (0..p_classes.len) |i| {
         const Class = p_classes[i];
@@ -82,29 +104,40 @@ pub fn addClasses(
         // shape check (zero-field struct), so a valid zero-field extension class
         // stays an extension class; only the remaining shape is a namespace.
         if (comptime reflect.isExtensionClass(Class)) {
-            try self.addClass(Class, Class.Extends, class_options, p_registration);
+            try self.addClass(Class, Class.Extends, class_options, p_registration, icon_path);
         } else if (comptime reflect.isLikelyNamespace(Class)) {
-            try self.addClassesFromNamespace(Class, class_options, p_registration);
+            try self.addClassesFromNamespace(
+                Class,
+                class_options,
+                p_registration,
+                icon_path,
+                class_options.depth,
+            );
         } else {
             @compileError("'" ++ @typeName(Class) ++ "' must be an extension class (a struct declaring `Extends`) or a namespace struct of extension classes.");
         }
     }
 }
 
-// Namespace form: expand one level of public extension-class declarations.
+// Namespace form: expand public types up to `depth`.
 fn addClassesFromNamespace(
     self: *Registry,
     comptime T: type,
     comptime class_options: ClassOptions,
     data: *ClassRegistration,
+    icon_path: ?*const builtins.String,
+    comptime depth: u8,
 ) !void {
     // `addClasses` only calls this for a type `reflect.isLikelyNamespace`
     // accepted, which already guarantees a zero-field struct.
     const struct_info = @typeInfo(T).@"struct";
     inline for (struct_info.decl_names) |decl_name| {
         const Decl = @field(T, decl_name);
-        if (comptime @TypeOf(Decl) == type and reflect.isExtensionClass(Decl)) {
-            try self.addClass(Decl, Decl.Extends, class_options, data);
+        if (comptime @TypeOf(Decl) != type) continue;
+        if (comptime reflect.isExtensionClass(Decl)) {
+            try self.addClass(Decl, Decl.Extends, class_options, data, icon_path);
+        } else if (comptime depth > 1 and reflect.isLikelyNamespace(Decl)) {
+            try self.addClassesFromNamespace(Decl, class_options, data, icon_path, depth - 1);
         }
     }
 }
@@ -115,6 +148,7 @@ fn addClass(
     comptime Base: type,
     comptime class_options: ClassOptions,
     data: *ClassRegistration,
+    icon_path: ?*const builtins.String,
 ) !void {
     const c_class_name = comptime reflect.className(T);
     if (comptime reflect.isExtensionClass(Base)) {
@@ -137,7 +171,9 @@ fn addClass(
 
     const property_callbacks = property.callbacks(T);
     const class_creation_info: interface.ClassCreationInfo6 = .{
-        .is_exposed = true,
+        .is_exposed = class_options.is_exposed,
+        .is_runtime = class_options.is_runtime,
+        .icon_path = icon_path,
         .create_instance_func = CreateInstance(T, Base),
         .free_instance_func = FreeInstance(T, Base, class_options.auto_property_cleanup),
         .get_virtual_func = get_virtual_func,

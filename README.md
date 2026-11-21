@@ -1,82 +1,209 @@
-# test-zig
+# Godot 4 GDExtension template in Zig
 
-A template Godot 4 GDExtension project in Zig. It combines generated
-GDExtension bindings and dispatch wrappers with a small hand-written runtime
-layer.
+This repository is a **clone-first template**, not a package and not a
+framework. Copy or fork it into your Godot project and edit `build.zig`, the
+generator, and the hand-written runtime in place. It is not consumed with
+`zig fetch`; the project owns its entire source tree.
 
-The template keeps policy out of the library: generation and hand-written
-runtime stay separate, annotations are opt-in, `Registry` is an optional
-convenience collector, and no allocation, pooling, or instance-creation strategy
-is forced.
+You keep control of the layers:
+
+| Layer | Location | Keep it if you want |
+|---|---|---|
+| generated raw bindings | `src/godot/bindings/` except `bindings.zig` | ABI wrappers only |
+| codegen | `src/godot/classes/`, `src/godot/builtins/generated/`, `src/godot/utility/`, and the generated root modules | automatic dispatch and typed classes |
+| hand-written runtime | `src/godot/` files outside the generated subtrees | `Registry`, annotations, lifecycle, `Variant` helpers |
+| generator | `generator/`, `build/generator.zig`, `gd_interface/` | regenerating for another Godot version |
+
+A project can keep the full stack, use the runtime without `Registry`, or use
+only the raw bindings. See [docs/bindings-only.md](docs/bindings-only.md).
+
+The repository seed name is `test-zig`; the example export is `test_zig_init`.
+These are starting values, not stable API names.
 
 ## Requirements
 
 - a Zig version satisfying `minimum_zig_version` in `build.zig.zon`
-- Godot 4.8 (the bundled interface/API JSON is 4.8 beta)
+- Godot 4.7 or newer. The runtime ABI is developed and tested against 4.7;
+  the bundled `extension_api.json` identifies itself as 4.8 beta2.
 - initialized submodules: `git submodule update --init`
-- the `vendor/casez` source used by the generator
+  (`vendor/casez` and `vendor/zlob`)
+- a Godot project that loads the built shared library through a
+  `.gdextension` file
 
-## Quick start
+## After cloning: make it yours
+
+Recommended layout: place this repository inside the Godot project, for
+example `<godot-project>/zig/`, and keep the root `.gdignore` so Godot does not
+import the Zig tree.
+
+1. Rename the package in `build.zig.zon`:
+   - change `.name = .test_zig` to your project name;
+   - run `zig build` once, copy the suggested fingerprint from the error, and
+     update `.fingerprint`.
+   The name also becomes the default shared-library name.
+2. Rename the export symbol in `src/entrypoint.zig` (`test_zig_init`) and use
+   the same string as `.gdextension` `entry_symbol`.
+3. Create the Godot extension descriptor in your project:
+   ```ini
+   [configuration]
+   entry_symbol = "my_game_init"
+   compatibility_minimum = "4.7"
+   reloadable = false
+
+   [libraries]
+   windows.debug.x86_64 = "lib/my_game.dll"
+   linux.debug.x86_64 = "lib/libmy_game.so"
+   macos.debug = "lib/libmy_game.dylib"
+   ```
+   Add release and other platform feature tags as needed.
+4. Replace the example class scan wiring. `build.zig` scans `src/` and writes
+   `src/example.gen.zig`; point both `generated_module_path` and the
+   `@import("example.gen.zig")` in `src/entrypoint.zig` at your own module.
+   Delete `src/example/` when you no longer need the examples.
+5. Choose the install location. The default `-Dinstall_dir=../../lib` is
+   relative to the install prefix (`zig-out`), so a repository at
+   `<godot-project>/zig/` installs into `<godot-project>/lib/`. Change
+   `install_dir` or the `.gdextension` library paths to match your layout.
+6. Remove or keep layers deliberately. The runtime facade is convenient, but
+   not required; see [docs/bindings-only.md](docs/bindings-only.md).
+
+## First build
 
 ```powershell
 git submodule update --init
 zig build gen
 zig build
-zig build test-generator
-zig build test-godot
+zig build test
 ```
 
-Generated bindings and codegen output are not committed, so `zig build` requires
-`zig build gen` on a fresh checkout. `test-godot` regenerates the selected
-configuration first, runs the hand-written runtime tests, and forces the
-generated bindings/codegen through semantic analysis.
+Generated bindings and codegen output are not committed. `zig build gen` runs
+bindgen, codegen, and the example class-file scan. `zig build` requires that
+generation step on a fresh checkout; it does not regenerate implicitly.
+`test-godot` regenerates first, then runs the runtime tests and analyzes the
+generated modules.
 
-The builtin layout configuration defaults from the target pointer width:
-`float_32` for 32-bit targets and `float_64` otherwise. Override it with
-`-Dgdext_builtin_build_conf=...`. Cross-target test binaries are compiled and
-semantically analyzed; they run only when the host can execute them.
+Cross-target test binaries are compiled and semantically analyzed; they run
+only when the host can execute them. The builtin layout defaults from the target
+pointer width (`float_32` for 32-bit, `float_64` otherwise); override it with
+`-Dgdext_builtin_build_conf=...`.
 
-The example export function is `test_zig_init` in `src/entrypoint.zig`. Point the
-extension's `.gdextension` entry symbol at it. `build.zig` installs the shared
-library into `install_dir`; set `-Dinstall_dir=...` for your project layout.
-
-## Source map
+## Project layout
 
 ```text
-src/entrypoint.zig        example consumer; replace with your extension
-src/godot/                hand-written runtime layer
+src/entrypoint.zig        example entry point; replace with your extension
+src/example/              example extension classes (scaffold)
+src/example.gen.zig       generated example class namespace (ignored)
+src/godot/                hand-written runtime plus generated subtrees
   godot.zig               public facade imported as `godot`
   runtime.zig             process-wide dispatcher/registry state and lifecycle
-src/godot/bindings/       bindgen output + hand-written bindings.zig module root
-src/godot/classes/        codegen class output (generated)
-src/godot/builtins/       hand-written and generated builtins
+  bindings/               bindgen output + hand-written bindings.zig entry
+  classes/                codegen class output
+  builtins/               hand-written builtins + generated builtins
+  reflect/                type, hierarchy, and object helpers
+  annotations/            opt-in markers
+  registration/           optional Registry and lifecycle helpers
+build/                    build helpers and optional class-file scanner
+build/generator.zig       bindgen/codegen build wiring
 generator/                host-side bindgen/codegen generator
 gd_interface/             GDExtension header and JSON inputs
-docs/                     design overview
+docs/                     design and build documentation
+vendor/                   submodule dependencies
 ```
 
-## Design overview
+`docs/architecture.md` owns the dependency direction and ownership rules.
+[docs/build.md](docs/build.md) owns the build steps, options, generated-output
+layout, and the planned project-generation contract.
 
-- Bindgen produces raw ABI wrappers with explicit `dispatcher` parameters.
-- Codegen produces the automatic-dispatch layer, codegen-facing builtins, and
-  virtual metadata; generated code imports `runtime.zig`, not the facade.
-- `src/godot/runtime.zig` owns process-wide dispatcher/registry state and the
-  engine lifecycle.
-- `src/godot/abi.zig` contains canonical ptrcall slot/read/write helpers and
-  scalar boxes.
-- `src/godot/builtins/variant.zig` contains the hand-written Variant conversion
-  layer (`wrap`, `init`, `as`, `clone`, `deinit`).
-- `src/godot/reflect` contains type, hierarchy, and object helpers.
-- `src/godot/annotations` contains opt-in markers.
-- `src/godot/registration` contains optional class lifecycle, virtual, and
-  dynamic property registration.
-- `src/godot/godot.zig` is the public facade; user code imports it as `godot`.
+## Build options
 
-A registered class gets construction/free callbacks, notification dispatch, and
-virtual overrides. Classes that declare `Property` fields also get dynamic
-set/get callbacks, plus property-list callbacks when at least one property is
-visible; static ClassDB methods/properties, signals, and constants are not
-exposed to GDScript yet.
+The full table lives in [docs/build.md](docs/build.md). The commonly edited
+options are:
 
-See [CONTEXT.md](CONTEXT.md) for the project map, [docs/style.md](docs/style.md)
-for naming and formatting conventions, and [docs/](docs/) for design details.
+| Option | Purpose |
+|---|---|
+| `-Dinstall_dir=...` | library install directory, relative to the install prefix |
+| `-Dminimum_initialization_level=...` | `core`, `servers`, `scene`, or `editor` |
+| `-Dgdext_bindgen_output_dir=...` | bindgen layer root |
+| `-Dgdext_codegen_output_dir=...` | runtime/codegen layer root |
+| `-Dgdext_interface_header=...`, `-Dgdext_interface_json=...`, `-Dgdext_extension_api_json=...` | Godot version inputs |
+| `-Dgdext_builtin_build_conf=float_32|float_64` | builtin layout configuration |
+| `-Dgdext_interface_import=...` | module name for the translated interface |
+| `-Dgdext_member_init=...`, `-Dgdext_strip_deprecation=...` | generated extern struct and deprecation policy |
+
+The layer-root options move the whole layer, not just generated files. Generated
+imports are relative to the runtime layer, and the hand-written `bindings.zig`
+lives inside the bindgen root.
+
+## Using only raw bindings
+
+The raw ABI layer has no dependency on `godot.zig` or `runtime.zig`. The root
+module already exposes it as the `bindings` import; replace the helpful facade
+import and call generated wrappers with your own dispatcher. See
+[docs/bindings-only.md](docs/bindings-only.md) for a minimal entry point and
+the caveats around dispatcher initialization and allocators.
+
+## Godot versions
+
+The inputs in `gd_interface/` are ordinary files, not a hidden package:
+
+```text
+gd_interface/gdextension_interface.h
+gd_interface/gdextension_interface.json
+gd_interface/extension_api.json
+```
+
+Replace all three from the same Godot version, then run `zig build gen`,
+`zig build test-generator`, and `zig build test-godot`. Generated output is not
+deleted automatically; when upgrading, remove generated trees first while
+preserving the hand-written `bindings.zig` and builtin files, then regenerate.
+Update `.gdextension` `compatibility_minimum` and the entrypoint version check
+with the version you actually ship.
+
+The bundled API JSON is 4.8 beta2 data, while the runtime ABI is tested against
+4.7+. APIs added in 4.8 are not automatically available on a 4.7 runtime; use
+4.8 inputs only after deciding to require 4.8.
+
+## Template generation (planned)
+
+There is no `zig build template` step yet. The intended contract is documented
+in [docs/build.md](docs/build.md): copy a working tree after `zig build gen`,
+copy the vendored dependencies and durable layer trees, rewrite the package
+name/fingerprint, entry symbol, `.gdextension`, install path, and scan wiring,
+then remove the example scaffold. Do not assume that step exists when following
+this README.
+
+## Class-file scanning
+
+The example project uses the optional scanner:
+
+- `zig build scan` scans for files containing `pub const Extends =`;
+- `zig build gen` runs the same scan with the example configuration;
+- the scanner writes a namespace module whose aliases are file stems, for
+  example `pub const test_node2 = @import("example/test_node2.zig");`;
+- `ClassOptions.depth` (default 2) controls how many nested namespace levels
+  `Registry.addClasses` expands.
+
+The scanner is example wiring in `build.zig`, not a required layer. It ignores
+`godot/**` because generated codegen classes also contain `pub const Extends =`;
+if you move the runtime layer, update both the scan root and ignores. Generated
+modules are build artifacts; they are ignored and must not be edited.
+
+## Known limitations
+
+- Tests are Zig unit/build-analysis tests. They do not run the extension in a
+  Godot engine; validate runtime callbacks in Godot.
+- Static ClassDB methods, signals, and integer constants are not registered for
+  GDScript yet.
+- Extension-to-extension class inheritance is rejected for registered classes.
+- Generated output is configuration-specific. Keep one generated tree per
+  target pointer width/precision or regenerate when switching.
+
+## Documentation
+
+- [CONTEXT.md](CONTEXT.md) - maintainer-oriented project map and decisions.
+- [docs/README.md](docs/README.md) - documentation index.
+- [docs/build.md](docs/build.md) - build steps, options, template generation.
+- [docs/bindings-only.md](docs/bindings-only.md) - raw bindings path.
+- [docs/architecture.md](docs/architecture.md) - layers, imports, ownership.
+- [docs/registration.md](docs/registration.md) - `Registry`, options, lifecycle.
+- [generator/CONTEXT.md](generator/CONTEXT.md) - generator internals.

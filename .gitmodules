@@ -1,3 +1,7 @@
 [submodule "vendor/casez"]
 	path = vendor/casez
 	url = https://github.com/IamSanjid/casez.git
+[submodule "vendor/zlob"]
+	path = vendor/zlob
+	url = https://github.com/IamSanjid/zlob.git
+	branch = zig-master

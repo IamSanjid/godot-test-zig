@@ -1,4 +1,4 @@
-create_allocator: Allocator,
+instance_allocator: Allocator,
 gpa: ?Allocator = null,
 register_at_level: interface.InitializationLevel = .scene,
 

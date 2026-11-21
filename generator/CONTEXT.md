@@ -69,13 +69,11 @@ only.
 - `buildGenerator`
 - `runBindgen`
 - `runCodegen`
-- `runAll`
 - `buildAndRunTests`
 
 The run helpers return their starting `*std.Build.Step.Run`; they do not take or
-mutate top-level steps. `runAll` creates the bindgen and codegen runs, makes
-codegen depend on bindgen, and returns the codegen run. The top-level `build.zig`
-steps depend on the returned runs.
+mutate top-level steps. Top-level `build.zig` wires the codegen run dependency
+onto bindgen and makes `gen` depend on codegen.
 
 Generator run steps use inherited stdio so successful diagnostics on stderr do
 not become build failures; only a non-zero exit code fails the step.

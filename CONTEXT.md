@@ -4,14 +4,36 @@ This repository is a template Godot GDExtension project written in Zig. It
 combines generated GDExtension bindings and dispatch wrappers with a small
 hand-written runtime layer.
 
-The template is intentionally a starting point, not a framework. Generated code
-and hand-written policy stay separate, annotations are opt-in, `Registry` is an
-optional convenience collector, and no allocation, pooling, or instance-creation
-strategy is forced.
+The template is intentionally a starting point, not a framework or package.
+Projects clone or fork it and own the whole tree. Generated code and hand-written
+policy stay separate, annotations are opt-in, `Registry` is an optional
+convenience collector, and no allocation, pooling, or instance-creation strategy
+is forced.
+
+## Template model
+
+Three kinds of files live here:
+
+- **Durable support code** - the hand-written runtime, generator, build helpers,
+  and reference docs. Users should be able to keep these unchanged while they
+  write their game.
+- **Example scaffold** - `src/entrypoint.zig`, `src/example/`, the generated
+  `src/example.gen.zig` wiring, and example-specific build scan settings. A
+  future project-generation step will remove or rewrite these.
+- **Generated output** - bindgen/codegen trees and scanned `*.gen.zig` modules.
+  Never edit by hand; regenerate with the matching build step.
+
+There is no project-generation step yet. See [docs/build.md](docs/build.md) for
+the planned copy contract and [README.md](README.md) for the after-cloning
+checklist.
+
+Users can keep the full runtime, use the runtime without `Registry`, or use only
+the raw bindings layer ([docs/bindings-only.md](docs/bindings-only.md)).
 
 ## Goals
 
 - GDExtension ABI correctness first.
+- Stay clone-friendly: a project can own, edit, or remove every layer.
 - Keep generated bindings, generated dispatch code, and hand-written policy
   separate.
 - Do not force class registration, allocation, or instance lifetime through one
@@ -21,31 +43,18 @@ strategy is forced.
 
 ## Layers
 
-```text
-bindings/          generated raw ABI; no dependency on the runtime
-      ^
-codegen output     generated dispatcher wrappers, codegen types, virtual metadata
-      ^
-runtime.zig        process-wide dispatcher/registry state and engine lifecycle
-      ^
-abi.zig / reflect / annotations / registration / heap.zig
-      ^
-godot.zig          public facade: re-exports runtime and codegen modules
-```
-
-Generated code imports `runtime.zig` as `runtime` for `dispatcher()`/`dispatch()`
-and, in generated class helpers, `reflect.inheritsFrom`. This narrow file-level
-cycle is intentional: generated wrappers must not depend on annotations or
-registration policy. The hand-written runtime layer may depend on generated
-artifacts. `godot.zig` is a facade only; user code imports it, generated code
-does not. `runtime.zig` and `heap.zig` form one narrow allocator/dispatch cycle.
-
+Layer ownership and import direction are documented in
+[docs/architecture.md](docs/architecture.md) and
+[docs/build.md](docs/build.md). The invariant: generated code must not depend on
+annotations or registration policy; `godot.zig` is a facade only.
 
 ## Layout
 
 ```text
 src/entrypoint.zig        example extension entry point; replace this
-src/godot/                hand-written runtime layer
+src/example/              example extension classes
+src/example.gen.zig       generated class-file namespace (ignored)
+src/godot/                hand-written runtime plus generated subtrees
   runtime.zig             process-wide dispatcher/registry state and lifecycle
   godot.zig               public facade imported as `godot`
   abi.zig                 canonical ptrcall slot/read/write helpers
@@ -72,6 +81,7 @@ src/godot/                hand-written runtime layer
     override.zig
     internal/SafeGuard.zig
   registration/           optional lifecycle, virtual, and property registration
+    registration.zig
     Registry.zig
     ClassRegistration.zig
     instance.zig
@@ -88,6 +98,16 @@ src/godot/                hand-written runtime layer
   native.zig
   singletons.zig
   naming.zig
+  tests.zig               hand-written runtime tests
+build/                    build helpers and example scan wiring
+  generator.zig
+  class_files.zig
+  tools/class_files_scan_and_gen.zig
+build/templates/          reserved for project-generation files (empty today)
+generator/                host-side bindgen/codegen generator
+generator/docs/           generator-internal design docs
+gd_interface/             GDExtension header and JSON inputs
+vendor/                   submodule or path dependencies
 ```
 
 `reflect` contains hand-written reflection helpers. `annotations` contains
@@ -99,32 +119,32 @@ creation-time initializers run by `annotations.initPropertyFields`.
 
 ## Bootstrap
 
-The example entry point is `src/entrypoint.zig`. Its shape is:
-
-```zig
-export fn test_zig_init(
-    get_proc_address: gdi.InterfaceGetProcAddress,
-    library: gdi.ClassLibraryPtr,
-    initialization: *gdi.Initialization,
-) callconv(.c) bool {
-    if (!godot.init(godot.engine_allocator, get_proc_address, library, initialization)) {
-        return false;
-    }
-
-    godot.registry().addClasses(
-        .{MyClass},
-        .{},
-        .{ .create_allocator = godot.engine_allocator },
-    ) catch return false;
-
-    return true;
-}
-```
+The example entry point is [src/entrypoint.zig](src/entrypoint.zig). It exports
+`test_zig_init`, checks the Godot version, calls `godot.init`, registers the
+generated example namespace, and returns the engine initialization callbacks.
+The exported symbol must match the `.gdextension` `entry_symbol`.
 
 `godot.init` initializes the dispatcher, creates the process-wide `Registry`
 arena, sets the minimum initialization level from the build option, and installs
 the initialize/deinitialize callbacks. `godot.registry()` is valid only after
 `godot.init`.
+
+## Generated class namespaces
+
+`zig build gen` (and `zig build scan`) scans extension class files and writes
+`src/example.gen.zig` with imports like:
+
+```zig
+pub const TestNode = @import("example/TestNode.zig");
+pub const test_node2 = @import("example/test_node2.zig");
+```
+
+`src/entrypoint.zig` passes the generated namespace to
+`godot.registry().addClasses(...)`; `ClassOptions.depth` defaults to 2, so a
+file-root namespace can contain the extension class. Scanner output is a build
+artifact: it is gitignored and must not be edited. See
+[README.md](README.md#class-file-scanning) and
+[docs/registration.md](docs/registration.md#scanned-class-groups).
 
 ## Public surface
 
@@ -183,7 +203,8 @@ A registered extension class receives:
 - `free_instance_func`
 - `notification_func`
 - `get_virtual_func`
-- `is_exposed = true`
+- `ClassCreationInfo6` fields from `ClassOptions` (`is_exposed`, `is_runtime`,
+  `icon_path`)
 - `set_func` / `get_func` when the class declares at least one
   `annotations.Property` field
 - `get_property_list_func` / `free_property_list_func` when at least one
@@ -218,7 +239,7 @@ documented in [docs/properties.md](docs/properties.md).
 - Annotations are optional. Missing annotations do not prevent registration.
 - `Registry` is optional; its creation/free/notification/virtual builders are
   usable directly.
-- No forced pooling or creation strategy. `ClassRegistration.create_allocator` and
+- No forced pooling or creation strategy. `ClassRegistration.instance_allocator` and
   `gpa` are inputs, not policy.
 - No per-virtual user wrappers. User classes declare normal Zig methods matching
   the generated virtual signature.
@@ -227,15 +248,21 @@ documented in [docs/properties.md](docs/properties.md).
 - `RefCounted` virtual arguments/returns use `ref_get_object`/`ref_set_object`.
 - `is_virtual` and `is_abstract` are deliberately deferred until their callback
   behavior is implemented.
+- The class-file scanner writes only the configured `*.gen.zig` module; it is
+  generated by `zig build gen` (or `zig build scan`) and never edited by hand.
+- Template generation is not implemented yet. The planned contract is in
+  [docs/build.md](docs/build.md); do not treat example wiring as durable API.
 
 ## Start here
 
-1. [docs/architecture.md](docs/architecture.md) - layer boundaries and file ownership.
-2. [docs/reflect.md](docs/reflect.md) - reflection helpers and field defaults.
-3. [docs/registration.md](docs/registration.md) - class registration, options, lifecycle.
-4. [docs/annotations.md](docs/annotations.md) - opt-in marker behavior.
-5. [docs/virtuals.md](docs/virtuals.md) - virtual metadata and ABI callbacks.
-6. [docs/ownership.md](docs/ownership.md) - borrowed arguments, returned ownership, Variant and RefCounted rules.
-7. [docs/variants.md](docs/variants.md) - `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
-8. [docs/properties.md](docs/properties.md) - `Property` field annotation, dynamic registration backend, usage flags, and lifetime cleanup.
-9. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, and established exceptions.
+1. [docs/build.md](docs/build.md) - build steps, options, generated output, template plan.
+2. [docs/bindings-only.md](docs/bindings-only.md) - raw bindings without the runtime layer.
+3. [docs/architecture.md](docs/architecture.md) - layer boundaries and file ownership.
+4. [docs/reflect.md](docs/reflect.md) - reflection helpers and field defaults.
+5. [docs/registration.md](docs/registration.md) - class registration, options, lifecycle.
+6. [docs/annotations.md](docs/annotations.md) - opt-in marker behavior.
+7. [docs/virtuals.md](docs/virtuals.md) - virtual metadata and ABI callbacks.
+8. [docs/ownership.md](docs/ownership.md) - borrowed arguments, returned ownership, Variant and RefCounted rules.
+9. [docs/variants.md](docs/variants.md) - `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
+10. [docs/properties.md](docs/properties.md) - `Property` field annotation, dynamic registration backend, usage flags, and lifetime cleanup.
+11. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, and established exceptions.

@@ -20,8 +20,10 @@ godot.registration.virtuals
 godot.Registry // == godot.registration.Registry
 ```
 
-Standalone users can import `registration/*.zig` helpers directly; `Registry`
-only adds grouping and lifecycle convenience.
+The helpers in `registration/*.zig` are usable without `Registry`, but they
+still belong to this template's hand-written runtime and codegen stack; the
+registration layer is not a standalone package. `Registry` adds grouping and
+lifecycle convenience.
 
 ## Class data vs class options
 
@@ -29,21 +31,28 @@ only adds grouping and lifecycle convenience.
 pub const ClassOptions = struct { // comptime
     auto_onready: bool = false,
     auto_property_cleanup: bool = false,
+    is_exposed: bool = true,
+    is_runtime: bool = true,
+    icon_path: ?[:0]const u8 = null,
+    depth: u8 = 2,
     // is_virtual, is_abstract later, once creation modes exist
 };
 
 pub const ClassRegistration = struct { // runtime, heap-stored per addClasses call
-    create_allocator: Allocator,
+    instance_allocator: Allocator,
     gpa: ?Allocator = null,
     register_at_level: interface.InitializationLevel = .scene,
 };
 ```
 
-- `ClassOptions` is comptime because it changes generated/runtime callback shape.
+- `ClassOptions` is comptime: it selects callback shape (`auto_onready`,
+  `auto_property_cleanup`), supplies the per-group `ClassCreationInfo6` flags
+  (`is_exposed`, `is_runtime`, `icon_path`), and controls namespace traversal
+  (`depth`).
 - `ClassRegistration` is the runtime value stored through `class_userdata`.
-- `create_allocator` creates and frees the user instance.
+- `instance_allocator` creates and frees the user instance.
 - `gpa` is passed to `InitCallback` and `DeinitCallback`. If null,
-  `create_allocator` is used. `OnReady` initialization receives owner/base, not
+  `instance_allocator` is used. `OnReady` initialization receives owner/base, not
   an allocator.
 - `auto_property_cleanup` is compile-time policy and off by default. `Registry`
   passes it to `FreeInstance(T, Base, auto_property_cleanup)`. When true, the
@@ -51,6 +60,13 @@ pub const ClassRegistration = struct { // runtime, heap-stored per addClasses ca
   `Property` fields after `DeinitCallback`. Property fields are user-managed
   without it. Standalone users pass the boolean directly to `FreeInstance`, or
   call the helper from their own free callback.
+- `is_exposed = false` hides the class from ClassDB/editor class listings.
+- `is_runtime = true` (default) registers a runtime class; set it to false for
+  editor/tool classes.
+- `icon_path` is an editor-only `res://` icon path; `Registry` keeps its
+  process-lifetime `String` and never frees it.
+- `depth` controls namespace traversal: `1` registers direct extension classes
+  only; `2` (default) also descends one nested namespace level.
 - Different groups can have different allocators and registration levels.
 
 ## Grouped registration
@@ -62,7 +78,7 @@ registry.addClasses(
     .{ A, B, C },
     .{ .auto_onready = true },
     .{
-        .create_allocator = pool,
+        .instance_allocator = pool,
         .gpa = gpa,
         .register_at_level = .scene,
     },
@@ -72,7 +88,7 @@ registry.addClasses(
 One class is simply a one-element group:
 
 ```zig
-registry.addClasses(.{A}, .{}, .{ .create_allocator = allocator });
+registry.addClasses(.{A}, .{}, .{ .instance_allocator = allocator });
 ```
 
 `addClasses` allocates one `ClassRegistration` for the call. All classes in that call
@@ -80,10 +96,42 @@ share it. Use another call for another group.
 
 The class name is `T.GodotClassName` when present, otherwise the short Zig type
 name. Duplicate names are rejected. `addClasses` also accepts a namespace struct
-and registers its first-level public extension-class declarations.
+and registers the extension classes it contains, expanding nested public
+namespaces up to `ClassOptions.depth`.
 
 `addClasses` returns errors such as `DuplicateClassName`. Report registration
 failure from the entry symbol and fail extension startup.
+
+## Scanned class groups
+
+`build/class_files.zig` can generate a namespace module from files containing
+`pub const Extends =`:
+
+```zig
+registry.addClasses(
+    .{ @import("example.gen.zig") },
+    .{ .auto_onready = true, .is_runtime = false },
+    .{ .instance_allocator = allocator },
+);
+```
+
+Use separate generated modules when groups need different `ClassOptions`,
+allocators, or registration levels:
+
+```zig
+registry.addClasses(
+    .{ @import("game.gen.zig"), @import("editor.gen.zig") },
+    .{ .is_runtime = false },
+    .{ .instance_allocator = allocator },
+);
+```
+
+The generated module is a namespace of file-root classes and namespaces;
+`addClasses` expands public types up to `ClassOptions.depth` (default 2). A file
+that is itself an extension class registers directly; a file namespace with a
+nested class, like `test_node2.zig`, is reached through that depth. The scanner
+is example build wiring, not a registration-layer dependency; see
+[docs/build.md](build.md).
 
 ## Extension-class parents
 
@@ -125,7 +173,7 @@ Creation order for a registered class:
 
 1. Construct the engine base with `Base.construct()` (no implicit
    post-initialize; RefCounted already has refcount 1).
-2. Allocate the user instance with `create_allocator`.
+2. Allocate the user instance with `instance_allocator`.
 3. Initialize field defaults (`reflect.initFieldsDefault`).
 4. Initialize annotation fields (`annotations.initAnnotFieldsDefault`, the
    `OnReady` wrappers).
@@ -156,7 +204,7 @@ Freeing:
    `annotations.deinitPropertyFields(T, instance)`: best-effort per-field cleanup
    (custom `.deinit` hook, then a value type's `deinit`, then a `RefCounted`
    reference release).
-3. Destroy the user instance with `create_allocator`.
+3. Destroy the user instance with `instance_allocator`.
 
 `reflect.initFieldsDefault` only initializes fields that declare defaults.
 Fields without defaults are the user's responsibility: provide a default,

@@ -24,7 +24,7 @@ pub fn CreateInstance(
     return &struct {
         fn f(userdata: ?*anyopaque, p_notify_postinitialize: bool) callconv(.c) interface.ObjectPtr {
             const p_options: *ClassRegistration = @ptrCast(@alignCast(userdata orelse return null));
-            const allocator: Allocator = p_options.create_allocator;
+            const allocator: Allocator = p_options.instance_allocator;
             const gpa: Allocator = p_options.gpa orelse allocator;
             const base = Base.construct() orelse return null;
 

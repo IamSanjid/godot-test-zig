@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) !void {
     const install_dir = b.option(
         []const u8,
         "install_dir",
-        "Install directory for the dynamic libs to get installed. Can be relative to current project directory.",
+        "Install directory for the dynamic library, relative to the install prefix (zig-out by default).",
     ) orelse "../../lib";
     const gdext_interface_header = b.option(
         std.Build.LazyPath,
@@ -46,27 +46,27 @@ pub fn build(b: *std.Build) !void {
     const gdext_bindgen_output_dir = b.option(
         []const u8,
         "gdext_bindgen_output_dir",
-        "Path to the output directory for generated bindings.",
+        "Bindgen output directory; must contain the hand-written bindings.zig module root.",
     ) orelse "src/godot/bindings";
     const gdext_codegen_output_dir = b.option(
         []const u8,
         "gdext_codegen_output_dir",
-        "Path to the output directory for the codegen layer.",
+        "Root directory of the generated codegen layer; must contain runtime.zig, godot.zig, naming.zig, and tests.zig.",
     ) orelse "src/godot";
     const gdext_interface_import = b.option(
         []const u8,
         "gdext_interface_import",
-        "This will be used for the godot interface module name when imported by the bindings.",
+        "Module name generated bindings import for the GDExtension interface.",
     ) orelse "godot_interface";
     const gdext_member_init = b.option(
         generator.MemberInitialization,
         "gdext_member_init",
-        "Member initialization for gdextension interface extern structs.",
+        "Member initialization for generated interface and builtin extern structs.",
     ) orelse .zero;
     const gdext_strip_deprecation = b.option(
         bool,
         "gdext_strip_deprecation",
-        "Stip all the deprecated extension interface.",
+        "Strip deprecated interface and API members from generated output.",
     ) orelse false;
 
     // translate-c runs on the build host; the generated module is still
@@ -79,9 +79,13 @@ pub fn build(b: *std.Build) !void {
         .default_init = gdext_member_init != .none,
     });
 
+    const layer_root = gdext_codegen_output_dir;
+    const bindings_root = b.fmt("{s}/bindings.zig", .{gdext_bindgen_output_dir});
+    const naming_root = b.fmt("{s}/naming.zig", .{layer_root});
+
     const casez = b.dependency("casez", .{}).module("casez");
     const naming = b.createModule(.{
-        .root_source_file = b.path("src/godot/naming.zig"),
+        .root_source_file = b.path(naming_root),
         .imports = &.{
             .{ .name = "casez", .module = casez },
         },
@@ -89,13 +93,15 @@ pub fn build(b: *std.Build) !void {
 
     const generator_executable = generator.buildGenerator(b, naming);
 
+    const api_opts: generator.ApiOptions = .{
+        .extension_api_json = gdext_extension_api_json,
+        .builtin_build_conf = gdext_builtin_build_conf,
+        .member_initialization = gdext_member_init,
+        .strip_deprecation = gdext_strip_deprecation,
+    };
+
     const bindgen_opt: generator.RunBindgenOptions = .{
-        .api = .{
-            .extension_api_json = gdext_extension_api_json,
-            .builtin_build_conf = gdext_builtin_build_conf,
-            .member_initialization = gdext_member_init,
-            .strip_deprecation = gdext_strip_deprecation,
-        },
+        .api = api_opts,
         .generator = generator_executable,
         .interface_json = gdext_interface_json,
         .output_dir = gdext_bindgen_output_dir,
@@ -106,22 +112,17 @@ pub fn build(b: *std.Build) !void {
     bindgen_step.dependOn(&run_bindgen.step);
 
     const codegen_opt: generator.RunCodegenOptions = .{
-        .api = .{
-            .extension_api_json = gdext_extension_api_json,
-            .builtin_build_conf = gdext_builtin_build_conf,
-            .member_initialization = gdext_member_init,
-            .strip_deprecation = gdext_strip_deprecation,
-        },
+        .api = api_opts,
         .generator = generator_executable,
         .output_dir = gdext_codegen_output_dir,
     };
     const run_codegen = generator.runCodegen(b, codegen_opt);
+    run_codegen.step.dependOn(&run_bindgen.step);
     const codegen_step = b.step("codegen", "Generate the automatic-dispatch codegen layer");
     codegen_step.dependOn(&run_codegen.step);
 
-    const run_all = generator.runAll(b, .{ .bindgen = bindgen_opt, .codegen = codegen_opt });
-    const gen_step = b.step("gen", "Generate bindings, then the automatic-dispatch codegen layer");
-    gen_step.dependOn(&run_all.step);
+    const gen_step = b.step("gen", "Generate bindings, codegen, and the scanned class namespace");
+    gen_step.dependOn(&run_codegen.step);
 
     const test_run = generator.buildAndRunTests(b, .{ .naming = naming });
     const test_generator_step = b.step("test-generator", "Run all generator unit tests");
@@ -129,11 +130,10 @@ pub fn build(b: *std.Build) !void {
 
     const build_options = b.addOptions();
     build_options.addOption(InitializationLevel, "minimum_initialization_level", minimum_initialization_level);
-    build_options.addOption(struct { os_tag: std.Target.Os.Tag }, "target", .{ .os_tag = target.result.os.tag });
     const build_options_module = build_options.createModule();
 
     const bindings = b.createModule(.{
-        .root_source_file = b.path("src/godot/bindings/bindings.zig"),
+        .root_source_file = b.path(bindings_root),
         .imports = &.{
             .{ .name = gdext_interface_import, .module = godot_interface.mod },
         },
@@ -142,7 +142,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     const godot = b.createModule(.{
-        .root_source_file = b.path("src/godot/godot.zig"),
+        .root_source_file = b.path(b.fmt("{s}/godot.zig", .{layer_root})),
         .imports = &.{
             .{ .name = "build_options", .module = build_options_module },
             .{ .name = "bindings", .module = bindings },
@@ -154,7 +154,7 @@ pub fn build(b: *std.Build) !void {
 
     const godot_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/godot/tests.zig"),
+            .root_source_file = b.path(b.fmt("{s}/tests.zig", .{layer_root})),
             .imports = &.{
                 .{ .name = "build_options", .module = build_options_module },
                 .{ .name = "bindings", .module = bindings },
@@ -168,9 +168,14 @@ pub fn build(b: *std.Build) !void {
     // Cross-target test binaries cannot always run on the host; still compile
     // and semantically analyze them for the requested target.
     run_godot_tests.skip_foreign_checks = true;
-    run_godot_tests.step.dependOn(&run_all.step);
+    godot_tests.step.dependOn(&run_codegen.step);
+    run_godot_tests.step.dependOn(&run_codegen.step);
     const test_godot_step = b.step("test-godot", "Run runtime tests and analyze generated bindings/codegen");
     test_godot_step.dependOn(&run_godot_tests.step);
+
+    const test_step = b.step("test", "Run generator and runtime tests");
+    test_step.dependOn(test_generator_step);
+    test_step.dependOn(test_godot_step);
 
     const lib = b.addLibrary(.{
         .name = @tagName(build_zon.name),
@@ -178,6 +183,8 @@ pub fn build(b: *std.Build) !void {
             .root_source_file = b.path("src/entrypoint.zig"),
             .imports = &.{
                 .{ .name = "godot", .module = godot },
+                // Opt-in raw ABI layer for bindings-only entry points.
+                // .{ .name = "bindings", .module = bindings },
             },
             .target = target,
             .optimize = optimize,
@@ -193,43 +200,20 @@ pub fn build(b: *std.Build) !void {
             .disabled,
     });
     b.getInstallStep().dependOn(&install.step);
-}
 
-pub fn scanClassesToRegister(b: *std.Build, sub_path: []const u8, options: AddFilesOptions) !std.ArrayList([]const u8) {
-    const ast = try std.zig.Ast.parse(b.allocator, "pub const Extends = \"something\";", .{});
-    const ast_gen = try std.zig.AstGen.generate(b.allocator, ast);
-    const ins_len = ast_gen.instructions.len;
-    for (0..ins_len) |i| {
-        const ins = ast_gen.instructions.get(i);
-        switch (ins.tag) {
-            .extended => {
-                std.log.debug("{}", .{ins.data.extended});
-            },
-            .declaration => {
-                std.log.debug("{}", .{ins.data.declaration});
-            },
-            else => {},
-        }
-    }
-
-    const io = b.graph.io;
-    const root_dir = b.root.root_dir.handle;
-    const search_dir = try root_dir.openDir(io, sub_path, .{ .iterate = true });
-    const files = try findFiles(b.allocator, io, search_dir, options);
-    for (files.items, 0..) |f, i| {
-        std.log.debug("File[{}] = {s}", .{ i, f });
-    }
-    std.debug.assert(files.items.len > 0);
-
-    return files;
+    const scan = b.step("scan", "Generate the extension class namespace module.");
+    scan.dependOn(&class_files.scanAndGenerate(b, "src", .{
+        .generated_module_path = "src/example.gen.zig",
+        .ignore = &.{ "godot/**", "**/*.gen.zig" },
+    }).step);
+    // Example scaffold: remove this wiring with src/example/ and src/example.gen.zig.
+    // `zig build gen` writes generated sources; `test-godot` regenerates first.
+    gen_step.dependOn(scan);
 }
 
 const std = @import("std");
 const build_zon = @import("build.zig.zon");
 const Translator = @import("translate_c").Translator;
 
-const ff = @import("build/find_files.zig");
-const findFiles = ff.findFiles;
-pub const AddFilesOptions = ff.Options;
-
 const generator = @import("build/generator.zig");
+const class_files = @import("build/class_files.zig");

@@ -14,11 +14,11 @@ pub fn FreeInstance(
         fn f(userdata: ?*anyopaque, p_instance: interface.ClassInstancePtr) callconv(.c) void {
             const p_registration: *ClassRegistration = @ptrCast(@alignCast(userdata orelse return));
             const instance: *T = @ptrCast(@alignCast(p_instance));
-            annotations.callDeinitCallback(T, Base, instance, p_registration.gpa orelse p_registration.create_allocator);
+            annotations.callDeinitCallback(T, Base, instance, p_registration.gpa orelse p_registration.instance_allocator);
             if (comptime auto_property_cleanup) {
                 annotations.deinitPropertyFields(T, instance);
             }
-            return p_registration.create_allocator.destroy(instance);
+            return p_registration.instance_allocator.destroy(instance);
         }
     }.f;
 }

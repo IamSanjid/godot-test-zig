@@ -3,10 +3,11 @@
     .version = "0.0.1",
     .dependencies = .{
         .translate_c = .{
-            .url = "git+https://github.com/IamSanjid/translate-c#a83d68bd7f5a9f42dfcd7309809260ae2cd895c8",
-            .hash = "translate_c-0.1.0-dev-Q_BUWsFkBwCG5Mv7i6brjNqMRHPj6kpxGP3et41ugFC_",
+            .url = "git+https://github.com/IamSanjid/translate-c#3e58b9484fda8f4d418e84a36aa35241907690ab",
+            .hash = "translate_c-0.1.0-dev-Q_BUWphkBwBaR4XLeFGM41S-YHMUEBdbIxEutyY0jrA2",
         },
         .casez = .{ .path = "vendor/casez" },
+        .zlob = .{ .path = "vendor/zlob" },
     },
     .minimum_zig_version = "0.18.0-dev.861+1a0778dc2",
     .paths = .{""},
