@@ -11,11 +11,13 @@ The facade exposes the registration layer as a module plus a convenience type:
 godot.registration.Registry
 godot.registration.ClassOptions
 godot.registration.ClassRegistration
+godot.registration.PostRegistrationCallback
 godot.registration.create_instance
 godot.registration.instance
 godot.registration.notification
 godot.registration.property
 godot.registration.virtuals
+godot.registration.classdb
 
 godot.Registry // == godot.registration.Registry
 ```
@@ -34,8 +36,8 @@ pub const ClassOptions = struct { // comptime
     is_exposed: bool = true,
     is_runtime: bool = true,
     icon_path: ?[:0]const u8 = null,
+    is_virtual: bool = false,
     depth: u8 = 2,
-    // is_virtual, is_abstract later, once creation modes exist
 };
 
 pub const ClassRegistration = struct { // runtime, heap-stored per addClasses call
@@ -47,8 +49,8 @@ pub const ClassRegistration = struct { // runtime, heap-stored per addClasses ca
 
 - `ClassOptions` is comptime: it selects callback shape (`auto_onready`,
   `auto_property_cleanup`), supplies the per-group `ClassCreationInfo6` flags
-  (`is_exposed`, `is_runtime`, `icon_path`), and controls namespace traversal
-  (`depth`).
+  (`is_virtual`, `is_exposed`, `is_runtime`, `icon_path`), and controls namespace
+  traversal (`depth`).
 - `ClassRegistration` is the runtime value stored through `class_userdata`.
 - `instance_allocator` creates and frees the user instance.
 - `gpa` is passed to `InitCallback` and `DeinitCallback`. If null,
@@ -61,10 +63,18 @@ pub const ClassRegistration = struct { // runtime, heap-stored per addClasses ca
   without it. Standalone users pass the boolean directly to `FreeInstance`, or
   call the helper from their own free callback.
 - `is_exposed = false` hides the class from ClassDB/editor class listings.
-- `is_runtime = true` (default) registers a runtime class; set it to false for
-  editor/tool classes.
+- `is_runtime = true` (default) registers a runtime class: the editor builds a
+  placeholder from the native base instead of the extension instance, so
+  extension code does not run there. Set it to false for tool classes that must
+  run in the editor. This only matters in editor builds; runtime builds always
+  use the real class.
 - `icon_path` is an editor-only `res://` icon path; `Registry` keeps its
   process-lifetime `String` and never frees it.
+- `is_virtual = true` hides the class from editor creation dialogs, the resource
+  picker, and docs while keeping it instantiable: it installs every callback. It
+  requires `is_exposed = true`, because `ClassDB::is_virtual()` reports
+  `can_instantiate(class) && is_virtual`; the combination is a compile error.
+  See [classdb.md](classdb.md).
 - `depth` controls namespace traversal: `1` registers direct extension classes
   only; `2` (default) also descends one nested namespace level.
 - Different groups can have different allocators and registration levels.
@@ -74,7 +84,7 @@ pub const ClassRegistration = struct { // runtime, heap-stored per addClasses ca
 The multi-class form is intentional:
 
 ```zig
-registry.addClasses(
+try registry.addClasses(
     .{ A, B, C },
     .{ .auto_onready = true },
     .{
@@ -88,14 +98,16 @@ registry.addClasses(
 One class is simply a one-element group:
 
 ```zig
-registry.addClasses(.{A}, .{}, .{ .instance_allocator = allocator });
+try registry.addClasses(.{A}, .{}, .{ .instance_allocator = allocator });
 ```
 
 `addClasses` allocates one `ClassRegistration` for the call. All classes in that call
 share it. Use another call for another group.
 
 The class name is `T.GodotClassName` when present, otherwise the short Zig type
-name. Duplicate names are rejected. `addClasses` also accepts a namespace struct
+name; a file-root class therefore uses its file stem. Two files with the same
+stem collide at runtime, so give one of them an explicit `GodotClassName`.
+Duplicate names are rejected. `addClasses` also accepts a namespace struct
 and registers the extension classes it contains, expanding nested public
 namespaces up to `ClassOptions.depth`.
 
@@ -108,7 +120,7 @@ failure from the entry symbol and fail extension startup.
 `pub const Extends =`:
 
 ```zig
-registry.addClasses(
+try registry.addClasses(
     .{ @import("example.gen.zig") },
     .{ .auto_onready = true, .is_runtime = false },
     .{ .instance_allocator = allocator },
@@ -119,7 +131,7 @@ Use separate generated modules when groups need different `ClassOptions`,
 allocators, or registration levels:
 
 ```zig
-registry.addClasses(
+try registry.addClasses(
     .{ @import("game.gen.zig"), @import("editor.gen.zig") },
     .{ .is_runtime = false },
     .{ .instance_allocator = allocator },
@@ -155,6 +167,13 @@ arena, or instance-creation policy is forced by `Registry`. For property cleanup
 pass `true` to `FreeInstance`, or call `annotations.deinitPropertyFields` from
 the free callback directly.
 
+Signals and integer constants are not part of `ClassCreationInfo6`. A class
+registered without `Registry` still needs its class-level metadata written: call
+`godot.registration.classdb.postRegistrationCallback(T)` with the same library
+and class name immediately after `classdb_register_extension_class6`, at the same
+level. Skipping it registers a class whose signals fail to connect and whose
+constants do not exist, with no compile error.
+
 ## Where registration runs
 
 - `godot.init` installs the initialize/deinitialize callbacks and creates the
@@ -186,9 +205,8 @@ Creation order for a registered class:
 
 The `.init` property initializers therefore run after the ordinary defaults,
 `OnReady` wrappers, and `Base` marker are in place, and before user init code, so
-`InitCallback` can rely on every property value already being assigned. They are
-creation-time values, not OnReady: they never wait for scene-tree events, and
-scene-dependent values use custom getters or `OnReady` fields.
+`InitCallback` can rely on every property value already being assigned. Their
+semantics are in [properties.md](properties.md#creation-time-initializers).
 
 If `InitCallback` returns an error, creation fails: the engine base and user
 instance are destroyed without running `DeinitCallback` or property cleanup, even
@@ -256,19 +274,32 @@ When a class declares `Property` fields, registration installs the dynamic
 property has non-zero usage. The property list is a lazy per-class static table
 with process lifetime; it is never freed.
 
-Property options also cover read-only dispatch and eager creation-time values:
-`.read_only` keeps the getter but makes `set_func` reject engine sets (it cannot
-be combined with a custom `.set`), and `.init` assigns the value during creation
-(step 6 above). Neither changes lifetime policy: values must still start valid
-and cleanup stays explicit. See [properties.md](properties.md) for the option
-table and initializer rules.
+Property options, backend dispatch, and cleanup rules are in
+[properties.md](properties.md); registration only decides which callbacks are
+installed.
 
-Property values are not cleaned up on free by default: the free-instance callback
-only calls `annotations.deinitPropertyFields` when `auto_property_cleanup` is
-enabled. The default setter manages known managed builtins and `Variant`
-(deinitializes the previous value on overwrite) and `RefCounted` references
-(retain new, release previous); everything else is assigned as-is. Custom accessors are user code. See
-[properties.md](properties.md) for the helper semantics and free order.
+## Class-level metadata
+
+Signals and integer constants are not `ClassCreationInfo6` callbacks. They are
+registered per class, after the class itself. `Registry` stores an optional
+`post_registration_callback` for each registered class and `godot.initialize`
+runs it immediately after `classdb_register_extension_class6`, for the same
+class and the same initialization level:
+
+- a class's `annotations.Signal` declarations register through
+  `classdb_register_extension_class_signal`;
+- a class's `annotations.Constants` markers register integer constants, enums,
+  and bitpack flags through `classdb_register_extension_class_integer_constant`;
+- a class with neither stores a null callback and does no extra work.
+
+The ordering is a contract owned by
+[classdb.md](classdb.md#registration-pipeline): never defer this metadata to a
+later initialization level or after another class derives from it.
+`classdb_unregister_extension_class` drops the metadata with the class, so
+`godot.deinitialize` needs no extra calls.
+
+See [classdb.md](classdb.md) for the engine contract and the remaining class-level
+surfaces (methods, groups, static properties).
 
 ## Namespace detection
 
@@ -278,9 +309,10 @@ zero-field struct may still be a valid extension class, so registration checks
 when that check fails and `isLikelyNamespace` passes. Engine classes and other
 types are rejected with a compile error.
 
-## Virtual and abstract classes
+## Virtual classes
 
-`is_virtual` and `is_abstract` will be added as comptime `ClassOptions` only when
-their callback behavior is implemented. They affect whether creation/free
-callbacks are installed and how the class is exposed. They are not dead runtime
-flags.
+`ClassOptions.is_virtual` is a tooling flag: the class keeps every callback and
+stays instantiable by code. It requires `is_exposed = true`. `is_abstract` is
+not implemented yet; it is the real no-instance mode. The engine behavior and
+the asymmetry between the two flags are in
+[classdb.md](classdb.md#d6-is_virtual-is-a-tooling-flag-only-is_abstract-removes-instances).

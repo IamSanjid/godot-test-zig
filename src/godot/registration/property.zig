@@ -57,8 +57,6 @@ pub fn propertyInfoList(comptime T: type) []const interface.PropertyInfo {
     return Storage.infos[0..];
 }
 
-// ClassCreationInfo6 callbacks
-
 fn SetCallback(comptime T: type) interface.ClassSet {
     return &struct {
         fn f(
@@ -127,8 +125,6 @@ const free_property_list: interface.ClassFreePropertyList2 = &struct {
     ) callconv(.c) void {}
 }.f;
 
-// Dispatch
-
 fn setProperty(
     comptime T: type,
     comptime field_name: [:0]const u8,
@@ -137,7 +133,7 @@ fn setProperty(
 ) bool {
     const Value = comptime property.PropertyValueType(@FieldType(T, field_name));
     const set = comptime property.setterFn(T, field_name) orelse return false; // .read_only
-    const value = asValue(Value, variant) orelse return false;
+    const value = variant.asDeclared(Value) orelse return false;
     set(instance, value);
     return true;
 }
@@ -151,39 +147,9 @@ fn getProperty(
     const Value = comptime property.PropertyValueType(@FieldType(T, field_name));
     const getter = comptime property.getterFn(T, field_name);
     const result: *builtins.Variant = @ptrCast(@alignCast(r_ret orelse return false));
-    result.* = builtins.Variant.init(Value, getter(instance));
+    result.* = builtins.Variant.initDeclared(Value, getter(instance));
     return true;
 }
-
-/// Converts a borrowed engine Variant to `Value`, or null on a type mismatch.
-fn asValue(comptime Value: type, variant: *const builtins.Variant) ?Value {
-    const value: Value = if (comptime reflect.isOptionalPointer(Value)) blk: {
-        const Inner = @typeInfo(Value).optional.child;
-        if (variant.tag == .nil or variant.isNullObject()) {
-            const empty: Value = null;
-            return empty;
-        }
-        const inner: Inner = variant.as(Inner) orelse return null;
-        break :blk inner;
-    } else variant.as(Value) orelse return null;
-
-    if (comptime reflect.objectTarget(Value)) |target| {
-        if (comptime target.kind == .engine) {
-            if (!matchesEngineClass(target, value)) return null;
-        }
-    }
-    return value;
-}
-
-/// True when the live object is an instance of the declared engine class.
-fn matchesEngineClass(comptime target: reflect.ObjectTarget, value: anytype) bool {
-    const Class = target.class;
-    const object: *const Class = if (comptime target.optional) value.? else value;
-    const class_name = builtins.StringName.fromComptimeLatin1(comptime reflect.className(Class));
-    return classes.core.Object.isClass(@ptrCast(object), class_name);
-}
-
-// PropertyInfo table
 
 fn ListStorage(comptime T: type) type {
     const visible = visibleDescriptorIndices(T);
@@ -204,7 +170,7 @@ fn initList(comptime T: type) void {
     inline for (visible, 0..) |desc_index, slot| {
         const desc = descs[desc_index];
         Storage.names[slot] = builtins.StringName.fromComptimeLatin1(desc.godot_name);
-        Storage.class_names[slot] = builtins.StringName.fromComptimeLatin1(comptime classNameFor(desc.value_type));
+        Storage.class_names[slot] = builtins.StringName.fromComptimeLatin1(comptime reflect.classNameOf(desc.value_type));
         Storage.hint_strings[slot] = builtins.String.fromComptimeLatin1(desc.hint_string);
         Storage.infos[slot] = .{
             .type = requiredVariantType(T, desc),
@@ -217,14 +183,6 @@ fn initList(comptime T: type) void {
     }
 }
 
-/// The engine class name of an object-property value type; empty otherwise.
-fn classNameFor(comptime Value: type) [:0]const u8 {
-    if (comptime reflect.objectTarget(Value)) |target| {
-        return reflect.className(target.class);
-    }
-    return "";
-}
-
 /// Variant type for a property value, or a compile error when unsupported.
 fn requiredVariantType(
     comptime T: type,
@@ -232,9 +190,9 @@ fn requiredVariantType(
 ) interface.VariantType {
     if (desc.type) |variant_type| return variant_type;
     return comptime builtins.Variant.typeFor(desc.value_type) orelse @compileError(std.fmt.comptimePrint(
-        "Property '{s}.{s}' has no Variant type for value type '{s}'. " ++
-            "Supported property value types are scalars, enums, packed bitfields, " ++
-            "codegen builtins, and engine/extension object class pointers. " ++
+        "Property '{s}.{s}' has no Variant type for declared type '{s}'. " ++
+            "Supported types are scalars, enums, packed bitfields, codegen builtins, " ++
+            "and engine/extension object class pointers. " ++
             "Use '.type' to provide an explicit Variant type override.",
         .{ @typeName(T), desc.field_name, @typeName(desc.value_type) },
     ));
@@ -262,12 +220,10 @@ fn visibleDescriptorIndices(comptime T: type) []const usize {
     }
 }
 
-// Compile-only coverage.
+// Compile-only coverage; analyzed on every build.
 //
-// `comptimeSelfCheck` is called from Registry, so a plain build analyzes this
-// backend even when the example registers no property. Real engine classes are
-// used as bases; the calls into the runtime paths are only analyzed, never
-// executed (the engine must be initialized before StringName construction).
+// The runtime calls below are analyzed, never executed: the engine must be
+// initialized before StringName construction.
 
 const Mode = enum(u32) {
     idle = 0,
@@ -425,12 +381,10 @@ fn comptimeChecks() void {
     checkDescriptor(TestNode, descs[16], "pending", "pending", .int);
     checkDescriptor(TestNode, descs[17], "hooked", "hooked", .string_name);
 
-    // Object property class names come from reflect.objectTarget/className;
-    // non-object properties use an empty class name.
-    check(std.mem.eql(u8, classNameFor(?*classes.core.Node), "Node"), "engine Node property class name");
-    check(std.mem.eql(u8, classNameFor(?*classes.core.Resource), "Resource"), "engine Resource property class name");
-    check(std.mem.eql(u8, classNameFor(*TestRefCounted), "TestRefCounted"), "extension property class name");
-    check(classNameFor(f32).len == 0, "non-object properties have an empty class name");
+    check(std.mem.eql(u8, reflect.classNameOf(?*classes.core.Node), "Node"), "engine Node property class name");
+    check(std.mem.eql(u8, reflect.classNameOf(?*classes.core.Resource), "Resource"), "engine Resource property class name");
+    check(std.mem.eql(u8, reflect.classNameOf(*TestRefCounted), "TestRefCounted"), "extension property class name");
+    check(reflect.classNameOf(f32).len == 0, "non-object properties have an empty class name");
 
     const overrides = property.descriptors(VariantOverrideOwner);
     check(overrides[0].type == .string, ".type override must be preserved");
@@ -471,7 +425,6 @@ fn comptimeChecks() void {
     check(builtins.Variant.typeFor(builtins.Variant) == null, "Variant must remain an unsupported property value type");
 }
 
-/// Compile-only path coverage; never called.
 fn checkRuntimePaths() void {
     _ = callbacks(TestNode);
     _ = callbacks(TestRefCounted);
@@ -480,13 +433,13 @@ fn checkRuntimePaths() void {
     _ = propertyInfoList(TestNode);
     _ = propertyInfoList(HiddenOnly);
 
-    // Runtime class validation for engine object targets (`matchesEngineClass`):
-    // the Variant values are never read because this function is never called.
+    // Runtime class validation for engine object targets (`asDeclared`): the
+    // Variant values are never read because this function is never called.
     var variant: builtins.Variant = undefined;
-    _ = asValue(?*classes.core.Node, &variant);
-    _ = asValue(*const classes.core.Node, &variant);
-    _ = asValue(?*const classes.core.RefCounted, &variant);
-    _ = asValue(*TestRefCounted, &variant);
+    _ = variant.asDeclared(?*classes.core.Node);
+    _ = variant.asDeclared(*const classes.core.Node);
+    _ = variant.asDeclared(?*const classes.core.RefCounted);
+    _ = variant.asDeclared(*TestRefCounted);
 
     // Annotation-layer default setter ownership branches: known managed
     // builtin, `RefCounted` object pointer, and plain assignment for a borrowed
@@ -527,8 +480,6 @@ const interface = bindings.interface;
 const builtins = @import("../builtins/builtins.zig");
 
 const classes = @import("../classes/classes.zig");
-
-const enums = @import("../enums.zig");
 
 const reflect = @import("../reflect/reflect.zig");
 

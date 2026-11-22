@@ -94,13 +94,26 @@ registration.
   modules; the entry point imports it as `godot`.
 - `abi.zig` - canonical ptrcall widths and shared argument/return marshalling.
 - `reflect/` - type/object predicates, inheritance traversal, Base-marker
-  discovery, function-shape helpers, generic field-default initialization.
+  discovery, function-shape helpers, generic field-default initialization, and
+  the engine class name of an object pointer type (`classNameOf`).
 - `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
-  `InitCallback`, `DeinitCallback`, `NotificationCallback`.
+  `InitCallback`, `DeinitCallback`, `NotificationCallback`, plus the
+  class-level `Signal` and `Constants` markers.
 - `registration/` - optional `Registry`, class creation/free, notification,
-  virtual-method registration, and dynamic property callbacks.
+  virtual-method registration, dynamic property callbacks, and class-level
+  ClassDB metadata.
 - `heap.zig` - engine allocator.
 - hand-written builtins and the hand-written builtin aggregate.
+
+The layer root holds only files that two layers must share, that the build pins
+there, or that are process-wide: the facade and lifecycle (`godot.zig`,
+`runtime.zig`), the engine boundary primitives (`abi.zig` for ptrcall slots),
+allocation (`heap.zig`), and naming (`naming.zig`). A helper owned by a single
+layer, or a composition of one layer's primitives, lives in that layer's
+directory: `PropertyInfo` metadata is built inside `registration/` from
+`builtins.Variant.typeFor` and `reflect.classNameOf`, and the declared
+value conversions are Variant operations
+(`Variant.initDeclared` / `Variant.asDeclared`) rather than a standalone module.
 
 ## Naming decisions
 

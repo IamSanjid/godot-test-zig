@@ -25,16 +25,19 @@ pub const ClassOptions = struct {
     auto_property_cleanup: bool = false,
     /// Expose the class in ClassDB and editor listings.
     is_exposed: bool = true,
-    /// Register only in-game, not in editor/tools.
+    /// In the editor the engine builds a placeholder from the native base instead
+    /// of the extension instance, so extension code does not run there.
     is_runtime: bool = true,
     /// Editor class icon path.
     icon_path: ?[:0]const u8 = null,
+    /// Hides the class from editor creation dialogs, the resource picker, and
+    /// docs while keeping it instantiable; requires `is_exposed = true` and
+    /// changes no callback.
+    is_virtual: bool = false,
     /// Namespace nesting depth to expand; 1 registers direct extension classes
     /// only, 2 also descends one namespace level.
     depth: u8 = 2,
-    // TODO: `is_virtual` / `is_abstract` are future compile-time options. They
-    // exist only once their callback behavior is implemented; they are not dead
-    // runtime flags.
+    // TODO: `is_abstract` (no instance creation) is not implemented; see docs/classdb.md.
 };
 
 pub const ClassRegistration = @import("ClassRegistration.zig");
@@ -47,6 +50,8 @@ pub const RegisteredClass = struct {
     data: *ClassRegistration,
     class_name: builtins.StringName, // static, no need to free/deinit
     parent_class_name: builtins.StringName, // static, no need to free/deinit
+    /// Null when the class declares no class-level metadata.
+    post_registration_callback: ?classdb.PostRegistrationCallback,
 };
 
 pub fn deinit(self: *Registry) void {
@@ -92,6 +97,9 @@ pub fn addClasses(
     };
 
     if (comptime class_options.depth == 0) @compileError("ClassOptions.depth must be at least 1.");
+    comptime if (class_options.is_virtual and !class_options.is_exposed)
+        @compileError("ClassOptions.is_virtual requires is_exposed = true: ClassDB::is_virtual() " ++
+            "checks can_instantiate(), which requires an exposed class.");
     @setEvalBranchQuota(50000);
     inline for (0..p_classes.len) |i| {
         const Class = p_classes[i];
@@ -157,11 +165,14 @@ fn addClass(
     }
     const entry = try self.class_names.getOrPut(self.arena.allocator(), c_class_name);
     if (entry.found_existing) {
-        std.log.err("'{s}' Class name is already in the registry.", .{c_class_name});
+        std.log.err(
+            "Class name '{s}' is already registered by '{s}'. Set a distinct `pub const GodotClassName` on one class.",
+            .{ c_class_name, @typeName(T) },
+        );
         return error.DuplicateClassName;
     }
 
-    const class_name: builtins.StringName = .fromComptimeLatin1(c_class_name);
+    const class_name: builtins.StringName = .fromLatin1(c_class_name, true);
     const parent_class_name: builtins.StringName = .fromType(Base);
 
     const get_virtual_func = if (comptime @hasDecl(Base, "Virtual"))
@@ -171,6 +182,7 @@ fn addClass(
 
     const property_callbacks = property.callbacks(T);
     const class_creation_info: interface.ClassCreationInfo6 = .{
+        .is_virtual = class_options.is_virtual,
         .is_exposed = class_options.is_exposed,
         .is_runtime = class_options.is_runtime,
         .icon_path = icon_path,
@@ -191,6 +203,7 @@ fn addClass(
         .data = data,
         .class_name = class_name,
         .parent_class_name = parent_class_name,
+        .post_registration_callback = classdb.postRegistrationCallback(T),
     };
 }
 
@@ -210,6 +223,7 @@ const reflect = @import("../reflect/reflect.zig");
 const builtins = @import("../builtins/builtins.zig");
 
 const property = @import("property.zig");
+const classdb = @import("classdb.zig");
 
 const CreateInstance = @import("instance.zig").CreateInstance;
 const FreeInstance = @import("instance.zig").FreeInstance;

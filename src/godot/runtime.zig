@@ -114,6 +114,12 @@ pub fn initialize(_: ?*anyopaque, p_level: interface.InitializationLevel) callco
             &class.parent_class_name,
             &class.creation_info,
         });
+        // Class-level metadata must follow its class immediately: signals and
+        // integer constants can be bound only while the class type is mutable.
+        // See docs/classdb.md.
+        if (class.post_registration_callback) |post_registration| {
+            post_registration(library(), &class.class_name);
+        }
     }
 }
 

@@ -12,6 +12,11 @@ discovered. `Base` declares `marker.Kind.base` for consistency, but Base
 discovery is structural and annotation-free (`reflect/base.zig`) and does not use
 marker identity.
 
+Declaration markers (`Override`, `Signal`, `Constants`) carry no `marker.Kind`.
+They describe the class rather than a field: `Override` names a virtual
+implementation, `Signal` declarations are collected by marker type, and
+`Constants` by its wrapped declarations. See [classdb.md](classdb.md).
+
 ### `Base(Extends)`
 
 Marks the single field that stores the engine base pointer.
@@ -73,55 +78,20 @@ health: Property(i32, .{
 ```
 
 - Options: `.usage` (required), `.name`, `.hint`, `.hint_string`, `.type`,
-  `.get`, `.set`, `.read_only`, `.init`, `.deinit`.
+  `.get`, `.set`, `.read_only`, `.init`, `.deinit`. The option table and
+  semantics are in [properties.md](properties.md#options).
 - `.usage` accepts `enums.PropertyUsageFlags`, a named flag literal such as
-  `.exported` / `.none`, or an anonymous struct of flags.
-- `.type` optionally overrides the engine-facing `PropertyInfo` type;
-  it accepts `interface.VariantType` or a concrete enum literal such as `.object`.
-  Conversion still follows the declared property value type.
-- Zero-usage properties are omitted from `get_property_list` but remain
-  reachable through engine set/get dispatch.
-- `Property(T, options).Init(func, args)` is shorthand for appending
-  `.init = Init(T, func, args)` to the options; chain it only once.
-- `.read_only = true` makes a field read-only without a custom setter.
-  A custom getter without a custom setter keeps the default `.value` writer and
-  remains writable unless `.read_only` is set; `.read_only` plus `.set` is a
-  compile error. It is dispatch policy only and does not set
-  `PropertyUsageFlags.read_only`.
+  `.exported` / `.none`, or an anonymous struct of flags. Zero-usage properties
+  are hidden from `get_property_list` but stay reachable through engine
+  set/get.
+- `Property(T, options).Init(func, args)` appends `.init = Init(T, func, args)`;
+  chain it only once.
 - Registration installs the dynamic `ClassCreationInfo6` property callbacks;
-  static ClassDB property registration is not implemented.
-- Fields keep ordinary field defaults where the value type allows one;
-  `reflect.initFieldsDefault` assigns them during creation and
-  `initAnnotFieldsDefault` does not touch `Property` fields.
-- `.init = Init(T, func, args)` assigns the field value eagerly during creation
-  (`annotations.initPropertyFields`), after field/`OnReady`/`Base` initialization
-  and before `InitCallback`; only fields declaring it are written. It is not
-  `OnReady` or engine dispatch, and scene-dependent values use a custom getter or
-  an `OnReady` field instead. The initializer must return a valid, owned value;
-  cleanup stays explicit.
-- Lifetime handling is explicit: the default setter manages only known managed
-  builtins and `Variant` (deinitializes the previous value on overwrite) and `RefCounted`
-  references (retain new, release previous). Everything else is assigned as-is.
-- `annotations.deinitPropertyFields(T, instance)` is an unconditional best-effort
-  cleanup helper: a custom `.deinit` hook, then a value type's `deinit`, then a
-  `RefCounted` reference release, then a no-op. Nothing calls it automatically
-  unless `ClassOptions.auto_property_cleanup = true`; otherwise call it from
-  `DeinitCallback` or your own free path.
-- `.deinit` optionally names a `fn (*Owner) void` hook. It overrides the helper's
-  automatic rules for that field, is called unconditionally, and owns null
-  handling.
-- Managed builtin fields cannot use a normal field default, because builtin
-  construction is a runtime dispatcher call. Initialize them with a `.init`
-  initializer or in `InitCallback` with owned constructors such as
-  `String.fromLatin1`, `String.fromUtf8`, or `StringName.fromLatin1(..., false)`.
-- Never store a cached `fromComptimeLatin1` literal in a managed builtin field:
-  the default setter deinitializes the previous value on overwrite, cleanup
-  deinitializes it on free, and cached literals must never be deinitialized.
-- A `Variant` field owns its payload through `Variant.deinit`; the default
-  setter deinitializes the previous Variant on overwrite.
-
-See [properties.md](properties.md) for the option table, descriptors, backend
-behavior, and lifetime cleanup.
+  static ClassDB property registration is deliberately not used. See
+  [classdb.md](classdb.md#d1-the-dynamic-property-backend-stays-the-only-property-backend).
+- Backend behavior, `.init`/`OnReady` timing, `.read_only` details,
+  `.type` overrides, managed-builtin defaults, and lifetime cleanup are in
+  [properties.md](properties.md).
 
 ### `InitCallback(T, f)`
 
@@ -155,19 +125,87 @@ Provides a virtual implementation under an alternate Zig declaration name.
 ```zig
 pub const CursorShape = godot.annotations.Override("_get_cursor_shape", cursorShape);
 
-fn cursorShape(self: *const @This(), at_position: Vector2) i32 {
+fn cursorShape(self: *const @This(), at_position: godot.builtins.Vector2) i32 {
     return 0;
 }
 ```
 
 - The first argument is the exact engine virtual name, taken from
-  `Virtual.Meta.godot_name`.
+  `Virtual.Meta.godot_name`. `_get_cursor_shape` exists on `Control`, so this
+  example class must extend `Control`.
 - Registration uses the override map before falling back to declaring a Zig
   method named after the generated virtual.
 - The override function must match the generated virtual signature.
 - This is useful when the Zig declaration name differs from the generated
   virtual name, or when the virtual name is generated with a conversion you do
   not want to depend on.
+
+### `Signal(engine_name, args)`
+
+Declares one engine signal as a flat class declaration, next to `Extends`:
+
+```zig
+pub const HealthChanged = godot.annotations.Signal("health_changed", .{
+    .{ "health", i32 },
+    .{ "source", ?*godot.classes.core.Node },
+});
+```
+
+- The first argument is the engine-facing name; the declaration name is only a
+  Zig handle, so no case conversion is applied.
+- `args` is a tuple of `.{ "engine_arg_name", Type }` pairs in engine order. Names are used
+  verbatim and must be unique inside one signal. Types use the property Variant
+  mapping, with one exception: `Variant` is a valid untyped signal argument while
+  a property needs an explicit `.type` for it.
+- Signal registration is what makes `connect`/`emit_signal` work: the engine
+  resolves signals from the class signal map.
+- A class with no signal declarations registers no signals.
+
+Emit through the marker, which converts each argument:
+
+```zig
+_ = TestNode.HealthChanged.emit(self, .{ self.health.get(), self });
+```
+
+Object arguments whose declared type is an engine class accept an engine class
+pointer that extends it, or an extension instance whose engine base extends it.
+Extension-declared arguments accept only that exact instance. See
+[signals.md](signals.md) for registration, emit, and what is not supported yet.
+
+### `Constants(decls)`
+
+Wraps a struct of constant declarations as a class-level declaration marker. The declaration
+shape inside decides what is registered, and the marker's own declaration name
+is free:
+
+```zig
+pub const ClassConstants = godot.annotations.Constants(struct {
+    pub const MAX_HEALTH = 100;                        // loose constant
+    pub const State = enum(i32) { idle, running = 3 }; // State.IDLE, State.RUNNING
+    pub const Flags = bitpack struct(u32) {            // Flags.FIRST, Flags.SECOND
+        first: bool = false,
+        second: bool = false,
+        _pad0: u30 = 0,
+    };
+});
+```
+
+- Loose constant names, enum variants, and bitfield fields are converted to
+  engine constants (`maxSpeed` -> `MAX_SPEED`, `running` -> `RUNNING`); the
+  enum/bitfield declaration name is used verbatim as the engine enum name.
+- A `bitpack struct` registers each bool field as a bitfield constant with
+  `is_bitfield = true`. The value comes from the real bitpack layout; internal
+  `_`-prefixed fields are skipped.
+- A `u64` value above the `i64` maximum is carried in the sign bit, matching the
+  API contract for 64-bit constants.
+- Non-exhaustive enums, non-bool bitfield fields, unsupported declarations,
+  empty markers, and duplicate `(enum, name)` pairs are compile errors.
+- A class may declare several `Constants` markers; their entries append in
+  declaration order. A class with none registers no constants.
+
+Constants are class-level metadata written once during registration. Signals
+are too, and additionally expose `emit` on the marker for instance code to
+call. See [classdb.md](classdb.md).
 
 ### `NotificationCallback(T, f)`
 

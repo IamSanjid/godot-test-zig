@@ -180,6 +180,8 @@ The example project uses the optional scanner:
 - `zig build gen` runs the same scan with the example configuration;
 - the scanner writes a namespace module whose aliases are file stems, for
   example `pub const test_node2 = @import("example/test_node2.zig");`;
+- a file-root class's engine name is that stem, so two files with the same stem
+  collide at runtime. Give one `pub const GodotClassName = "OtherName";`;
 - `ClassOptions.depth` (default 2) controls how many nested namespace levels
   `Registry.addClasses` expands.
 
@@ -192,18 +194,14 @@ modules are build artifacts; they are ignored and must not be edited.
 
 - Tests are Zig unit/build-analysis tests. They do not run the extension in a
   Godot engine; validate runtime callbacks in Godot.
-- Static ClassDB methods, signals, and integer constants are not registered for
-  GDScript yet.
+- Zig methods and static ClassDB properties are not registered for GDScript
+  yet.
 - Extension-to-extension class inheritance is rejected for registered classes.
 - Generated output is configuration-specific. Keep one generated tree per
   target pointer width/precision or regenerate when switching.
 
 ## Documentation
 
-- [CONTEXT.md](CONTEXT.md) - maintainer-oriented project map and decisions.
-- [docs/README.md](docs/README.md) - documentation index.
-- [docs/build.md](docs/build.md) - build steps, options, template generation.
-- [docs/bindings-only.md](docs/bindings-only.md) - raw bindings path.
-- [docs/architecture.md](docs/architecture.md) - layers, imports, ownership.
-- [docs/registration.md](docs/registration.md) - `Registry`, options, lifecycle.
-- [generator/CONTEXT.md](generator/CONTEXT.md) - generator internals.
+Full index: [docs/README.md](docs/README.md). Project map and decisions:
+[CONTEXT.md](CONTEXT.md). Generator internals:
+[generator/CONTEXT.md](generator/CONTEXT.md).

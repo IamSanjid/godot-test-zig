@@ -2,7 +2,8 @@
 
 pub const Extends = godot.classes.core.Node;
 
-v: u8 = 67,
+/// A plain field with no annotation; registration leaves it alone.
+unannotated: u8 = 67,
 health: godot.annotations.Property(i32, .{
     .usage = .exported,
     .hint = .range,
@@ -18,8 +19,8 @@ the_name: godot.annotations.Property(godot.builtins.String, .{
 }).Init(.fromLatin1, .{"TheName!"}),
 base: godot.annotations.Base(Extends) = .{},
 child_node: godot.annotations.OnReady(godot.classes.core.Node).Node("./ChildNode"),
-blah: godot.annotations.OnReady(godot.builtins.String).Call(.fromLatin1, .{"TestingString..."}),
-duh: godot.annotations.OnReady(u32).Call(struct {
+label: godot.annotations.OnReady(godot.builtins.String).Call(.fromLatin1, .{"TestingString..."}),
+answer: godot.annotations.OnReady(u32).Call(struct {
     fn f() u32 {
         return 69;
     }
@@ -27,45 +28,62 @@ duh: godot.annotations.OnReady(u32).Call(struct {
 
 const TestNode = @This();
 
-pub const Baz = godot.annotations.InitCallback(@This(), foo);
-pub const BadBaz = godot.annotations.DeinitCallback(@This(), baz);
+/// Signals registered with this class. See docs/signals.md.
+pub const HealthChanged = godot.annotations.Signal("health_changed", .{
+    .{ "health", i32 },
+    .{ "source", ?*godot.classes.core.Node },
+});
+pub const Pinged = godot.annotations.Signal("pinged", .{});
 
-pub fn foo(self: *@This(), allocator: std.mem.Allocator, base: *Extends) void {
+pub const ClassConstants = godot.annotations.Constants(struct {
+    pub const MAX_HEALTH: i32 = 100;
+    pub const State = enum(i32) { idle, running = 3 };
+    pub const Flags = bitpack struct(u32) {
+        first: bool = false,
+        second: bool = false,
+        _pad0: u30 = 0,
+    };
+});
+
+pub const OnInit = godot.annotations.InitCallback(@This(), onInit);
+pub const OnDeinit = godot.annotations.DeinitCallback(@This(), onDeinit);
+
+pub fn onInit(self: *@This(), allocator: std.mem.Allocator, base: *Extends) void {
     const variant = godot.builtins.Variant.wrap(TestNode, self);
     std.log.debug(
-        "Self: {*}, Init Allocator: {}, base: {*}, p_base: {*}, v: {}, variant: {}",
-        .{ self, allocator, self.base.get(), base, self.v, variant.data.object.id },
+        "onInit: self {*}, allocator {}, base {*}, p_base {*}, unannotated {}, object id {}",
+        .{ self, allocator, base, self.base.get(), self.unannotated, variant.data.object.id },
     );
 }
 
-pub fn baz(self: *@This(), allocator: std.mem.Allocator) void {
-    std.log.debug(
-        "Self: {*} Deinit Allocator: {}, p_base: {*}",
-        .{ self, allocator, self.base.get() },
-    );
-    // Deinit runs from the engine base destructor. Do not call engine
-    // methods on the base here; only release Zig-owned values.
-    if (self.blah.getPtr()) |value| value.deinit();
+pub fn onDeinit(self: *@This(), allocator: std.mem.Allocator) void {
+    std.log.debug("onDeinit: self {*}, allocator {}, p_base {*}", .{ self, allocator, self.base.get() });
+    // Deinit runs from the engine base destructor: do not call engine methods on
+    // the base here, only release Zig-owned values.
+    if (self.label.getPtr()) |value| value.deinit();
     self.the_name.getPtr().deinit();
 }
 
 pub fn _ready(self: *const @This()) void {
     std.log.debug(
-        "_ready was called! Self: {*}, duh: {}, the_child: {*}",
-        .{ self, self.duh.get(), self.the_child.get() },
+        "_ready: self {*}, answer {}, child_node {*}",
+        .{ self, self.answer.get(), self.the_child.get() },
     );
+    _ = TestNode.HealthChanged.emit(self, .{ self.health.get(), self });
+    _ = TestNode.Pinged.emit(self, .{});
     godot.utility.general.print(
-        godot.builtins.Variant.wrap(godot.builtins.String, self.blah.getPtrConst()),
+        godot.builtins.Variant.wrap(godot.builtins.String, self.label.getPtrConst()),
         .{},
     );
     godot.utility.general.print(
         godot.builtins.Variant.wrap(godot.builtins.String, self.the_name.getPtrConst()),
         .{},
     );
+    // Defensive: auto OnReady already resolved this on post-enter-tree.
     if (self.child_node.value == null) return;
     std.log.debug(
-        "First read!, State: {}, v: {}, child_node: {*}",
-        .{ self.base.safe_guard.state, self.v, self.child_node.getPtrConst() },
+        "first read: state {}, unannotated {}, child_node {*}",
+        .{ self.base.safe_guard.state, self.unannotated, self.child_node.getPtrConst() },
     );
     const fmt: godot.builtins.StringName = .fromComptimeLatin1("ChildNode: ");
     godot.utility.general.print(
@@ -77,13 +95,6 @@ pub fn _ready(self: *const @This()) void {
             ),
         },
     );
-}
-
-// Compile-only coverage for the OnReady wrapper type.
-comptime {
-    std.debug.assert(godot.reflect.isNormalStruct(
-        godot.annotations.OnReady(godot.classes.core.Node).Node("./ChildNode"),
-    ));
 }
 
 const std = @import("std");

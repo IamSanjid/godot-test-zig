@@ -9,6 +9,8 @@ The hand-written `Variant` layer is the bridge between Zig values and Godot's
 Variant.wrap(T, value)   // borrowed view (raw or pointer)
 Variant.init(T, value)   // owned Variant
 Variant.as(T)            // typed extraction
+Variant.initDeclared(Declared, value)  // owned Variant for a declared type
+Variant.asDeclared(Declared)           // declared-type extraction
 Variant.clone()          // owning shallow copy
 Variant.deinit()         // destroy an owning Variant
 Variant.objectInstance() // validated live object pointer or null
@@ -16,12 +18,44 @@ Variant.isNullObject()   // true for engine OBJECT-null payload
 Variant.typeFor(T)       // VariantType or null
 ```
 
-There are no per-type convenience accessors (`asInt`, `asObject`, ...):
-`as(T)` / `as(*T)` is the single typed-extraction entry point, and its optional
-return makes a tag mismatch explicit.
+The hand-written Variant has no per-type convenience accessors (`asInt`,
+`asObject`, ...): `as(T)` / `as(*T)` is the single exact typed-extraction entry
+point, its optional return makes a tag mismatch explicit, and `asDeclared(T)` is
+the declared-type form described below.
 
 `fromPtr` is removed. `wrap` is the replacement, because the old name implied a
 construction/ownership that never happened.
+
+## Declared-type conversions
+
+`init` and `as` are exact: the Zig type must equal the declared type, and `as`
+does no runtime class check. Annotation surfaces and registration know a
+*declared* engine type and let callers pass any value that is correctly
+representable in it, so two operations sit on top:
+
+| Declared type | `initDeclared` accepts | `asDeclared` returns |
+|---|---|---|
+| scalar, enum, bitfield, builtin | the exact type; numeric literals coerce, and enum literals coerce to enums | the value, or null on a tag/range mismatch |
+| `Variant` | a `Variant`, cloned | a clone |
+| `?*EngineClass` / `*EngineClass` | `null` (optional only), an engine class pointer that extends it, or an extension instance whose engine base extends it | a borrowed pointer after `Object.isClass` accepts it (subclasses pass) |
+| `?*ExtensionClass` / `*ExtensionClass` | `null` (optional only), or exactly that extension instance | the registered instance, or null |
+
+- Extension instances are never engine pointers: reduction walks
+  `reflect.engineBasePointer` through the `Base(direct parent)` marker at every
+  level. A missing marker, or a declared class outside the value's engine base
+  chain, is a compile error.
+- Engine subclass pointers are accepted and pointer-cast to the declared class;
+  Godot's single inheritance puts the base at offset zero, the same assumption
+  the generated bindings and `as` already rely on.
+- Extension-declared types are exact-class. The instance binding is per class,
+  so only that instance is accepted and only it resolves back.
+- `asDeclared` returns `?Declared`, so a mismatch cannot be told apart from a
+  null value by the outer optional alone: for an optional declared type the
+  result is doubly optional (`??*T`) - the outer null is a mismatch, the inner
+  null is a `nil` value.
+- The declared forms follow the same ownership rules as `init`/`as` below:
+  `initDeclared` returns an owning Variant, `asDeclared` borrows object pointers
+  and returns owned builtins.
 
 The generated raw bindings also expose a layer-specific helper:
 
@@ -230,7 +264,7 @@ Canonical scalars wider than 64 bits return `null`; they cannot fit the engine's
 `i64`/`f64` payload and are rejected rather than mis-reported. It only reports
 the Variant type; it does not carry per-class object metadata.
 The dynamic property backend derives `PropertyInfo` type and class names from
-`Variant.typeFor` plus `reflect.objectTarget`/`reflect.className`; see
+`Variant.typeFor` plus `reflect.classNameOf`; see
 [properties.md](properties.md).
 
 Codegen builtins bridge through `toBinding` / `fromBinding`. Generated bindings

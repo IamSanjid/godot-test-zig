@@ -43,8 +43,7 @@ hand-written runtime `runtime.zig` or the public facade `godot.zig`.
   - utility: `../builtins/builtins.zig`
   - generated builtins: `../builtins.zig`
 - shared naming policy is available through the `naming` module; generated
-  classes/builtins expose `GodotClassName`, used by `StringName.fromType`, while
-  `StringName.fromUserType` keeps the user type name verbatim
+  classes/builtins expose `GodotClassName`, used by `StringName.fromType`
 
 ## Classes
 

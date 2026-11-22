@@ -53,6 +53,10 @@ reflect/
   Missing or mismatched markers are compile errors.
 - `className` returns `GodotClassName` when present, otherwise the exact short
   Zig type name. Registration and instance attachment use the same helper.
+- `classNameOf` returns the engine class name of an object pointer type
+  (`*C`, `?*C`, `*const C`) and an empty string for anything else, which is the
+  `PropertyInfo.class_name` encoding. It composes `objectClassOf` and
+  `className`.
 - Reflection never owns instances and never calls registration callbacks.
 
 Annotations are separate. Use `annotations.initAnnotFieldsDefault` for

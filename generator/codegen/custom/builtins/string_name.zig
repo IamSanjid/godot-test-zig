@@ -5,6 +5,7 @@
 /// The string is treated as static and the result is cached per unique string.
 pub fn fromComptimeLatin1(comptime str: [:0]const u8) StringName {
     const SN = struct {
+        // Keeps the cache per comptime string; without it they all share one.
         const key = str;
         var value: StringName = undefined;
         var init: bool = false;
@@ -59,32 +60,15 @@ pub fn fromType(comptime T: type) StringName {
 }
 // @section_end artifact fromType
 
-// @section artifact fromUserType
-
-/// Uses the user type's short name verbatim. No case conversion is applied.
-pub fn fromUserType(comptime T: type) StringName {
-    return fromComptimeLatin1(typeShortName(T));
-}
-// @section_end artifact fromUserType
-
 // @section artifact fromTypeName
 
 /// Pascal-converts a name without a generated `GodotClassName` annotation.
-/// Prefer `fromType` or `fromUserType` when the type is known.
+/// Prefer `fromType` when the type is known.
 pub fn fromTypeName(comptime name: []const u8) StringName {
     const converted = comptime naming.comptimeConvert(.godot, .type, name);
     return fromComptimeLatin1(converted);
 }
 // @section_end artifact fromTypeName
-
-// @section artifact typeShortName
-
-fn typeShortName(comptime T: type) [:0]const u8 {
-    const full = @typeName(T);
-    const pos = std.mem.lastIndexOfScalar(u8, full, '.') orelse return full;
-    return full[pos + 1 ..];
-}
-// @section_end artifact typeShortName
 
 // @section file
 const naming = @import("naming");

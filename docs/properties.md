@@ -55,7 +55,7 @@ The returned wrapper:
   are not the engine accessors)
 - exposes `PropertyFor = T`
 - exposes the original `options` plus normalized option constants (`name`,
-  `usage`, `hint`, `hint_string`, `type`, `read_only`,
+  `usage`, `hint`, `hint_string`, `variant_type`, `read_only`,
   `has_custom_get`, `has_custom_set`, `has_custom_init`, `has_custom_deinit`)
 - exposes `marker = marker.Kind.property` for discovery
 
@@ -284,10 +284,10 @@ The value must be a concrete `interface.VariantType` value or an enum literal
 such as `.int`, `.string`, or `.object`. `.nil` and `.variant_max` are rejected.
 
 This is a metadata override, not a conversion hook: storage and conversion still
-use the declared `PropertyFor` (`Variant.as`/`Variant.init`). Use it only when
-the value type and the desired engine type are consistent; future custom-type
-adapter hooks can layer on top of it and the rest of the property pipeline keeps
-its normal behavior.
+use the declared `PropertyFor` (`Variant.asDeclared`/`Variant.initDeclared`). Use
+it only when the value type and the desired engine type are consistent; future
+custom-type adapter hooks can layer on top of it and the rest of the property
+pipeline keeps its normal behavior.
 
 ## Engine property name
 
@@ -348,18 +348,19 @@ A class with no `Property` fields leaves all four null. A class whose properties
 are all zero-usage still gets set/get, but no property list.
 
 - `set_func` matches the incoming engine `StringName` against every descriptor,
-  including zero-usage ones, converts the borrowed `Variant` with `Variant.as`,
-  and calls the setter. Unknown names, read-only properties (`.read_only` or a
-  getter-only property), and type mismatches return false. `nil` is accepted for
-  optional object pointers.
+  including zero-usage ones, converts the borrowed `Variant` with
+  `Variant.asDeclared`, and calls the
+  setter. Unknown names, read-only properties (`.read_only` or a getter-only
+  property), and type mismatches return false. `nil` and null objects are
+  accepted for optional object pointers.
   Engine object values are additionally checked at runtime with `Object.isClass`
   against the declared engine class (engine subclasses are accepted) before the
   backend stores or retains the pointer; a Variant holding an object of the
   wrong class is rejected and takes no reference. Extension-class targets need
-  no extra check because `Variant.as` resolves only that exact registered
+  no extra check because the conversion resolves only that exact registered
   extension instance.
 - `get_func` calls the getter and writes an owned `Variant` built with
-  `Variant.init` into the engine return slot.
+  `Variant.initDeclared` into the engine return slot.
 - `get_property_list_func` returns a lazy per-class, process-lifetime static
   table of `PropertyInfo` entries for the non-zero-usage descriptors, in
   declaration order. First-use initialization is unsynchronized, matching the
@@ -382,8 +383,8 @@ are all zero-usage still gets set/get, but no property list.
   enums, packed bitfields, codegen builtins, and engine/extension object class
   pointers.
 - `name` from the engine property name.
-- `class_name` from `reflect.objectTarget`/`reflect.className` for object
-  properties (the extension class name for extension classes); empty otherwise.
+- `class_name` from `reflect.classNameOf(value_type)` for object properties (the
+  extension class name for extension classes); empty otherwise.
 - `hint`, `hint_string`, and `usage` from the descriptor.
 
 No `classdb_register_extension_class_property*` call is made. The backend is
@@ -500,21 +501,20 @@ because builtin construction is a runtime dispatcher call; initialize them with 
 setter deinitializes the previous value on overwrite, cleanup deinitializes it on
 free, and cached literals must never be deinitialized.
 
-If `InitCallback` fails after creating owned values, extension creation fails and
-the instance is destroyed without running `DeinitCallback` or property cleanup,
-even when `auto_property_cleanup` is enabled. This includes values already assigned
-by `Property` `.init` initializers, which run before `InitCallback`. Init code
-must release anything it created, including those initialized values, before
-returning the error.
+Failure order during creation, including which values are already assigned when
+`InitCallback` returns an error, is in
+[registration.md](registration.md#instance-lifecycle).
 
 ## Non-goals
 
-- no static ClassDB property registration
-- no extension method registration
-- no property groups/subgroups (a future additive `.group` option)
+- no static ClassDB property registration; [classdb.md](classdb.md#d1-the-dynamic-property-backend-stays-the-only-property-backend)
+  records why the dynamic backend stays the only one for instanced classes
+- no extension method registration here; it is [classdb.md](classdb.md) work
+- no property groups/subgroups yet (a planned additive `.group`/`.subgroup`
+  option, [classdb.md](classdb.md#phase-b---groups-and-subgroups))
 - no indexed or array properties
 - no `property_can_revert` / `property_get_revert`
-- no signals
+- no signals from the property backend; see [signals.md](signals.md)
 - no per-instance or computed property lists; the list is a static per-class
   table
 - no inheritance of annotation fields (only fields declared directly on the
@@ -528,9 +528,8 @@ returning the error.
 
 ## Future work
 
-- Add the static ClassDB backend once extension method registration exists;
-  reuse the same field annotation and descriptor table.
-- Add property groups and revert callbacks.
+- Add groups/subgroups and the enum hint wiring ([classdb.md](classdb.md)).
+- Add property revert callbacks.
 - Add a runtime integration test against a real engine: property list
   registration, direct `Object.set`/`get` on a zero-usage property, and
   setter/cleanup round-trips for deinit types and `RefCounted` pointers.

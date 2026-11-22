@@ -87,4 +87,5 @@ test "hand-written runtime tests are linked" {
     _ = @import("builtins/builtins.zig");
     _ = @import("reflect/reflect.zig");
     _ = @import("registration/property.zig");
+    _ = @import("registration/classdb.zig");
 }

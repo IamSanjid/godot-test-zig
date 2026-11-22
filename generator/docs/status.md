@@ -117,6 +117,5 @@ separate is intentional.
 ### StringName naming
 
 `StringName.fromType` uses `reflect.className`: `GodotClassName` when present,
-otherwise the exact short Zig type name. `StringName.fromUserType` always uses
-the short Zig name verbatim. `StringName.fromTypeName` remains an explicit Pascal
-conversion helper for names without an exact engine spelling.
+otherwise the exact short Zig type name. `StringName.fromTypeName` remains an
+explicit Pascal conversion helper for names without an exact engine spelling.

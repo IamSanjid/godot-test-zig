@@ -110,8 +110,8 @@ bindgen/codegen spelling; `naming.godot` is for engine-facing method, property,
 signal, constant and enum-variant names. Godot enum values are ALL_CAPS engine
 constants, while generated Zig enum variants remain snake_case. Generated classes and generated builtins declare
 `GodotClassName`; `StringName.fromType` uses that exact value and only falls back
-to Pascal conversion for types without it. `StringName.fromUserType` uses the
-user type name verbatim.
+to the exact short Zig type name for types without it. `StringName.fromTypeName`
+is the explicit Pascal-case conversion helper.
 
 A single `naming` module is imported by both the host generator and the target
 `src/godot`; its target and optimize mode are inherited from each owning module.

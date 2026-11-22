@@ -1,9 +1,5 @@
 //! Engine/extension object class reflection and object-pointer classification.
 
-const hierarchy = @import("hierarchy.zig");
-
-const classes = @import("../classes/classes.zig");
-
 /// Upper bound for `Extends`-chain walks. Valid class hierarchies are far
 /// shorter; the bound turns a malformed cyclic chain into `false` instead of a
 /// compiler hang.
@@ -93,6 +89,12 @@ pub fn objectTarget(comptime T: type) ?ObjectTarget {
 pub fn objectClassOf(comptime T: type) ?type {
     const target = objectTarget(T) orelse return null;
     return target.class;
+}
+
+/// The engine class name of an object pointer type; empty for non-objects.
+pub fn classNameOf(comptime T: type) [:0]const u8 {
+    const Class = objectClassOf(T) orelse return "";
+    return meta.className(Class);
 }
 
 /// True for `*C`, `*const C`, `?*C` or `?*const C` where `C` is a class type.
@@ -246,3 +248,8 @@ pub fn comptimeSelfCheck() void {
 test "object class reflection" {
     comptime comptimeChecks();
 }
+
+const classes = @import("../classes/classes.zig");
+
+const hierarchy = @import("hierarchy.zig");
+const meta = @import("meta.zig");

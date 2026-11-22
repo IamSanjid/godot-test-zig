@@ -1,6 +1,5 @@
-//! Opt-in marker annotations (Base, OnReady, Property, Init/Deinit/Notification
-//! callbacks) and the `Init` shared initializer used by `OnReady` and the
-//! `Property` `.init` option.
+//! Opt-in markers: field annotations (Base, OnReady, Property, callbacks),
+//! class-level `Signal`/`Constants` metadata, and the `Init` shared initializer.
 
 pub const Base = base.Base;
 pub const initBase = base.initBase;
@@ -21,6 +20,13 @@ pub const findOnReadyFieldNames = on_ready.findOnReadyFieldNames;
 
 pub const NotificationCallback = notification_callback.NotificationCallback;
 pub const callNotificationCallback = notification_callback.callNotificationCallback;
+
+pub const Signal = signal.Signal;
+pub const findSignals = signal.findSignals;
+
+pub const Constants = constants.Constants;
+pub const ConstantEntry = constants.Entry;
+pub const findConstants = constants.findConstants;
 
 pub const Override = override.Override;
 
@@ -132,6 +138,8 @@ const on_ready = @import("on_ready.zig");
 const notification_callback = @import("notification_callback.zig");
 const override = @import("override.zig");
 const property = @import("property.zig");
+const constants = @import("constants.zig");
+const signal = @import("signal.zig");
 
 const reflect = @import("../reflect/reflect.zig");
 const classes = @import("../classes/classes.zig");

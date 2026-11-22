@@ -94,7 +94,7 @@ public `f64` because the engine utility implementation is C++ `double`.
 Virtual callbacks use the codegen type directly for builtins and object shapes.
 This is valid only while the ABI-compatibility invariant holds. If a codegen
 builtin ever diverges from its binding layout, virtual marshalling must gain a
-conversion layer.
+conversion step.
 
 ## Binding returns
 

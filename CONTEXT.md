@@ -79,8 +79,10 @@ src/godot/                hand-written runtime plus generated subtrees
     deinit_callback.zig
     notification_callback.zig
     override.zig
+    signal.zig
+    constants.zig
     internal/SafeGuard.zig
-  registration/           optional lifecycle, virtual, and property registration
+  registration/           optional lifecycle, virtual, property, and class-level registration
     registration.zig
     Registry.zig
     ClassRegistration.zig
@@ -89,6 +91,7 @@ src/godot/                hand-written runtime plus generated subtrees
     notification.zig
     virtuals.zig
     property.zig
+    classdb.zig
   bindings/               bindgen output + hand-written bindings.zig module root
   classes/                codegen class output (generated)
   builtins/               hand-written and generated builtins
@@ -110,9 +113,12 @@ gd_interface/             GDExtension header and JSON inputs
 vendor/                   submodule or path dependencies
 ```
 
-`reflect` contains hand-written reflection helpers. `annotations` contains
-opt-in markers. `registration` contains optional lifecycle, virtual dispatch, and
-property registration.
+`reflect` contains hand-written reflection helpers (`classNameOf` maps an object
+pointer type to its engine class name). `annotations` contains
+opt-in markers. `registration` contains optional lifecycle, virtual dispatch,
+property registration, and class-level ClassDB metadata. Declared-type Variant
+work lives on `Variant` itself: `initDeclared`/`asDeclared` for values and
+`typeFor` for the Variant type.
 `initFieldsDefault` belongs to `reflect/defaults.zig`; annotation field setup
 belongs to `annotations.initAnnotFieldsDefault`. Property `.init` values are
 creation-time initializers run by `annotations.initPropertyFields`.
@@ -164,6 +170,7 @@ godot.utility.general
 
 godot.reflect.isExtensionClass(T)
 godot.reflect.objectTarget(T)
+godot.reflect.classNameOf(T)
 godot.reflect.EngineBaseType(T)
 godot.reflect.initFieldsDefault(T, child)
 
@@ -176,6 +183,8 @@ godot.builtins.Variant.as(T)
 godot.builtins.Variant.objectInstance()
 godot.builtins.Variant.isNullObject()
 godot.builtins.Variant.typeFor(T)
+godot.builtins.Variant.initDeclared(T, value)
+godot.builtins.Variant.asDeclared(T)
 
 godot.annotations.OnReady(...)
 godot.annotations.Property(T, .{ .usage = ..., .read_only = true, .type = .object })
@@ -187,12 +196,19 @@ godot.annotations.descriptors(T)
 godot.annotations.deinitPropertyFields(T, instance)
 godot.annotations.Base(Extends)
 godot.annotations.Override("_get_cursor_shape", fn)
+godot.annotations.Signal("health_changed", .{ .{ "health", i32 } })
+godot.annotations.findSignals(T)
+godot.annotations.Constants(struct { ... })
+godot.annotations.findConstants(T)
+godot.annotations.ConstantEntry
 
 godot.registration.Registry
 godot.Registry
 godot.registration.ClassOptions
 godot.registration.ClassRegistration
 godot.registration.virtuals
+godot.registration.classdb
+godot.registration.PostRegistrationCallback
 ```
 
 ## What Godot sees
@@ -203,12 +219,17 @@ A registered extension class receives:
 - `free_instance_func`
 - `notification_func`
 - `get_virtual_func`
-- `ClassCreationInfo6` fields from `ClassOptions` (`is_exposed`, `is_runtime`,
-  `icon_path`)
+- `ClassCreationInfo6` fields from `ClassOptions` (`is_virtual`, `is_exposed`,
+  `is_runtime`, `icon_path`)
 - `set_func` / `get_func` when the class declares at least one
   `annotations.Property` field
 - `get_property_list_func` / `free_property_list_func` when at least one
   property has non-zero usage
+
+After the class itself, `Registry`'s per-class `post_registration_callback`
+registers the class's `Signal` declarations and `Constants` markers (integer
+constants, enums, bitpack flags); it is null when the class declares neither.
+That callback is invoked by `godot.initialize`, never passed to the engine.
 
 Extension instance creation uses `classdb_construct_object3` (no implicit
 post-initialize, RefCounted refcount 1), attaches the Zig instance, then sends
@@ -218,11 +239,12 @@ post-initialize, RefCounted refcount 1), attaches the Zig instance, then sends
 creation-time values (`.init`, assigned after the `Base` marker and before
 `InitCallback`); neither is `OnReady`-coupled or changes cleanup policy.
 
-Virtual overrides, instance construction/free, notifications, and dynamic
-property callbacks are wired automatically from the markers. Zig methods, static
-ClassDB properties, signals, and integer constants are not registered for
+Virtual overrides, instance construction/free, notifications, dynamic property
+callbacks, signals, and integer constants are wired automatically from the
+markers. Zig methods and static ClassDB properties are not registered for
 GDScript yet. Adding those surfaces is deliberate work, not an implicit side
-effect of registering a class. Property lifetime is explicit: the default setter
+effect of registering a class; the design and phase plan are in
+[docs/classdb.md](docs/classdb.md). Property lifetime is explicit: the default setter
 manages only known managed builtins and `RefCounted` references, and free-time
 cleanup is opt-in through `ClassOptions.auto_property_cleanup` or a manual
 `annotations.deinitPropertyFields` call. Dynamic `Property` semantics are
@@ -246,8 +268,11 @@ documented in [docs/properties.md](docs/properties.md).
 - Non-trivial virtual arguments are borrowed; non-trivial virtual returns are
   transferred into engine-owned storage.
 - `RefCounted` virtual arguments/returns use `ref_get_object`/`ref_set_object`.
-- `is_virtual` and `is_abstract` are deliberately deferred until their callback
-  behavior is implemented.
+- `is_virtual` is a tooling flag (editor/creation dialogs) with no callback
+  behavior, and is implemented; `is_abstract` removes instance creation and is
+  not implemented yet.
+  [docs/classdb.md](docs/classdb.md#d6-is_virtual-is-a-tooling-flag-only-is_abstract-removes-instances)
+  owns the distinction and the ordering.
 - The class-file scanner writes only the configured `*.gen.zig` module; it is
   generated by `zig build gen` (or `zig build scan`) and never edited by hand.
 - Template generation is not implemented yet. The planned contract is in
@@ -265,4 +290,7 @@ documented in [docs/properties.md](docs/properties.md).
 8. [docs/ownership.md](docs/ownership.md) - borrowed arguments, returned ownership, Variant and RefCounted rules.
 9. [docs/variants.md](docs/variants.md) - `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
 10. [docs/properties.md](docs/properties.md) - `Property` field annotation, dynamic registration backend, usage flags, and lifetime cleanup.
-11. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, and established exceptions.
+11. [docs/signals.md](docs/signals.md) - signal declarations, registration, typed emit, and argument conversion.
+12. [docs/callables.md](docs/callables.md) - custom callable design: Zig closures as engine `Callable`s, identity, and typed connect.
+13. [docs/classdb.md](docs/classdb.md) - class-level ClassDB surfaces, methods/constants/groups design, and class modes.
+14. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, and established exceptions.

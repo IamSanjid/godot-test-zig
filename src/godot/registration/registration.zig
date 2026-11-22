@@ -10,6 +10,9 @@ pub const instance = @import("instance.zig");
 pub const notification = @import("notification.zig");
 pub const property = @import("property.zig");
 pub const virtuals = @import("virtuals.zig");
+pub const classdb = @import("classdb.zig");
+
+pub const PostRegistrationCallback = classdb.PostRegistrationCallback;
 
 pub const CreateInstance = create_instance.CreateInstance;
 pub const FreeInstance = instance.FreeInstance;

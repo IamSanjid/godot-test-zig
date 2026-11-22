@@ -19,6 +19,12 @@ then use these pages by task.
 - [annotations.md](annotations.md) - opt-in class, field, and callback markers.
 - [virtuals.md](virtuals.md) - virtual metadata and callback behavior.
 - [properties.md](properties.md) - dynamic `Property` fields and cleanup.
+- [signals.md](signals.md) - signal declarations, registration, typed emit, and
+  argument conversion.
+- [callables.md](callables.md) - custom callable design: Zig closures as engine
+  `Callable`s, identity, and typed connect.
+- [classdb.md](classdb.md) - class-level surfaces: implemented signals and
+  integer constants, plus the plan for methods, groups, and class modes.
 - [ownership.md](ownership.md) - borrowed arguments and ownership transfer.
 - [variants.md](variants.md) - `Variant` conversion and lifetime.
 - [reflect.md](reflect.md) - reflection helpers and field defaults.

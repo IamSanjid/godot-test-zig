@@ -173,6 +173,34 @@ pub const Variant = extern struct {
         }
     }
 
+    /// Creates an owning Variant from `value` for the declared engine type.
+    ///
+    /// Accepts the declared type, coercible literals, and, for object types, an
+    /// extending engine class pointer or an extension instance whose engine base
+    /// extends the declared class. An extension-declared class accepts only that
+    /// exact instance. A nullable value that is null becomes `nil`, even for a
+    /// non-optional declared type.
+    pub fn initDeclared(comptime Declared: type, value: anytype) Variant {
+        if (comptime reflect.objectTarget(Declared)) |target| {
+            return initDeclaredObject(Declared, target, value);
+        }
+        return initDeclaredPlain(Declared, value);
+    }
+
+    /// Extracts `Declared` from this Variant, or returns null when it does not
+    /// hold that type. `nil` becomes null for optional object pointers. Engine
+    /// objects are checked with `Object.isClass`, so subclasses pass; extension
+    /// values resolve only their exact registered instance.
+    pub fn asDeclared(self: *const Variant, comptime Declared: type) ?Declared {
+        if (comptime reflect.objectTarget(Declared)) |target| {
+            return asDeclaredObject(self, Declared, target);
+        }
+        if (comptime Declared != Variant and typeFor(Declared) == null) {
+            @compileError("Variant.asDeclared: '" ++ @typeName(Declared) ++ "' has no Variant representation");
+        }
+        return self.as(Declared);
+    }
+
     /// Creates an owning shallow copy of the Variant.
     pub fn clone(self: *const Variant) Variant {
         var result: Variant = undefined;
@@ -331,6 +359,24 @@ comptime {
             if (comptime Variant.typeFor(?*ChainedExtension) == null) {
                 @compileError("Variant.typeFor must map chained extension class pointers to .object");
             }
+
+            // Declared-type conversions, declared and inferred forms.
+            _ = Variant.initDeclared(i32, 7);
+            _ = Variant.initDeclared(f32, 1.5);
+            _ = Variant.initDeclared(?*classes.core.Node, null);
+            _ = Variant.initDeclared(?*classes.core.Node, @as(*classes.core.Node, undefined));
+            _ = Variant.initDeclared(?*classes.core.Node, @as(*DirectExtension, undefined));
+            _ = Variant.initDeclared(*classes.core.Object, @as(*classes.core.Node, undefined));
+            _ = Variant.initDeclared(*DirectExtension, @as(*DirectExtension, undefined));
+            _ = Variant.initDeclared(?*const DirectExtension, @as(*const DirectExtension, undefined));
+            _ = Variant.initDeclared(builtins.PackedByteArray, @as(builtins.PackedByteArray, undefined));
+            _ = Variant.initDeclared(builtins.Transform3D, @as(builtins.Transform3D, undefined));
+            _ = variant.asDeclared(i32);
+            _ = variant.asDeclared(?*classes.core.Node);
+            _ = variant.asDeclared(*const classes.core.Node);
+            _ = variant.asDeclared(*DirectExtension);
+            _ = variant.asDeclared(builtins.PackedByteArray);
+            _ = variant.asDeclared(builtins.Transform3D);
         }
 
         // The raw bindgen `Variant.wrap` has a separate generic object branch.
@@ -740,6 +786,128 @@ fn objectInstanceId(object: *Object) u64 {
 /// Variant object construction.
 const object_id_ref_counted_bit: u64 = @as(u64, 1) << 63;
 
+fn initDeclaredPlain(comptime Declared: type, value: anytype) Variant {
+    const ValueT = @TypeOf(value);
+    if (comptime ValueT == Declared) return Variant.init(Declared, value);
+    if (comptime ValueT == comptime_int) return Variant.init(Declared, @as(Declared, value));
+    if (comptime ValueT == comptime_float) return Variant.init(Declared, @as(Declared, value));
+    if (comptime ValueT == @TypeOf(.enum_literal) and @typeInfo(Declared) == .@"enum") {
+        return Variant.init(Declared, @as(Declared, value));
+    }
+    @compileError(std.fmt.comptimePrint(
+        "Variant.initDeclared expects {s}, found: {s}",
+        .{ @typeName(Declared), @typeName(ValueT) },
+    ));
+}
+
+fn initDeclaredObject(
+    comptime Declared: type,
+    comptime target: reflect.ObjectTarget,
+    value: anytype,
+) Variant {
+    const DeclaredClass = target.class;
+    const ValueT = @TypeOf(value);
+
+    if (comptime ValueT == @TypeOf(null)) {
+        if (comptime !target.optional) @compileError(
+            "Variant.initDeclared: " ++ @typeName(Declared) ++ " is not optional; pass a class instance instead of null",
+        );
+        return Variant.nil;
+    }
+
+    const value_target = comptime reflect.objectTarget(ValueT) orelse @compileError(std.fmt.comptimePrint(
+        "Variant.initDeclared expects an instance over {s}, found: {s}",
+        .{ @typeName(DeclaredClass), @typeName(ValueT) },
+    ));
+
+    if (comptime target.kind == .extension) {
+        // Extension declarations are exact-class: the instance binding is per
+        // class, so the instance itself is required; `init` walks its Base chain.
+        if (comptime value_target.class != DeclaredClass) @compileError(std.fmt.comptimePrint(
+            "Variant.initDeclared: '{s}' is an extension class; pass that exact instance, or declare an engine base class instead. Found: {s}",
+            .{ @typeName(DeclaredClass), @typeName(ValueT) },
+        ));
+        const instance = nonNullObjectPointer(DeclaredClass, value_target, value) orelse return Variant.nil;
+        return Variant.init(Declared, instance);
+    }
+
+    const ValueClass = value_target.class;
+    const EngineBase = comptime reflect.EngineBaseType(ValueClass);
+    if (comptime !reflect.inheritsFrom(EngineBase, DeclaredClass)) @compileError(std.fmt.comptimePrint(
+        "Variant.initDeclared expects '{s}', but '{s}' resolves to engine base '{s}', which does not extend it",
+        .{ @typeName(DeclaredClass), @typeName(ValueClass), @typeName(EngineBase) },
+    ));
+
+    const raw: *ValueClass = nonNullObjectPointer(ValueClass, value_target, value) orelse
+        return Variant.nil;
+    const instance: *DeclaredClass = if (comptime value_target.kind == .engine)
+        @ptrCast(raw)
+    else
+        @ptrCast(reflect.engineBasePointer(ValueClass, raw));
+
+    return Variant.init(Declared, instance);
+}
+
+fn asDeclaredObject(
+    self: *const Variant,
+    comptime Declared: type,
+    comptime target: reflect.ObjectTarget,
+) ?Declared {
+    const Inner = if (comptime target.optional) @typeInfo(Declared).optional.child else Declared;
+    if (comptime target.optional) {
+        if (self.tag == .nil or self.isNullObject()) {
+            // Return a null *value*, not a null outer optional: `null` here
+            // means "the Variant does not hold the declared type".
+            const empty: Declared = null;
+            return empty;
+        }
+    }
+    const inner: Inner = self.as(Inner) orelse return null;
+    if (comptime target.kind == .engine) {
+        if (!isDeclaredEngineClass(target, inner)) return null;
+    }
+    return inner;
+}
+
+/// Runtime class check for an engine object value; subclasses are accepted.
+fn isDeclaredEngineClass(comptime target: reflect.ObjectTarget, object: anytype) bool {
+    const class_name = builtins.StringName.fromComptimeLatin1(
+        comptime reflect.className(target.class),
+    );
+    return Object.isClass(@ptrCast(object), class_name);
+}
+
+test "initDeclared coerces literals and null" {
+    const int_value = Variant.initDeclared(i32, 7);
+    try std.testing.expectEqual(interface.VariantType.int, int_value.tag);
+    try std.testing.expectEqual(@as(i64, 7), int_value.as(i32).?);
+
+    const float_value = Variant.initDeclared(f32, 1.5);
+    try std.testing.expectEqual(interface.VariantType.float, float_value.tag);
+    try std.testing.expectEqual(@as(f32, 1.5), float_value.as(f32).?);
+
+    const Mode = enum(u32) { idle = 0, running = 1 };
+    const enum_value = Variant.initDeclared(Mode, .running);
+    try std.testing.expectEqual(Mode.running, enum_value.as(Mode).?);
+
+    try std.testing.expectEqual(interface.VariantType.nil, Variant.initDeclared(?*classes.core.Node, null).tag);
+}
+
+test "asDeclared round-trips scalars and rejects mismatches" {
+    var int_variant = Variant.initDeclared(i32, 13);
+    try std.testing.expectEqual(@as(i32, 13), int_variant.asDeclared(i32).?);
+    try std.testing.expectEqual(@as(?f32, null), int_variant.asDeclared(f32));
+
+    const Mode = enum(u32) { idle = 0, running = 1 };
+    var mode_variant = Variant.initDeclared(Mode, .running);
+    try std.testing.expectEqual(Mode.running, mode_variant.asDeclared(Mode).?);
+
+    var nil_variant = Variant.initDeclared(?*classes.core.Node, null);
+    const nil_result = nil_variant.asDeclared(?*classes.core.Node);
+    try std.testing.expect(nil_result != null); // matched the declared type
+    try std.testing.expect(nil_result.? == null); // and holds a null object
+}
+
 const std = @import("std");
 
 const bindings = @import("bindings");
@@ -777,7 +945,5 @@ const Vector4i = vector.Vector4i;
 
 const Object = classes.core.Object;
 const interface = bindings.interface;
-const native = bindings.native;
-
 const builtins = @import("builtins.zig");
 const classes = @import("../classes/classes.zig");

@@ -26,6 +26,7 @@ pub const isExtensionClass = objects.isExtensionClass;
 pub const isClassType = objects.isClassType;
 pub const objectTarget = objects.objectTarget;
 pub const objectClassOf = objects.objectClassOf;
+pub const classNameOf = objects.classNameOf;
 pub const isObjectPointer = objects.isObjectPointer;
 
 const extension = @import("extension.zig");
