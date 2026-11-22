@@ -48,14 +48,16 @@ import the Zig tree.
    [configuration]
    entry_symbol = "my_game_init"
    compatibility_minimum = "4.7"
-   reloadable = false
+   reloadable = true
 
    [libraries]
    windows.debug.x86_64 = "lib/my_game.dll"
    linux.debug.x86_64 = "lib/libmy_game.so"
    macos.debug = "lib/libmy_game.dylib"
    ```
-   Add release and other platform feature tags as needed.
+   Add release and other platform feature tags as needed. `reloadable = true`
+   enables hot reload in editor builds; see
+   [docs/registration.md](docs/registration.md#hot-reload).
 4. Replace the example class scan wiring. `build.zig` scans `src/` and writes
    `src/example.gen.zig`; point both `generated_module_path` and the
    `@import("example.gen.zig")` in `src/entrypoint.zig` at your own module.

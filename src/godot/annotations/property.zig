@@ -307,10 +307,13 @@ pub fn retainRefCounted(comptime Value: type, value: Value) void {
     _ = classes.core.RefCounted.reference(object);
 }
 
-/// Releases a reference taken by `retainRefCounted`.
+/// Releases a reference taken by `retainRefCounted`, destroying the object when
+/// this was the last reference.
 pub fn releaseRefCounted(comptime Value: type, value: Value) void {
     const object = refCountedObject(Value, value) orelse return;
-    _ = classes.core.RefCounted.unreference(object);
+    if (classes.core.RefCounted.unreference(object)) {
+        classes.core.Object.destroy(@ptrCast(object));
+    }
 }
 
 /// Engine `RefCounted` object behind a pointer value, or null.

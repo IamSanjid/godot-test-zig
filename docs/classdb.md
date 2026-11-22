@@ -19,10 +19,10 @@ are designed here but not implemented yet.
 | instance surfaces | `ClassCreationInfo6` callbacks | yes |
 | class-level metadata | `classdb_register_extension_class_*` after the class | no |
 
-Instance surfaces are already implemented: creation and free, notifications,
-virtual overrides, and dynamic properties (`set_func`/`get_func` plus
-`get_property_list_func`). They are installed once per class and dispatched by
-the engine against an instance the extension created.
+Instance surfaces are already implemented: creation, recreation on hot reload,
+free, notifications, virtual overrides, and dynamic properties
+(`set_func`/`get_func` plus `get_property_list_func`). They are installed once
+per class and dispatched by the engine against an instance the extension created.
 
 Class-level metadata is registered separately, per class, after
 `classdb_register_extension_class6` returns. It describes the type, not a
@@ -238,7 +238,7 @@ pub const ClassConstants = godot.annotations.Constants(struct {
   value type is one of them should get `PROPERTY_HINT_ENUM` plus
   `hint_string = "Idle:0,Running:3"`, and, for docs and GDScript typing,
   `PROPERTY_USAGE_CLASS_IS_ENUM` with `class_name = "<Class>.<Enum>"`. That
-  wiring is additive `Property` metadata for phase B, not part of the
+  wiring is additive `Property` metadata for planned work, not part of the
   registration call.
 
 ### D6. `is_virtual` is a tooling flag; only `is_abstract` removes instances
@@ -315,7 +315,7 @@ godot.registration.PostRegistrationCallback
 godot.registration.ClassOptions.is_virtual
 
 // planned
-godot.annotations.Method(options)        // phase C
+godot.annotations.Method(options)        // planned
 godot.annotations.Constant(value, opts)  // optional override inside Constants
 ```
 
@@ -326,7 +326,7 @@ New files:
 | `src/godot/annotations/signal.zig` | `Signal` marker, argument validation, discovery, typed `emit` | implemented |
 | `src/godot/annotations/constants.zig` | `Constants` marker, constant/enum/bitfield discovery | implemented |
 | `src/godot/registration/classdb.zig` | family gate, registration calls, copied argument metadata | implemented |
-| `src/godot/annotations/method.zig` | `Method` marker, signature checks | phase C |
+| `src/godot/annotations/method.zig` | `Method` marker, signature checks | planned |
 
 The type queries these calls need are not in this table: a declared type's
 `Variant` type comes from `builtins.Variant.typeFor` (registration raises the
@@ -391,103 +391,11 @@ nothing class-level outlives it. The property list is the exception: the engine
 holds its array until `free_property_list_func`, so it stays a process-lifetime
 per-class static.
 
-## Implementation phases
-
-Each phase is independently testable and leaves the tree green.
-
-### Phase A - surface plumbing, signals, constants (implemented)
-
-Landed as:
-
-1. `annotations/signal.zig`: `Signal("engine_name", .{ .{ "arg", i32 } })` with
-   argument-shape and duplicate-name checks, `findSignals`, and the marker's own
-   typed `emit`.
-2. `annotations/constants.zig`: the `Constants(decls)` marker expands integer
-   declarations, `enum` variants, and `bitpack struct` flags. Bit positions are
-   read from the real bitpack layout, so padding anywhere in the declaration is
-   handled, and a duplicate `(enum, name)` pair is a compile error.
-3. The annotations facade re-exports `ConstantEntry`; `findSignals` returns the
-   marker types. There is no aggregate module: the family list and its ordering
-   live in `registration/classdb.zig`, which has to know them anyway.
-4. `registration/classdb.zig`: `postRegistrationCallback(T)` and the
-   constant/signal dispatch calls, with per-call argument metadata that the
-   engine copies.
-5. `registration/` resolves the `PropertyInfo.type` from `Variant.typeFor` and
-   raises the declaration-named error itself; `reflect` gained `classNameOf` for
-   the `PropertyInfo.class_name` side.
-6. `Registry`: `post_registration_callback`, `ClassOptions.is_virtual`, and the
-   `.is_virtual`/`.is_exposed` pairing check.
-7. Coverage: compile-only checks in every module, discovery unit tests that run
-   under `zig build test-godot`, and an example class that declares two signals,
-   a loose constant, an enum, and a bitfield.
-
-Why first: metadata only. No callback, no marshalling, no ownership question,
-and it proves the registration order and the per-class pointer.
-
-### Phase B - groups and subgroups
-
-`Property` options `.group`/`.subgroup`, entries spliced into the existing
-`PropertyInfo` table, validation (anchor listed, prefix matches anchor,
-subgroup after group), plus enum property wiring from D5
-(`PROPERTY_HINT_ENUM`, `class_is_enum`, `class_name`). This is where the
-`option_keys` list and the "unknown option" message in
-`annotations/property.zig` should get a single source so the diagnostics cannot
-drift.
-
-### Phase C - methods
-
-`annotations/method.zig`, `ClassMethodInfo` construction, argument
-`PropertyInfo`/`ClassMethodArgumentMetadata` derivation, and both call adapters.
-Instance and static methods land together because the static bit is derived
-from the same signature; both call paths land together because a method
-registered with only one of them crashes on the other call site.
-
-The varcall adapter converts through `Variant.initDeclared`/`asDeclared` - the
-same operations properties, signals, and callables use - while the ptrcall
-adapter keeps `abi.zig`'s slot rules. A Zig closure
-([callables.md](callables.md)) reuses the same conversion for its arguments and
-return.
-
-This is the first phase that executes user code from an engine call, so it
-needs a real-engine test, not only analysis. A signature the adapters cannot
-marshal (vararg, unsupported argument type) must fail at comptime rather than
-produce a partial `MethodInfo`.
-
-### Phase D - abstract classes
-
-`ClassOptions.is_abstract`, creation/free suppression, `get_virtual_func` and
-instance-surface rejection, pair validation with `is_virtual`, and the
-remaining static surface. The class still registers normally, so the phase A
-path must not assume an instance exists.
-
-### Phase E - optional, deferred
-
-Static properties (D1), `classdb_register_extension_class_virtual_method`,
-default arguments, varargs, indexed properties, `property_can_revert`.
-
 ## Verification
 
-The engine-facing behavior cannot be proven by analysis; each phase that adds
-a call needs a real-editor check. The minimum matrix:
-
-| Check | Phase |
-|---|---|
-| GDScript sees a constant: `MyClass.MAX_HEALTH`, `MyClass.State.RUNNING`, bitfield flag | A |
-| GDScript connects and emits a registered signal, with typed arguments | A |
-| Unregistered signal still fails to connect (the behavior being fixed) | A |
-| `is_virtual` class is hidden from Create Node but still constructible by code, and never produces an object of the parent class | A |
-| Unregister at deinitialize leaves no dangling metadata | A |
-| Inspector shows group/subgroup sections in the right order, prefix filtering | B |
-| Enum-typed property shows a dropdown, docs show the enum | B |
-| Instance and static methods work through a validated call and through `call`/`callv`, with and without return | C |
-| Wrong argument type returns a call error instead of crashing | C |
-| `is_abstract` class cannot be instantiated by GDScript or `instantiate`, and its instance annotations are rejected | D |
-
-Discovery (names, argument shapes, enum and bitfield expansion, duplicate
-checks) is covered by unit tests under `zig build test-godot`. Compilation and
-generated-tree analysis are gated by `zig build` and `zig build test-godot`.
-Everything engine-facing is still compile-only analysis until a runtime test
-harness exists, so each phase keeps the manual checklist above.
+Discovery and metadata expansion are covered by compile-only checks and unit
+tests under `zig build test-godot`. Engine-facing behavior remains compile-only
+analysis until a runtime harness exists.
 
 ## Non-goals
 
@@ -498,60 +406,3 @@ harness exists, so each phase keeps the manual checklist above.
 - no extension-to-extension inheritance, which Godot 4 does not support
 - no automatic registration of a class's Zig methods, enums, or signals:
   discovery is declaration-marker driven, never inferred from the class body
-
-## Open questions
-
-- Whether a method may share a name with an engine method of the parent class.
-  Registration is per-class, but name lookup in ClassDB walks the hierarchy, so
-  a colliding name may shadow or error.
-- Whether `p_instance` is always the extension instance for a GDScript class
-  that extends an extension class. If it is not, instance methods on such a
-  class need a guard instead of an unconditional pointer cast. This is the
-  highest-risk unknown in phase C.
-- Whether the duplicate-method error (`"Method already bound"`) is debug-only.
-  If it is, a duplicate name in one class silently drops a bind in release.
-- Whether the first-use initialization of `ListStorage` needs synchronization.
-  It relies on being initialized before cross-thread use; method tables will
-  add the same static pattern, so decide it once.
-
-## Review: the current `Property` annotation
-
-The property layer is the reference this work should copy, with a few additions.
-
-Keep:
-
-- Field-as-type. Storage and metadata stay together, discovery is a field scan,
-  and there is no name dictionary. Methods and signals go the other way only
-  because they have no storage.
-- Marker identity with re-derivation (`F == Property(F.PropertyFor, F.options)`)
-  rather than a lookalike-prone shape check.
-- Comptime option validation with actionable messages, including the unknown
-  option list and the required `.usage` check.
-- Comptime descriptor table plus a lazy process-lifetime `PropertyInfo` table.
-  Method, signal, and constant metadata should be built the same way.
-- `.init` as creation-time assignment, separate from engine dispatch and from
-  `OnReady`. The same discipline applies to class-level metadata: it is written once
-  during registration and never on a value path.
-- Explicit lifetime: no implicit cleanup, `auto_property_cleanup` opt-in.
-
-Change or watch:
-
-- `option_keys` in `annotations/property.zig` is a manual copy of the accepted
-  keys, repeated in the "Supported options" error text. It will drift as
-  `.group`, `.subgroup`, and the enum wiring arrive; derive both from one list.
-- `PropertyDescriptor` has no hint/class-name slot for enums. The enum wiring
-  in phase B needs a `class_name` source that is not an object target, which
-  means the class-name source must generalize from `reflect.classNameOf` (object
-  targets only) to object targets, registered enums, or empty.
-- The property list is the only static `PropertyInfo` table today. Method
-  tables will be a second copy of the same lazy skeleton (`class_names`,
-  `hint_strings`, `infos`, `initialized`); extract one registration-local table
-  then, not before.
-- `descriptors(T)` re-normalizes every field's options on each call through
-  `isPropertyField`. It is fine at current sizes and already guarded by an
-  eval branch quota; do not make it the pattern for method tables, which should
-  normalize once when the class-level metadata is collected.
-- The dynamic backend's `set_func` matches names by linear scan over inline
-  descriptors. Method and signal dispatch does not have that cost - the engine
-  dispatches by `MethodInfo` pointer - so do not generalize the scan.
-

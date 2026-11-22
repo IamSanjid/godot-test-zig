@@ -12,12 +12,15 @@ godot.registration.Registry
 godot.registration.ClassOptions
 godot.registration.ClassRegistration
 godot.registration.PostRegistrationCallback
-godot.registration.create_instance
 godot.registration.instance
 godot.registration.notification
 godot.registration.property
 godot.registration.virtuals
 godot.registration.classdb
+
+godot.registration.CreateInstance
+godot.registration.RecreateInstance
+godot.registration.FreeInstance
 
 godot.Registry // == godot.registration.Registry
 ```
@@ -157,15 +160,26 @@ class parent yet.
 
 A user who wants a different registration model can use the builders directly:
 
-- create-instance callback
-- free-instance callback
+- create-instance callback (`CreateInstance`)
+- recreate-instance callback (`RecreateInstance`)
+- free-instance callback (`FreeInstance`)
 - notification callback
 - virtual lookup callback
 
 Then they can call `classdb_register_extension_class6` themselves. No pooling,
-arena, or instance-creation policy is forced by `Registry`. For property cleanup,
-pass `true` to `FreeInstance`, or call `annotations.deinitPropertyFields` from
-the free callback directly.
+arena, or instance-creation policy is forced by `Registry`. A standalone create
+callback must follow the same [creation order](#instance-lifecycle), including
+attaching the instance before `.init` initializers and `InitCallback`;
+`RecreateInstance` runs that same sequence when the engine reloads the library.
+Generated classes expose `attachInstance(T, instance)`, `asInstance(T)`, and
+`detachInstance(T)` for manual binding. All three must use the same class and
+`T` (the extension's direct engine parent, `EngineBaseType(T)`), because the
+binding token is per class and type; `typeToken(T)` returns that token. Detach
+before destroying an attached instance; the engine keeps the class's extension
+pointer, so the bundled property, notification, and free callbacks then see a
+null instance. Virtual and method dispatch cannot run on a detached instance. For property cleanup, pass
+`true` to `FreeInstance`, or call `annotations.deinitPropertyFields` from the
+free callback directly.
 
 Signals and integer constants are not part of `ClassCreationInfo6`. A class
 registered without `Registry` still needs its class-level metadata written: call
@@ -194,26 +208,31 @@ Creation order for a registered class:
    post-initialize; RefCounted already has refcount 1).
 2. Allocate the user instance with `instance_allocator`.
 3. Initialize field defaults (`reflect.initFieldsDefault`).
-4. Initialize annotation fields (`annotations.initAnnotFieldsDefault`, the
-   `OnReady` wrappers).
-5. Initialize the `Base` marker field.
-6. Run eager `Property` `.init` initializers (`annotations.initPropertyFields`).
-7. Call the optional `InitCallback`.
-8. Record the extension pointer and instance binding on the engine base
-   (`setInstance`), only after all Zig-side initialization succeeded.
-9. Send post-initialize notification only when `p_notify_postinitialize` is true.
+4. Reset default-initialized annotation fields
+   (`annotations.initAnnotFieldsDefault`): the `OnReady` wrappers go back to
+   `value = null`. No user code runs and the base is not used.
+5. Initialize the `Base` marker field (`annotations.initBase`).
+6. Attach the extension instance to the engine base
+   (`base.attachInstance(T, child)`). The extension pointer and instance binding
+   are installed here; a failed creation detaches them again.
+7. Run eager `Property` `.init` initializers
+   (`annotations.initPropertyFields`), with the instance attached.
+8. Call the optional `InitCallback`.
+9. Send the post-initialize notification only when `p_notify_postinitialize` is
+   true.
 
-The `.init` property initializers therefore run after the ordinary defaults,
-`OnReady` wrappers, and `Base` marker are in place, and before user init code, so
-`InitCallback` can rely on every property value already being assigned. Their
-semantics are in [properties.md](properties.md#creation-time-initializers).
+The attach at step 6 precedes the property-initializer loop, so engine calls
+made from a `.init` initializer see the extension instance. The field-order
+contract is in
+[properties.md](properties.md#creation-time-initializers).
 
-If `InitCallback` returns an error, creation fails: the engine base and user
-instance are destroyed without running `DeinitCallback` or property cleanup, even
-when `auto_property_cleanup` is enabled. This includes values already assigned by
-`Property` `.init` initializers, which run before `InitCallback`. Init code must
-release anything it created, including those initialized values, before
-returning the error.
+If `InitCallback` returns an error, creation fails: the engine instance is
+detached and its instance binding freed, then the Zig instance and the engine
+base are destroyed. Releasing the base depends on its kind:
+[ownership.md](ownership.md#construction) records the rule. `DeinitCallback` and
+property cleanup do not run, even when `auto_property_cleanup` is enabled, and
+values already assigned by `Property` `.init` initializers are not cleaned
+either. Init code must release anything it created before returning the error.
 
 Freeing:
 
@@ -232,8 +251,10 @@ policy.
 
 For a class extending `RefCounted`, `construct` returns an object
 with refcount 1, which the engine create-instance contract expects. Do not call
-`initRef` or `unreference` on the extension object manually; `free_instance`
-runs when the engine releases it.
+`initRef` or `unreference` on a live extension object manually; `free_instance`
+runs when the engine releases it. A failed creation is the exception: it
+releases the base with `releaseConstructedBase`, per
+[ownership.md](ownership.md#construction).
 
 `initFieldsDefault` is a generic helper and remains public. It is not
 annotation-specific.
@@ -253,18 +274,59 @@ engine asks for it.
 
 ## OnReady
 
-`initAnnotFieldsDefault` initializes marker fields to their default wrappers.
-Actual `OnReady` values are initialized:
+At creation, `initAnnotFieldsDefault` only resets the `OnReady` wrapper to its
+default (`value = null`); it does not resolve `.Node(path)` or call
+`.Call(func, args)`. Actual values are resolved:
 
 - automatically when `auto_onready = true`, the class extends `Node`, declares at
   least one `OnReady` field, and the class has a `Base` marker, on
-  `post_enter_tree`, or
+  `post_enter_tree` while the node is not ready, or on
+  `NOTIFICATION_EXTENSION_RELOADED` when the reloaded node is already inside the
+  tree, or
 - manually by calling `godot.annotations.initOnReadyFields(...)`.
 
 Auto-OnReady is opt-in. A non-`Node` class that enables it with `OnReady` fields
 is rejected with a compile error, because only `Node` sends the
-`post_enter_tree` notification it waits for. The notification route remains
-available.
+`post_enter_tree` notification it waits for.
+
+## Hot reload
+
+Every class registered through `Registry` supports editor hot reload: `Registry`
+installs a `recreate_instance_func` built by
+`godot.registration.RecreateInstance`. The `.gdextension` file must set
+`reloadable = true`; the sample in [README.md](../README.md) does. Reloading
+exists only in editor builds, and the engine disables it for an extension when a
+class with a creation callback has no recreate callback.
+
+On reload the engine:
+
+1. Stores the `PROPERTY_USAGE_STORAGE` values of every live instance, skipping
+   values equal to a non-NIL class default and null objects without
+   `PROPERTY_USAGE_STORE_IF_NULL`.
+2. Unloads the old library: `godot.deinitialize` unregisters the classes, and
+   for each live instance the engine calls our free-instance callback.
+   `DeinitCallback` and opt-in property cleanup run there.
+3. Loads the new library and re-runs initialization, so the classes are
+   registered again.
+4. Calls our recreate callback. It runs the same
+   [creation sequence](#instance-lifecycle), minus `Base.construct` and the
+   post-initialize notification, and installs the instance binding.
+5. Restores the stored storage-usage values through the class's setter.
+6. Sends `NOTIFICATION_EXTENSION_RELOADED`.
+
+Consequences:
+
+- `InitCallback` runs again on reload. It runs before the engine restores storage
+  values, so it sees creation-time values, not saved ones.
+- Only storage-usage properties are restored afterwards. Other properties and
+  plain Zig fields reset to their creation-time values.
+- With auto-OnReady enabled, `OnReady` fields re-resolve on
+  `NOTIFICATION_EXTENSION_RELOADED` for a node that is already inside the tree;
+  see [OnReady](#onready). With `auto_onready = false` they stay null unless a
+  `NotificationCallback` resolves them on that notification.
+- If recreation fails, the engine reports the error and the object keeps its
+  base without an extension instance; do not dispatch virtuals or methods on it
+  afterwards.
 
 ## Properties
 

@@ -43,20 +43,26 @@ OnReady(u32).Call(f, .{})
   plain values, `.owner`, `.base`, `{ .field = name }`, or a nested function
   receiving owner/base pointers. Generic functions must be wrapped with
   `annotations.callComptimeArg1`.
+- Creation only resets the wrapper to `value = null`; `.Node` and `.Call` do not
+  run then. Resolution triggers are in
+  [registration.md](registration.md#onready).
 - `OnReady.get()` panics in safety-enabled builds when the value is unset. Use
   `getPtr()` / `getPtrConst()` when absence is valid.
-- `initOnReadyFields(T, Base, owner, base)` initializes all marked fields.
-- With `auto_onready = true`, registration initializes them on
-  `post_enter_tree` if the class has a `Base` field and extends `Node`.
-  Auto-OnReady with `OnReady` fields is a compile error for non-`Node` classes.
-- Users can skip auto mode and call `initOnReadyFields` manually.
+- `initOnReadyFields(T, Base, owner, base)` resolves all marked fields manually.
+- With `auto_onready = true`, registration installs this route if the class has
+  a `Base` field and extends `Node`. Auto-OnReady with `OnReady` fields is a
+  compile error for non-`Node` classes. Users can skip auto mode and call
+  `initOnReadyFields` manually.
 
 ### `Init(T, func, args)`
 
-Shared call wrapper for deferred field initialization: it records a function and
-a comptime argument tuple and exposes `call(OwnerT, Base, owner, base)`.
+Shared deferred call wrapper: it records a function and a comptime argument
+tuple and exposes `call(OwnerT, Base, owner, base)`. It only describes the call;
+the caller decides when to run it.
 
-- Used by `OnReady(T).Call(func, args)` and the `Property` `.init` option.
+- Used by `OnReady(T).Call(func, args)`, resolved on `post_enter_tree` or the
+  reload notification, and by the `Property` `.init` option, run during creation
+  after the instance is attached.
 - `func` is a function value or an enum literal naming a method on `T`, such as
   `.fromLatin1`.
 - `args` elements may be plain values, `.owner`, `.base`, `{ .field = name }`, a
@@ -95,12 +101,19 @@ health: Property(i32, .{
 
 ### `InitCallback(T, f)`
 
-Called during instance creation.
+Called during instance creation and on hot-reload recreation, after the instance
+is attached and eager `Property` `.init` initializers ran. Creation sends the
+post-initialize notification after it; recreation has no such step.
 
 - Member form: receives `*T`, optional `Allocator`, optional `*Extends`.
 - Static form: returns `T` or `!T`; it replaces the whole instance, so prefer
   the member form for classes that use `Base` markers or `Property` `.init`.
-- Errors abort creation.
+- On error the instance is detached and its binding freed, then destroyed;
+  `DeinitCallback` and property cleanup do not run. Creation also releases the
+  engine base, while a reload keeps it. See
+  [registration.md](registration.md#instance-lifecycle).
+- Runs again when a hot reload recreates the instance; see
+  [registration.md](registration.md#hot-reload).
 - The allocator is `ClassRegistration.gpa` when present, otherwise
   `instance_allocator`.
 
@@ -115,8 +128,9 @@ Called before the user instance is freed.
 - Property fields are not released automatically; release them here (for example
   with `annotations.deinitPropertyFields`) or enable
   `ClassOptions.auto_property_cleanup`, which runs cleanup after this callback.
-- Runs from the engine base destructor. Only release Zig-owned values;
-  do not call methods on the engine base.
+- Runs from the engine's free-instance callback: during normal destruction, and
+  when a hot reload clears the old extension instance during unload. Only
+  release Zig-owned values; do not call methods on the engine base.
 
 ### `Override(godot_virtual_name, f)`
 
@@ -220,12 +234,13 @@ pub fn onNotification(self: *@This(), p_what: i32, p_reversed: bool) void
 
 ## Annotation initialization
 
-`annotations.initAnnotFieldsDefault(T, Base, owner, base)` initializes the
-current default-initialized annotation fields. Today this is the `OnReady`
-family; `Property` fields are ordinary default-initialized wrappers and are not
-part of this pass. Property `.init` creation-time initializers are also
-separate: `annotations.initPropertyFields` runs them during creation, after the
-`Base` marker and before `InitCallback` (see
+`annotations.initAnnotFieldsDefault(T, Base, owner, base)` resets the
+default-initialized annotation wrappers. Today this is the `OnReady` family
+(`value = null`); it runs no user code and resolves nothing. `Property` fields
+are ordinary default-initialized wrappers and are not part of this pass.
+Property `.init` creation-time initializers are also separate:
+`annotations.initPropertyFields` runs them during creation, after the instance
+is attached and before `InitCallback` (see
 [registration.md](registration.md#instance-lifecycle)). Add new
 default-initialized annotation types here.
 

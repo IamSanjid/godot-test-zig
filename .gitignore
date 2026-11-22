@@ -14,3 +14,5 @@ src/godot/native.zig
 src/godot/singletons.zig
 # Class-file scanner output (zig build gen / scan)
 **/*.gen.zig
+# Local maintainer notes
+.notes/

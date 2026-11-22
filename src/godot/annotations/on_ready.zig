@@ -1,4 +1,5 @@
-/// Field initialized during creation before `_ready`.
+/// Field resolved after the node enters the tree (before `_ready`), or on a
+/// hot-reload notification when it is already inside the tree.
 pub fn OnReady(comptime T: type) type {
     const ValueT = if (reflect.isEngineObjectClass(T)) *T else T;
     return struct {

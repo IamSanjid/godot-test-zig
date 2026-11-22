@@ -24,7 +24,7 @@ then use these pages by task.
 - [callables.md](callables.md) - custom callable design: Zig closures as engine
   `Callable`s, identity, and typed connect.
 - [classdb.md](classdb.md) - class-level surfaces: implemented signals and
-  integer constants, plus the plan for methods, groups, and class modes.
+  integer constants, plus designs for methods, groups, and class modes.
 - [ownership.md](ownership.md) - borrowed arguments and ownership transfer.
 - [variants.md](variants.md) - `Variant` conversion and lifetime.
 - [reflect.md](reflect.md) - reflection helpers and field defaults.

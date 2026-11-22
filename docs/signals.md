@@ -87,8 +87,9 @@ subclass or an engine-base pointer declares an engine class.
 ## Receiving: no chain conversion back
 
 `Variant.as(*X)` resolves an engine object back to the extension instance through
-`Object.asInstance(X)`, which looks the binding up under a token derived from the
-Zig type (`Object.typeToken`) and set by `setInstance`. Consequences:
+`EngineBaseType(X).asInstance(X)`, which looks the binding up under a token
+derived from the Zig type (`EngineBaseType(X).typeToken(X)`) and installed by
+`attachInstance`. Consequences:
 
 - Resolution is exact-class. Asking for `*Y` on an `X` instance returns `null`
   rather than reinterpreting memory, so there is no unsafe cast to guard.
@@ -115,12 +116,4 @@ Zig type (`Object.typeToken`) and set by `setInstance`. Consequences:
 ## Verification
 
 Discovery and conversion are covered by compile-only checks and unit tests under
-`zig build test-godot`. Engine-facing behavior needs an editor run:
-
-- GDScript sees the declared signal and its argument types and can connect to it.
-- Emitting from Zig delivers the scalar and the `source` object; the object
-  arrives as the extension instance's engine base, not as the Zig struct.
-- A `RefCounted` argument survives the dispatch and is released afterwards.
-- A signal that is not declared (or not registered) still refuses `connect`,
-  which is the behavior this work fixes.
-
+`zig build test-godot`; engine-facing behavior needs an editor run.

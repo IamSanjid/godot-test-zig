@@ -57,6 +57,20 @@ callback consumes it.
 
 Do not assign a raw pointer into `Ref<T>` storage.
 
+## Construction
+
+`construct()` creates an engine object that the caller owns until it is handed
+to the engine:
+
+- a `RefCounted` result carries one creation reference; call `unreference()` and
+  destroy it with `object_destroy` when that call reports the object must be
+  freed (`Object.destroy` on the generated class);
+- a non-`RefCounted` result carries no reference; destroy it with
+  `object_destroy` (`Object.destroy` on the generated class).
+
+The create-instance failure path applies this rule; see
+[registration.md](registration.md#instance-lifecycle).
+
 ## `Variant`
 
 Variant arguments are borrowed Variant views. If the user keeps or returns one,
@@ -104,7 +118,8 @@ Class-pointer returns from generated bindings:
 - `RefCounted` class-pointer returns are written by the engine into an
   initialized empty `Ref<T>` slot and carry **one owning reference**. The raw
   pointer returned by the binding represents that reference. Release it with
-  `unreference` when done unless you transfer it to another owner.
+  `unreference` when done, and destroy it with `object_destroy` when that call
+  reports the last reference, unless you transfer it to another owner.
 - The binding initializes the return storage to `null` first. Do not remove that
   initialization: Godot's ptrcall encode assigns into a real `Ref<T>`, and an
   undefined slot would unref garbage.

@@ -9,11 +9,7 @@ Status: design. The declared-type conversion it depends on is implemented as
 
 ## Engine contract
 
-Pinned from the Godot `4.7` sources (`gdextension_interface.cpp`,
-`callable.cpp`, `object.cpp`, `message_queue.cpp`); the local
-`gd_interface/gdextension_interface.h` callable region matches. `callable_custom_create2`
-and `GDExtensionCallableCustomInfo2` are the current entry points; `Info` is the
-deprecated 4.2 form.
+Current entry points are `callable_custom_create2` and `GDExtensionCallableCustomInfo2`.
 
 - Only `call_func` and `token` are strictly required. `object_id` should be set
   for anything that is not a static function.
@@ -45,7 +41,8 @@ deprecated 4.2 form.
   emitted Variants are the only synchronization the engine provides.
 - Hot reload: there is no engine guard. A callable that outlives the library
   unload is undefined behavior; disconnect before unload. The sample
-  `.gdextension` in the README sets `reloadable = false`.
+  `.gdextension` in the README sets `reloadable = true`, so a callable that
+  holds extension code must be disconnected before a reload.
 
 ## Decisions
 
@@ -58,11 +55,6 @@ ownership works. The closure constructor is hand-written
 identity, conversion - and hand-written policy must be compiled and tested
 directly. A codegen overlay would only compile after `zig build gen`, which is
 the wrong feedback loop for this code.
-
-If the `Callable.fromClosure(...)` spelling is wanted, a three-line
-`// @section artifact fromClosure` overlay can forward to the runtime module.
-That is a separate decision: it makes generated output depend on a hand-written
-module. The `StringName.fromComptimeLatin1` overlay is precedent for doing it.
 
 ### D2. Boxed context, typed handler
 
@@ -149,13 +141,4 @@ normally through the refcount.
 
 ## Verification
 
-Compile-only until a real engine run. The manual checklist:
-
-- a closure connects to a declared signal, receives converted arguments, and a
-  second emit sees the mutated context;
-- disconnecting with the retained `Callable` stops delivery;
-- a wrong argument type reports a call error (engine `ERR_PRINT`) instead of
-  crashing;
-- `free_func` runs after `disconnect` + `deinit` (log it in a debug build);
-- a deferred connection delivers on the main thread with copied arguments.
-
+Compile-only until a real engine run.

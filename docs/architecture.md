@@ -99,9 +99,9 @@ registration.
 - `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
   `InitCallback`, `DeinitCallback`, `NotificationCallback`, plus the
   class-level `Signal` and `Constants` markers.
-- `registration/` - optional `Registry`, class creation/free, notification,
-  virtual-method registration, dynamic property callbacks, and class-level
-  ClassDB metadata.
+- `registration/` - optional `Registry`, class creation, recreation, and free,
+  notification, virtual-method registration, dynamic property callbacks, and
+  class-level ClassDB metadata.
 - `heap.zig` - engine allocator.
 - hand-written builtins and the hand-written builtin aggregate.
 
@@ -151,7 +151,7 @@ facade.
   identify an engine class (`Extends`).
 - Annotations are opt-in. A class with no annotations still registers.
 - `Registry` is a convenience collector, not a requirement.
-- Creation, notification, and virtual helpers are individually reusable.
+- Creation, recreation, free, notification, and virtual helpers are individually reusable.
 - Generated code provides ABI signatures. Hand-written code decides lifecycle
   and policy.
 - Avoid duplicate source-of-truth declarations. Hand-written builtins remain the

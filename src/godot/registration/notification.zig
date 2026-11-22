@@ -21,11 +21,21 @@ pub fn Notification(
             fn f(p_instance: interface.ClassInstancePtr, p_what: i32, p_reversed: bool) callconv(.c) void {
                 const instance: *T = @ptrCast(@alignCast(p_instance orelse return));
 
-                if (p_what == Node.notification_post_enter_tree and !p_reversed) {
-                    const base = &@field(instance, base_field_name);
-                    const engine_base = base.get();
-                    if (!engine_base.isNodeReady()) {
-                        annotations.initOnReadyFields(T, Base, instance, engine_base);
+                if (!p_reversed) {
+                    if (p_what == Node.notification_post_enter_tree) {
+                        const base = &@field(instance, base_field_name);
+                        const engine_base = base.get();
+                        if (!engine_base.isNodeReady()) {
+                            annotations.initOnReadyFields(T, Base, instance, engine_base);
+                        }
+                    } else if (p_what == Object.notification_extension_reloaded) {
+                        // A reload keeps the node in the tree, so post_enter_tree
+                        // has already fired; resolve OnReady here instead.
+                        const base = &@field(instance, base_field_name);
+                        const engine_base = base.get();
+                        if (engine_base.isInsideTree()) {
+                            annotations.initOnReadyFields(T, Base, instance, engine_base);
+                        }
                     }
                 }
 
@@ -46,6 +56,7 @@ const bindings = @import("bindings");
 const interface = bindings.interface;
 const classes = @import("../classes/classes.zig");
 const Node = classes.core.Node;
+const Object = classes.core.Object;
 
 const annotations = @import("../annotations/annotations.zig");
 const reflect = @import("../reflect/reflect.zig");

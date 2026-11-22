@@ -14,9 +14,11 @@ const Registry = @This();
 
 /// Compile-time options shared by every class in one `addClasses` group.
 pub const ClassOptions = struct {
-    /// When true, `OnReady` fields are initialized automatically once the node
-    /// receives `NOTIFICATION_POST_ENTER_TREE`. The class must then declare a
-    /// `Base` marker field; otherwise registration is a compile error.
+    /// When true, `OnReady` fields are initialized automatically on
+    /// `NOTIFICATION_POST_ENTER_TREE` before the node is ready, or on
+    /// `NOTIFICATION_EXTENSION_RELOADED` while it is inside the tree. The class
+    /// must then declare a `Base` marker field; otherwise registration is a
+    /// compile error.
     auto_onready: bool = false,
     /// When true, the free-instance callback runs
     /// `annotations.deinitPropertyFields` on the class's `Property` fields after
@@ -188,6 +190,7 @@ fn addClass(
         .icon_path = icon_path,
         .create_instance_func = CreateInstance(T, Base),
         .free_instance_func = FreeInstance(T, Base, class_options.auto_property_cleanup),
+        .recreate_instance_func = RecreateInstance(T, Base),
         .get_virtual_func = get_virtual_func,
         .notification_func = Notification(T, Base, class_options.auto_onready),
         .set_func = property_callbacks.set_func,
@@ -226,5 +229,6 @@ const property = @import("property.zig");
 const classdb = @import("classdb.zig");
 
 const CreateInstance = @import("instance.zig").CreateInstance;
+const RecreateInstance = @import("instance.zig").RecreateInstance;
 const FreeInstance = @import("instance.zig").FreeInstance;
 const Notification = @import("notification.zig").Notification;

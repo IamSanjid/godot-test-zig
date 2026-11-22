@@ -10,8 +10,9 @@ pub const callInitCallback = init_callback.callInitCallback;
 pub const DeinitCallback = deinit_callback.DeinitCallback;
 pub const callDeinitCallback = deinit_callback.callDeinitCallback;
 
-/// Wraps a function and comptime argument tuple for deferred creation-time
-/// invocation; used by `OnReady(...).Call` and the `Property` `.init` option.
+/// Wraps a function and comptime argument tuple for deferred invocation; used
+/// by `OnReady(...).Call` (resolved by `initOnReadyFields`) and the `Property`
+/// `.init` option (run at creation).
 pub const Init = init.Init;
 
 pub const OnReady = on_ready.OnReady;

@@ -193,9 +193,8 @@ ReleaseFast is undefined behavior.
 ### Chain limitation
 
 Godot 4 does not implement registering an extension class that inherits
-another extension class: `gdextension.cpp` logs `ERR_PRINT("Unimplemented yet")`
-when the parent class is registered by an extension. Runtime registration is
-therefore scoped to a **direct extension class over an engine class**. The
+another extension class. Runtime registration is therefore scoped to a
+**direct extension class over an engine class**. The
 conversion helpers can still traverse a manually established
 extension -> extension chain when its Base markers and instance bindings exist,
 but such a chain cannot be registered by the current runtime (the Registry has a
@@ -226,10 +225,6 @@ u64-backed values bit-cast), floats to `data.float`. Unsigned 64-bit integers
 use a `u64` canonical ptrcall slot (`abi.Box(u64).Raw`), unlike narrower
 unsigned integers which widen to `i64`; Variant payloads still store both as the
 bit-preserving `i64` payload.
-
-Variant from-type and to-type constructors are resolved lazily once per
-`VariantType` and cached for the dispatcher lifetime; this is a first-use
-optimization, not part of the conversion contract.
 
 ## Variant layout
 

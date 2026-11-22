@@ -87,7 +87,6 @@ src/godot/                hand-written runtime plus generated subtrees
     Registry.zig
     ClassRegistration.zig
     instance.zig
-    create_instance.zig
     notification.zig
     virtuals.zig
     property.zig
@@ -120,8 +119,10 @@ property registration, and class-level ClassDB metadata. Declared-type Variant
 work lives on `Variant` itself: `initDeclared`/`asDeclared` for values and
 `typeFor` for the Variant type.
 `initFieldsDefault` belongs to `reflect/defaults.zig`; annotation field setup
-belongs to `annotations.initAnnotFieldsDefault`. Property `.init` values are
-creation-time initializers run by `annotations.initPropertyFields`.
+belongs to `annotations.initAnnotFieldsDefault`, which only resets wrapper
+defaults and leaves `OnReady` values unresolved. Property `.init` values are
+creation-time initializers run by `annotations.initPropertyFields` after the
+instance is attached.
 
 ## Bootstrap
 
@@ -165,6 +166,10 @@ godot.runtime.dispatcher()
 godot.runtime.richLogFn
 
 godot.classes.core.Node
+godot.classes.core.Node.attachInstance(T, instance) // per engine class
+godot.classes.core.Node.detachInstance(T)
+godot.classes.core.Node.asInstance(T)
+godot.classes.core.Node.typeToken(T)
 godot.builtins.Variant
 godot.utility.general
 
@@ -206,6 +211,9 @@ godot.registration.Registry
 godot.Registry
 godot.registration.ClassOptions
 godot.registration.ClassRegistration
+godot.registration.CreateInstance
+godot.registration.RecreateInstance
+godot.registration.FreeInstance
 godot.registration.virtuals
 godot.registration.classdb
 godot.registration.PostRegistrationCallback
@@ -216,6 +224,7 @@ godot.registration.PostRegistrationCallback
 A registered extension class receives:
 
 - `create_instance_func`
+- `recreate_instance_func`
 - `free_instance_func`
 - `notification_func`
 - `get_virtual_func`
@@ -232,18 +241,23 @@ constants, enums, bitpack flags); it is null when the class declares neither.
 That callback is invoked by `godot.initialize`, never passed to the engine.
 
 Extension instance creation uses `classdb_construct_object3` (no implicit
-post-initialize, RefCounted refcount 1), attaches the Zig instance, then sends
-`NOTIFICATION_POSTINITIALIZE` once when the engine requests it.
+post-initialize, RefCounted refcount 1), sets field and annotation defaults and
+the `Base` marker, attaches the Zig instance, runs `Property` `.init`
+initializers and `InitCallback`, then sends `NOTIFICATION_POSTINITIALIZE` once
+when the engine requests it. Hot reload is supported for every class registered
+through `Registry` via `recreate_instance_func`; it requires `reloadable = true`
+in the `.gdextension` and is editor-only. See
+[docs/registration.md](docs/registration.md#hot-reload).
 
 `Property` options also include read-only dispatch (`.read_only`) and eager
-creation-time values (`.init`, assigned after the `Base` marker and before
-`InitCallback`); neither is `OnReady`-coupled or changes cleanup policy.
+creation-time values (`.init`, assigned after the instance is attached and
+before `InitCallback`); neither is `OnReady`-coupled or changes cleanup policy.
 
-Virtual overrides, instance construction/free, notifications, dynamic property
-callbacks, signals, and integer constants are wired automatically from the
-markers. Zig methods and static ClassDB properties are not registered for
-GDScript yet. Adding those surfaces is deliberate work, not an implicit side
-effect of registering a class; the design and phase plan are in
+Virtual overrides, instance construction, recreation, and freeing, notifications,
+dynamic property callbacks, signals, and integer constants are wired
+automatically from the markers. Zig methods and static ClassDB properties are
+not registered for GDScript yet. Adding those surfaces is deliberate work, not
+an implicit side effect of registering a class; the design is in
 [docs/classdb.md](docs/classdb.md). Property lifetime is explicit: the default setter
 manages only known managed builtins and `RefCounted` references, and free-time
 cleanup is opt-in through `ClassOptions.auto_property_cleanup` or a manual
@@ -259,8 +273,8 @@ documented in [docs/properties.md](docs/properties.md).
 - Generated dispatch code imports `runtime.zig`, never the `godot.zig` facade.
 - Codegen does not generate `godot.zig` or `runtime.zig`.
 - Annotations are optional. Missing annotations do not prevent registration.
-- `Registry` is optional; its creation/free/notification/virtual builders are
-  usable directly.
+- `Registry` is optional; its creation, recreation, free, notification, and
+  virtual builders are usable directly.
 - No forced pooling or creation strategy. `ClassRegistration.instance_allocator` and
   `gpa` are inputs, not policy.
 - No per-virtual user wrappers. User classes declare normal Zig methods matching

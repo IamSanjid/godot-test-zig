@@ -215,8 +215,8 @@ The chain may be applied once; a property that already declares `.init` cannot
 use `.Init(...)` again.
 
 When the value type cannot be built at comptime, declare the wrapper default as
-`.init(undefined)`; the creation-time initializer replaces it before any user
-code can observe the field.
+`.init(undefined)`; the creation-time initializer replaces it during creation,
+before `InitCallback` runs.
 
 The option value must be a type produced by `annotations.Init(T, func, args)`
 whose `InitFor` is exactly the property value type `T`; any other value or a
@@ -237,20 +237,24 @@ optional). Initializers are infallible; fallible creation-time work belongs in
 - another `Init(...)` type, called before the outer initializer.
 
 Only fields declaring `.init` are written; every other property keeps its field
-default, and a class without `.init` properties is a no-op. Initializers run
-after ordinary field defaults, `OnReady` wrapper defaults, and the `Base` marker,
-and before `InitCallback`, in field declaration order, so user init code can rely
-on the values already being assigned.
+default, and a class without `.init` properties is a no-op. Initializers run in
+field declaration order, after ordinary field defaults, the `OnReady` wrapper
+reset, the `Base` marker, and the instance attach, and before `InitCallback`.
 
-`initPropertyFields` runs before the engine instance binding is installed. An
-initializer must not trigger engine callbacks that require the extension
-instance binding; the same limitation applies to `InitCallback`. A static-form
-`InitCallback` replaces the whole instance and therefore overwrites `.init`
-values; use the member form when `.init` values must survive.
+`initPropertyFields` runs after the engine instance binding is installed, so
+engine calls made from an initializer see the extension instance. Fields are
+still assigned in declaration order: an initializer that reads, directly or
+through engine dispatch, a later `Property` field whose value comes only from
+`.init` can see `undefined`; fields with ordinary defaults are valid from the
+field-defaults pass. A static-form `InitCallback` replaces the whole instance
+and therefore overwrites `.init` values; use the member form when `.init` values
+must survive.
 
 `.init` is not engine dispatch and is not coupled to `OnReady`: it never runs on
 `_ready` or any scene-tree event. Values that depend on the scene tree use a
-custom getter or an `OnReady` field instead.
+custom getter or an `OnReady` field instead. On hot reload, `.init` initializers
+and `InitCallback` rerun for the recreated instance, then the engine restores
+storage-usage property values; see [registration.md](registration.md#hot-reload).
 
 ### Initializer ownership
 
@@ -511,7 +515,7 @@ Failure order during creation, including which values are already assigned when
   records why the dynamic backend stays the only one for instanced classes
 - no extension method registration here; it is [classdb.md](classdb.md) work
 - no property groups/subgroups yet (a planned additive `.group`/`.subgroup`
-  option, [classdb.md](classdb.md#phase-b---groups-and-subgroups))
+  option, [classdb.md](classdb.md#d2-groups-and-subgroups-are-list-entries-not-registrations))
 - no indexed or array properties
 - no `property_can_revert` / `property_get_revert`
 - no signals from the property backend; see [signals.md](signals.md)
@@ -530,6 +534,3 @@ Failure order during creation, including which values are already assigned when
 
 - Add groups/subgroups and the enum hint wiring ([classdb.md](classdb.md)).
 - Add property revert callbacks.
-- Add a runtime integration test against a real engine: property list
-  registration, direct `Object.set`/`get` on a zero-usage property, and
-  setter/cleanup round-trips for deinit types and `RefCounted` pointers.

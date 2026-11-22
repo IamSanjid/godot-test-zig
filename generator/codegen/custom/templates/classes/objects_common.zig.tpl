@@ -2,6 +2,8 @@
 
 // @section artifact typeToken
 
+/// Binding token for extension class `T`. `attachInstance`, `asInstance`, and
+/// `detachInstance` must use the same class and `T`.
 pub fn typeToken(comptime T: type) ?*anyopaque {
     const token = &struct {
         pub var _token: u8 = 34 + 35;
@@ -12,10 +14,12 @@ pub fn typeToken(comptime T: type) ?*anyopaque {
 
 // @section_end artifact typeToken
 
-// @section artifact setInstance
+// @section artifact attachInstance
 
-/// Bind an instance of an extension class to this engine class.
-pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
+/// Attach an extension-class instance to this engine object and install the
+/// instance binding used by `asInstance`. Engine dispatch can reach the instance
+/// once this returns; initialize field defaults and the `Base` marker first.
+pub fn attachInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
     comptime if (!runtime.reflect.inheritsFrom(T, {{Class}})) {
         @compileError("T must extend {{Class}} or any of its derived classes, by declaring an `Extends` alias to the base class.");
     };
@@ -42,14 +46,38 @@ pub fn setInstance(self: *{{Class}}, comptime T: type, instance: *T) void {
     }.callbacks });
 }
 
-// @section_end artifact setInstance
+// @section_end artifact attachInstance
+
+// @section artifact detachInstance
+
+/// Detach the extension-class instance and remove its binding. The engine keeps
+/// the class's extension pointer, so callbacks run with a null instance until
+/// another instance is attached. Detach only immediately before destroying or
+/// reattaching the instance.
+pub fn detachInstance(self: *{{Class}}, comptime T: type) void {
+    comptime if (!runtime.reflect.inheritsFrom(T, {{Class}})) {
+        @compileError("T must extend {{Class}} or any of its derived classes, by declaring an `Extends` alias to the base class.");
+    };
+
+    const token = comptime typeToken(T);
+    const class_name: builtins.StringName = .fromComptimeLatin1(runtime.reflect.className(T));
+    runtime.dispatch(.object_set_instance, .{ self, &class_name, @as(bindings.interface.ClassInstancePtr, null) });
+    runtime.dispatch(.object_free_instance_binding, .{ self, token });
+}
+
+// @section_end artifact detachInstance
 
 // @section artifact asInstance
 
-/// Returns the registered instance of extension class T, or null if no binding exists.
+/// Returns the attached instance of extension class T, or null when none is
+/// attached.
 pub fn asInstance(self: *{{Class}}, comptime T: type) ?*T {
-    comptime std.debug.assert(runtime.reflect.inheritsFrom(T, {{Class}}));
-    comptime std.debug.assert(runtime.reflect.isNormalStruct(T));
+    comptime if (!runtime.reflect.inheritsFrom(T, {{Class}})) {
+        @compileError("T must extend {{Class}} or any of its derived classes, by declaring an `Extends` alias to the base class.");
+    };
+    comptime if (!runtime.reflect.isNormalStruct(T)) {
+        @compileError("T must be an extension class struct, found: " ++ @typeName(T));
+    };
 
     const token = comptime typeToken(T);
     const instance = runtime.dispatch(.object_get_instance_binding, .{self, token, null}) orelse return null;
@@ -61,7 +89,7 @@ pub fn asInstance(self: *{{Class}}, comptime T: type) ?*T {
 // @section artifact upcast
 
 pub inline fn upcast(self: *{{Class}}, comptime T: type) *T {
-    if (!comptime runtime.reflect.inheritsFrom({{Class}}, T)) @compileError("{{Class}} doesn't extend, " ++ @typeName(T));
+    if (!comptime runtime.reflect.inheritsFrom({{Class}}, T)) @compileError("{{Class}} doesn't extend " ++ @typeName(T));
     return @ptrCast(self);
 }
 // @section_end artifact upcast
