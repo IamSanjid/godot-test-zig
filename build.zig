@@ -68,6 +68,11 @@ pub fn build(b: *std.Build) !void {
         "gdext_strip_deprecation",
         "Strip deprecated interface and API members from generated output.",
     ) orelse false;
+    const godot_bin = b.option(
+        []const u8,
+        "godot_bin",
+        "Godot executable used by test-godot-live; searches PATH when omitted.",
+    );
 
     // translate-c runs on the build host; the generated module is still
     // configured for the requested target by Translator.init.
@@ -154,7 +159,7 @@ pub fn build(b: *std.Build) !void {
 
     const godot_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/godot/tests/all.zig"),
+            .root_source_file = b.path(b.fmt("{s}/tests/all.zig", .{layer_root})),
             .imports = &.{
                 .{ .name = "build_options", .module = build_options_module },
                 .{ .name = "bindings", .module = bindings },
@@ -174,11 +179,19 @@ pub fn build(b: *std.Build) !void {
     const test_godot_step = b.step("test-godot", "Run all bindings/godot layer tests and analyze generated code");
     test_godot_step.dependOn(&run_godot_tests.step);
 
+    // Live smoke test: build the GDExtension, copy it next to the checked-in
+    // `godot-test` project, then let Godot run that project's test script.
+    // Host-only because the freshly built library is executed locally, and
+    // deliberately not part of `test` so the default flow needs no Godot.
+    const test_godot_live_step = b.step("test-godot-live", "Build the live GDExtension and run it in Godot");
+    test_godot_live_step.dependOn(testGodotLive(b, layer_root, godot_bin, target, optimize, godot));
+
     // Normal project test step: runs the runtime/layer tests without the
     // template-only generator suite. `test-generator` remains available for
-    // template development.
+    // template development. Currently runs the godot-tests and the godot module tests.
     const test_step = b.step("test", "Run the project's runtime tests");
     test_step.dependOn(test_godot_step);
+    test_step.dependOn(test_godot_live_step);
 
     const lib = b.addLibrary(.{
         .name = @tagName(build_zon.name),
@@ -214,6 +227,86 @@ pub fn build(b: *std.Build) !void {
     gen_step.dependOn(scan);
 }
 
+/// Live fixture composition: the test entrypoint, artifact name, install
+/// destination, and runner script are template-specific, so they stay here.
+/// Generic launch policy lives in `build/godot.zig`.
+fn testGodotLive(
+    b: *std.Build,
+    layer_root: []const u8,
+    godot_bin: ?[]const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.Optimize,
+    godot: *std.Build.Module,
+) *std.Build.Step {
+    const host_target = b.graph.host.result;
+    if (target.result.os.tag != host_target.os.tag or target.result.cpu.arch != host_target.cpu.arch) {
+        const fail = b.addFail(b.fmt(
+            "test-godot-live requires the host target: the built library is run locally " ++
+                "(build host {s}-{s}, requested {s}-{s})",
+            .{
+                @tagName(host_target.cpu.arch),
+                @tagName(host_target.os.tag),
+                @tagName(target.result.cpu.arch),
+                @tagName(target.result.os.tag),
+            },
+        ));
+        return &fail.step;
+    }
+
+    const godot_exe = godot_build.findGodot(b, godot_bin) orelse {
+        const fail = b.addFail(
+            "test-godot-live requires a Godot executable; pass -Dgodot_bin=/path/to/godot or add godot to PATH",
+        );
+        return &fail.step;
+    };
+
+    const live_lib = b.addLibrary(.{
+        .name = "test_extension",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("{s}/tests/live/entrypoint.zig", .{layer_root})),
+            .imports = &.{.{ .name = "godot", .module = godot }},
+            .target = target,
+            .optimize = optimize,
+        }),
+        .linkage = .dynamic,
+    });
+
+    // `godot-test/lib` is gitignored; install there instead of the
+    // default binary dir. `custom` is relative to the install prefix,
+    // so the default `zig-out` lands back in the project tree.
+    const install_live_lib = b.addInstallArtifact(live_lib, .{
+        .dest_dir = .{ .override = .{ .custom = "../godot-test/lib" } },
+        .pdb_dir = if (live_lib.producesPdbFile())
+            .{ .override = .{ .custom = "../godot-test/lib" } }
+        else
+            .disabled,
+    });
+
+    // Non-editor Godot only discovers GDExtensions through this ignored cache
+    // file; `--script` does not scan the project. Seed it so a fresh checkout
+    // runs without opening the editor once.
+    const extension_list = b.addWriteFiles();
+    const extension_list_file = extension_list.add(
+        "extension_list.cfg",
+        "res://test_extension.gdextension\n",
+    );
+    const install_extension_list = b.addInstallFileWithDir(
+        extension_list_file,
+        .{ .custom = "../godot-test/.godot" },
+        "extension_list.cfg",
+    );
+
+    const run_live = godot_build.addRun(b, .{
+        .godot_bin = godot_exe,
+        .project_path = "godot-test",
+        .headless = true,
+        .script = "res://run_tests.gd",
+    });
+    run_live.dependOn(&install_live_lib.step);
+    run_live.dependOn(&install_extension_list.step);
+    return run_live;
+}
+
 const std = @import("std");
 
 const build_zon = @import("build.zig.zon");
@@ -221,3 +314,4 @@ const Translator = @import("translate_c").Translator;
 
 const class_files = @import("build/class_files.zig");
 const generator = @import("build/generator.zig");
+const godot_build = @import("build/godot.zig");

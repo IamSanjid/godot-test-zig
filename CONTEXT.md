@@ -111,7 +111,11 @@ src/godot/                hand-written runtime plus generated subtrees
     builtins/             tests mirroring the builtin modules
     reflect/              tests mirroring the reflect modules
     registration/         tests mirroring the registration modules
+    live/                 separate dynamic-library tree for test-godot-live; not in all.zig
+      entrypoint.zig      entry symbol; registers fixture classes
+      live_node.zig       LiveNode fixture class
 build/                    build helpers and example scan wiring
+  godot.zig               reusable Godot run helper
   generator.zig
   class_files.zig
   tools/class_files_scan_and_gen.zig
@@ -119,6 +123,15 @@ build/templates/          reserved for project-generation files (empty today)
 generator/                host-side bindgen/codegen generator
 generator/docs/           generator-internal design docs
 gd_interface/             GDExtension header and JSON inputs
+godot-test/               committed minimal Godot 4.8 project for test-godot-live
+  project.godot           test project settings
+  run_tests.gd            headless SceneTree runner; exit code is the result
+  tests/                  GDScript assertion suites
+    test_case.gd          shared failures/check/suite-name base
+    classdb.gd            registration, signals, constants
+    properties.gd         property metadata and value round-trips
+  test_extension.gdextension  checked-in descriptor; entry symbol test_extension_init
+  lib/                    gitignored; receives the built test extension and PDB
 vendor/                   submodule or path dependencies
 ```
 
@@ -318,9 +331,21 @@ documented in [docs/properties.md](docs/properties.md).
 - Generated bindings do not depend on annotations or registration.
 - Generated dispatch code imports `runtime.zig`, never the `godot.zig` facade.
 - Codegen does not generate `godot.zig` or `runtime.zig`.
-- Hand-written tests live under `src/godot/tests/`; `all.zig` is the root that
-  `zig build test-godot` builds and runs. Implementation modules stay test-free;
-  tests import the public `godot` facade, not relative parent paths.
+- Hand-written unit tests live under `src/godot/tests/`; `all.zig` is the root
+  that `zig build test-godot` builds and runs. Implementation modules stay
+  test-free; unit tests import the public `godot` facade, not relative parent
+  paths. `src/godot/tests/live/` is a separate dynamic-library source tree for
+  `test-godot-live` and is not imported by `all.zig`.
+- `zig build test` stays a wrapper over `test-godot`; it does not depend on the
+  live step or on a Godot executable. `test-godot-live` is opt-in, host-only
+  (the target must match the build host), and uses `-Dgodot_bin` when supplied
+  (otherwise `addRun` searches PATH). It builds the live tree, seeds the ignored
+  `godot-test/.godot/extension_list.cfg`, writes the built library only into
+  the gitignored `godot-test/lib/`, and runs `godot-test/run_tests.gd`
+  headlessly. The Godot process exit code is the step result. It covers
+  headless ClassDB registration metadata (class existence, instantiate/free,
+  properties, signals, constants), not editor-only inspector rendering or hot
+  reload.
 - Annotations are optional. Missing annotations do not prevent registration.
 - `ownership.zig` is the only engine-object retain/release path: property
   overwrite/cleanup and Variant conversion call it instead of carrying their own
@@ -350,7 +375,8 @@ documented in [docs/properties.md](docs/properties.md).
 
 ## Start here
 
-1. [docs/build.md](docs/build.md) - build steps, options, generated output, template plan.
+1. [docs/build.md](docs/build.md) - build steps, options, the live Godot test,
+   generated output, and the template plan.
 2. [docs/bindings-only.md](docs/bindings-only.md) - raw bindings without the runtime layer.
 3. [docs/architecture.md](docs/architecture.md) - layer boundaries and file ownership.
 4. [docs/reflect.md](docs/reflect.md) - reflection helpers and field defaults.

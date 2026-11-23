@@ -6,7 +6,8 @@ then use these pages by task.
 ## Building and template work
 
 - [build.md](build.md) - steps, build options, generated-output and test layout,
-  Godot version updates, and the planned project-generation contract.
+  the optional live Godot test, Godot version updates, and the planned
+  project-generation contract.
 - [bindings-only.md](bindings-only.md) - using the raw ABI bindings without the
   helpful runtime layer.
 

@@ -116,4 +116,7 @@ derived from the Zig type (`EngineBaseType(X).typeToken(X)`) and installed by
 ## Verification
 
 Discovery and conversion are covered by compile-only checks and unit tests under
-`zig build test-godot`; engine-facing behavior needs an editor run.
+`zig build test-godot`. The optional
+[`test-godot-live`](build.md#live-godot-tests) step reads the registered signal
+list back from a headless Godot process; emission and connection behavior still
+need an engine or editor run.

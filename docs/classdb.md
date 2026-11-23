@@ -417,8 +417,10 @@ per-class static.
 ## Verification
 
 Discovery and metadata expansion are covered by compile-only checks and unit
-tests under `zig build test-godot`. Engine-facing behavior remains compile-only
-analysis until a runtime harness exists.
+tests under `zig build test-godot`. The optional
+[`test-godot-live`](build.md#live-godot-tests) step verifies registration
+metadata for one extension class in a headless Godot process; other class-level
+surfaces and editor-only behavior remain compile-only or manual.
 
 ## Non-goals
 

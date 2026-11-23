@@ -20,8 +20,10 @@ Status:
   (`.init`) are implemented on the same field annotation.
 - Static ClassDB property registration and extension method registration remain
   future work.
-- Coverage is compile-time only. The runtime callbacks are analyzed by the
-  build, but the repository's build/test steps do not execute them in an engine.
+- Unit-test coverage is compile-time only: the build analyzes the runtime
+  callbacks. The optional [`test-godot-live`](build.md#live-godot-tests) step
+  exercises property registration and default/set/get values headlessly;
+  inspector behavior remains manual.
 
 ## Why a field type
 

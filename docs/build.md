@@ -26,21 +26,119 @@ project-generation step.
 | `zig build scan` | example class namespace | Example scaffold; configured in `build.zig`. |
 | `zig build test-generator` | generator test binary | Host-side generator tests. |
 | `zig build test-godot` | test binary | All bindings/godot layer tests: regenerates first, then builds and runs `src/godot/tests/all.zig` and analyzes generated modules. |
-| `zig build test` | test binary | Normal project test step: wrapper over `test-godot`; runs the runtime/layer tests, not the generator suite. |
+| `zig build test-godot-live` | `godot-test/lib` | Optional live smoke test. Uses `-Dgodot_bin` or searches PATH, requires the host target, builds a separate dynamic library, copies it into the ignored `godot-test/lib/`, then runs `godot-test/` headlessly. Not part of `test`. |
+| `zig build test` | test binary | Normal project test step: wrapper over `test-godot`; runs the runtime/layer tests, not the generator suite or the live tests. |
 
 ## Tests
 
-Hand-written tests are committed source, not generated output. They live under
-`src/godot/tests/`, mirror the module layout, and import the runtime through the
-public `godot` facade. `src/godot/tests/all.zig` is the test root: it imports
-every test file, and `zig build test-godot` regenerates first, then builds and
-runs it. `src/godot/tests/classes.zig` adds the semantic analysis of the
-generated bindings/codegen. Implementation modules carry no `test` blocks.
+Hand-written unit tests are committed source, not generated output. They live
+under `src/godot/tests/`, mirror the module layout, and import the runtime
+through the public `godot` facade. `src/godot/tests/all.zig` is the test root:
+it imports every test file, and `zig build test-godot` regenerates first, then
+builds and runs it. `src/godot/tests/classes.zig` adds the semantic analysis of
+the generated bindings/codegen. Implementation modules carry no `test` blocks.
 
 `zig build test` is a wrapper over `test-godot` and runs the normal runtime/layer
 test root. `test-generator` is the template-only generator suite; `test-godot`
-is the explicit layer-test step. The test root path is fixed in `build.zig`; if
-the runtime layer moves, move the test tree with it and update that path.
+is the explicit layer-test step. `test-godot-live` is a separate, optional
+engine-facing smoke test: `test`, `test-godot`, and `test-generator` never
+depend on it and need no Godot executable. The test root path is fixed in
+`build.zig`; if the runtime layer moves, move the test tree with it and update
+that path.
+
+### Live Godot tests
+
+`zig build test-godot-live -Dgodot_bin=/path/to/godot` loads the extension into
+a real Godot process. It is separate from the unit suites and is not part of
+`test` or `test-godot`.
+
+- `-Dgodot_bin` is optional. When omitted, `addRun` searches PATH for
+  `godot`/`godot4`; if none is found, the step fails with a diagnostic instead
+  of panicking.
+- The step is host-only: `-Dtarget` must match the build host's OS and CPU
+  architecture because the built library is loaded by a local Godot process. A
+  cross-target request fails with a diagnostic.
+- It builds a dynamic library named `test_extension` from
+  `src/godot/tests/live/entrypoint.zig`. That file only exports the entry symbol
+  and registers fixture classes; `live_node.zig` holds the current fixture
+  class. The directory is a separate dynamic-library source tree and is not
+  imported by `src/godot/tests/all.zig`.
+- The build installs the library into the gitignored `godot-test/lib/` (plus the
+  PDB on Windows) using an artifact install override. The destination is
+  relative to the default install prefix (`zig-out`), so run this step with the
+  default `--prefix`; it does not rewrite checked-in project files.
+- It then runs:
+
+  ```console
+  godot --headless --path godot-test --script res://run_tests.gd
+  ```
+
+- `godot-test/` is a committed minimal Godot 4.8 project: `project.godot`,
+  `run_tests.gd`, the `tests/` suite tree, and a checked-in
+  `test_extension.gdextension` with `entry_symbol = "test_extension_init"` and
+  `lib/...` paths. Use a matching Godot 4.8 executable (verified with
+  `4.8.beta2`). `godot-test/.godot/` and `godot-test/lib/` are gitignored.
+- Non-editor Godot discovers GDExtensions only through
+  `godot-test/.godot/extension_list.cfg`; `--script` does not scan the project.
+  The step seeds that ignored file, so a fresh checkout works without opening
+  the editor once.
+- `run_tests.gd` extends `SceneTree` and only loads the suites listed in its
+  `SUITES` array, prints each failure as `LIVE TEST FAILED [suite]: message`,
+  and sets the exit code. Suites extend `tests/test_case.gd` and live directly
+  under `tests/`; add a new suite by adding its script to `SUITES`.
+- The live extension registers one `LiveNode` (extends `Node`): properties
+  `health` (range hint `0,100`), `label` (String, initial `"live"`), and `mode`
+  (enum hint; `Mode { idle, running = 3 }`), group `Live`, signal
+  `pinged(health: int)`, and integer constants `MAX_HEALTH = 100` and the
+  `Mode` enum (`IDLE`, `RUNNING = 3`). The script checks class existence,
+  instantiate/free, property list metadata, signal metadata, constants, and
+  default/set/get values.
+
+The step covers headless registration and basic property/signal metadata. It
+does not cover inspector rendering, hot reload, signal emission/connection
+behavior, virtual callbacks, or gameplay paths; those still need a manual engine
+or editor run. Like `zig build`, it consumes generated sources and does not
+regenerate them; run `zig build gen` first on a fresh checkout.
+
+## Reusing `build/godot.zig`
+
+`build/godot.zig` owns only the reusable Godot launch step. The extension
+library remains an ordinary `b.addLibrary(...)` call: there is no wrapper,
+because forwarding `name`/`root_source_file`/`imports`/`target`/`optimize` and
+setting `.linkage = .dynamic` adds no policy and hides the standard build API.
+
+`addRun` accepts `godot_bin` (optional; PATH is searched when omitted),
+`project_path`, `headless`, `editor`, `script`, `cwd`, and `extra_args`, and
+returns `*std.Build.Step`: a process step, or a fail step when no executable is
+found.
+
+```zig
+const godot_build = @import("build/godot.zig");
+
+const lib = b.addLibrary(.{
+    .name = "my_extension",
+    .root_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint.zig"),
+        .imports = &.{.{ .name = "godot", .module = godot }},
+        .target = target,
+        .optimize = optimize,
+    }),
+    .linkage = .dynamic,
+});
+
+const run = godot_build.addRun(b, .{
+    .godot_bin = godot_bin,
+    .project_path = ".",
+    .headless = true,
+    .script = "res://tests/run.gd",
+    // Export example: .extra_args = &.{ "--export-release", "Linux/X11", "build/game.x86_64" },
+});
+```
+
+Attach the run step to any `b.step(...)`; `headless = false` launches the
+project normally, and `editor = true` opens the project in the editor. The
+helper does not yet model export subcommands, but `extra_args` passes them
+through unchanged. `test-godot-live` is just one caller of this helper.
 
 ## Options
 
@@ -59,6 +157,7 @@ the runtime layer moves, move the test tree with it and update that path.
 | `-Dgdext_interface_import` | `godot_interface` | Module name generated bindings use for the translated interface. |
 | `-Dgdext_member_init` | `zero` | Initialization of generated extern struct members. |
 | `-Dgdext_strip_deprecation` | `false` | Strip deprecated interface/API members from generated output. |
+| `-Dgodot_bin` | PATH search | Godot executable used only by `test-godot-live`; when omitted, `addRun` searches PATH and fails the step if no executable is found. |
 
 Changing a generation-affecting option requires `zig build gen` before the next
 build. Generated output is per target pointer width and builtin precision; do
@@ -94,8 +193,10 @@ There are two layer roots, not two arbitrary output folders:
 
 The repository `.gitignore` currently knows only the default paths. If a
 project changes either layer root, update `.gitignore` (and the example scan
-ignores) to match. The example `.gdextension` and Godot project files live
-outside this repository; keep library paths consistent with `install_dir`.
+ignores) to match. The example extension's `.gdextension` and Godot project
+files live outside this repository; the committed `godot-test/` project is a
+test fixture, not your game project. Keep library paths consistent with
+`install_dir`.
 
 ### Generated-output policy for a template copy
 
@@ -123,6 +224,9 @@ zig build gen
 zig build test-generator
 zig build test-godot
 ```
+
+If you keep the live harness, finish with
+`zig build test-godot-live -Dgodot_bin=/path/to/godot` on the host.
 
 The generator writes output files but does not delete stale generated files.
 When changing versions, remove the generated subtrees first while preserving

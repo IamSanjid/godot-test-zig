@@ -101,7 +101,8 @@ registration.
   `classdb_construct_object3` (`releaseConstructedBase`). It depends on codegen
   `classes` plus `reflect`, never on `runtime.zig`, annotations, or registration.
 - `tests/` - hand-written tests and compile-only checks that mirror the module
-  layout; `all.zig` is the root used by `zig build test-godot`.
+  layout; `all.zig` is the root used by `zig build test-godot`, and `live/` is
+  a separate dynamic-library source tree used by `test-godot-live`.
 - `reflect/` - type/object predicates, inheritance traversal, Base-marker
   discovery, function-shape helpers, generic field-default initialization, and
   the engine class name of an object pointer type (`classNameOf`).

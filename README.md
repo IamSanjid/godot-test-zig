@@ -27,6 +27,8 @@ These are starting values, not stable API names.
   the bundled `extension_api.json` identifies itself as 4.8 beta2.
 - initialized submodules: `git submodule update --init`
   (`vendor/casez` and `vendor/zlob`)
+- a Godot 4.8 executable for the optional `test-godot-live` step, passed with
+  `-Dgodot_bin` or PATH; the committed `godot-test/` project targets 4.8
 - a Godot project that loads the built shared library through a
   `.gdextension` file
 
@@ -86,6 +88,13 @@ generation step on a fresh checkout; it does not regenerate implicitly.
 bindings/codegen, then builds and runs the hand-written test root
 `src/godot/tests/all.zig` and analyzes the generated modules.
 `zig build test-generator` runs the host-side generator tests separately.
+`zig build test-godot-live -Dgodot_bin=/path/to/godot` is an optional live
+smoke test: it builds a separate dynamic library from `src/godot/tests/live/`,
+installs it into the ignored `godot-test/lib/`, seeds the ignored Godot
+extension-list cache, and runs the committed `godot-test/` project with
+`--headless`. It uses `-Dgodot_bin` when provided, otherwise searches PATH,
+runs only on the host target, and is not part of `test` or `test-godot`; the
+normal test flow needs no Godot executable.
 
 Cross-target test binaries are compiled and semantically analyzed; they run
 only when the host can execute them. The builtin layout defaults from the target
@@ -109,10 +118,20 @@ src/godot/                hand-written runtime plus generated subtrees
   annotations/            opt-in markers
   registration/           optional Registry and lifecycle helpers
   tests/                  hand-written tests; all.zig is the test root
+    live/                 separate dynamic-library tree for test-godot-live; not in all.zig
+      entrypoint.zig      entry symbol; registers fixture classes
+      live_node.zig       current fixture class
 build/                    build helpers and optional class-file scanner
+build/godot.zig           reusable Godot run helper
 build/generator.zig       bindgen/codegen build wiring
 generator/                host-side bindgen/codegen generator
 gd_interface/             GDExtension header and JSON inputs
+godot-test/               committed minimal Godot 4.8 project for test-godot-live
+  project.godot           test project settings
+  run_tests.gd            headless SceneTree runner; process exit code is the result
+  tests/                  GDScript suites; test_case.gd plus domain scripts
+  test_extension.gdextension  checked-in descriptor (entry_symbol test_extension_init)
+  lib/                    gitignored; receives the built test extension and PDB
 docs/                     design and build documentation
 vendor/                   submodule dependencies
 ```
@@ -136,6 +155,9 @@ options are:
 | `-Dgdext_builtin_build_conf=float_32|float_64` | builtin layout configuration |
 | `-Dgdext_interface_import=...` | module name for the translated interface |
 | `-Dgdext_member_init=...`, `-Dgdext_strip_deprecation=...` | generated extern struct and deprecation policy |
+
+The optional live test takes its own option, `-Dgodot_bin=/path/to/godot`; see
+[docs/build.md](docs/build.md#live-godot-tests).
 
 The layer-root options move the whole layer, not just generated files. Generated
 imports are relative to the runtime layer, and the hand-written `bindings.zig`
@@ -161,9 +183,11 @@ gd_interface/extension_api.json
 ```
 
 Replace all three from the same Godot version, then run `zig build gen`,
-`zig build test-generator`, and `zig build test-godot`. Generated output is not
-deleted automatically; when upgrading, remove generated trees first while
-preserving the hand-written `bindings.zig` and builtin files, then regenerate.
+`zig build test-generator`, and `zig build test-godot`. If you keep the live
+harness, also run `zig build test-godot-live -Dgodot_bin=/path/to/godot` on the
+host. Generated output is not deleted automatically; when upgrading, remove
+generated trees first while preserving the hand-written `bindings.zig` and
+builtin files, then regenerate.
 Update `.gdextension` `compatibility_minimum` and the entrypoint version check
 with the version you actually ship.
 
@@ -201,8 +225,11 @@ modules are build artifacts; they are ignored and must not be edited.
 ## Known limitations
 
 - The hand-written tests under `src/godot/tests/` are Zig unit/build-analysis
-  tests. They do not run the extension in a Godot engine; validate runtime
-  callbacks in Godot.
+  tests; `src/godot/tests/live/` is a separate dynamic-library tree, not a unit
+  test. `zig build test` does not run the extension in a Godot engine. The
+  optional `test-godot-live` step loads it headlessly and checks registration
+  metadata; inspector rendering, hot reload, and other editor-only behavior
+  still need an editor run.
 - Zig methods and static ClassDB properties are not registered for GDScript
   yet.
 - Extension-to-extension class inheritance is rejected for registered classes.

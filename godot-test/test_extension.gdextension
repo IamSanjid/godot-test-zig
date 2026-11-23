@@ -1,0 +1,20 @@
+[configuration]
+
+compatibility_minimum = "4.7.2"
+entry_symbol = "test_extension_init"
+reloadable = true
+
+[libraries]
+
+macos.debug = "lib/libtest_extension.dylib"
+macos.release = "lib/libtest_extension.dylib"
+windows.debug.x86_64 = "lib/test_extension.dll"
+windows.release.x86_64 = "lib/test_extension.dll"
+linux.debug.x86_64 = "lib/libtest_extension.so"
+linux.release.x86_64 = "lib/libtest_extension.so"
+linux.debug.arm64 = "lib/libtest_extension.so"
+linux.release.arm64 = "lib/libtest_extension.so"
+linux.debug.rv64 = "lib/libtest_extension.so"
+linux.release.rv64 = "lib/libtest_extension.so"
+web.debug.wasm32 = "lib/libtest_extension.wasm"
+web.release.wasm32 = "lib/libtest_extension.wasm"

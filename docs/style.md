@@ -130,10 +130,21 @@ bottom under the normal import rules.
 - Tests mirror the module layout under `src/godot/tests/`. `all.zig` is the
   root; `zig build test-godot` builds and runs it, and it imports every test
   file.
+- `src/godot/tests/live/` is a separate dynamic-library source tree for the
+  optional `zig build test-godot-live` step; `all.zig` does not import it.
+  `entrypoint.zig` only exports the entry symbol and registers fixture classes;
+  each fixture class lives in its own sibling `.zig` file. Its Godot project,
+  `SceneTree` runner, and GDScript suites live under `godot-test/`; suites
+  extend `godot-test/tests/test_case.gd` and are listed explicitly in
+  `run_tests.gd`.
+- Adding a live test means: add the fixture class file, register it in
+  `entrypoint.zig`, add a GDScript suite under `godot-test/tests/`, and add that
+  suite to `SUITES`. Removing it means removing those four references; never
+  add live fixtures to `all.zig`.
 - Implementation modules stay test-free: no `test "..."` blocks, coverage
   fixtures, or `comptimeSelfCheck` under `src/godot/` outside `tests/`. Tests
   own those checks.
-- Tests import the runtime through the public `godot` facade, not relative
+- Unit tests import the runtime through the public `godot` facade, not relative
   parent paths. Generated-layer analysis may also use the `bindings` module.
 - Test files are hand-written and committed. Generated output is ignored and is
   never edited to make a test pass.
