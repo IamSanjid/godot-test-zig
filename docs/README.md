@@ -5,8 +5,8 @@ then use these pages by task.
 
 ## Building and template work
 
-- [build.md](build.md) - steps, build options, generated-output layout, Godot
-  version updates, and the planned project-generation contract.
+- [build.md](build.md) - steps, build options, generated-output and test layout,
+  Godot version updates, and the planned project-generation contract.
 - [bindings-only.md](bindings-only.md) - using the raw ABI bindings without the
   helpful runtime layer.
 
@@ -16,19 +16,24 @@ then use these pages by task.
   scaffold boundaries.
 - [registration.md](registration.md) - `Registry`, class options, lifecycle,
   scanned class groups.
-- [annotations.md](annotations.md) - opt-in class, field, and callback markers.
+- [annotations.md](annotations.md) - opt-in class, field, and callback markers,
+  plus the `property`/`constants` introspection submodules.
 - [virtuals.md](virtuals.md) - virtual metadata and callback behavior.
-- [properties.md](properties.md) - dynamic `Property` fields and cleanup.
+- [properties.md](properties.md) - dynamic `Property` fields, property groups,
+  enum/bitfield hints, and cleanup.
 - [signals.md](signals.md) - signal declarations, registration, typed emit, and
   argument conversion.
 - [callables.md](callables.md) - custom callable design: Zig closures as engine
   `Callable`s, identity, and typed connect.
-- [classdb.md](classdb.md) - class-level surfaces: implemented signals and
-  integer constants, plus designs for methods, groups, and class modes.
-- [ownership.md](ownership.md) - borrowed arguments and ownership transfer.
+- [classdb.md](classdb.md) - class-level surfaces: implemented signals,
+  integer constants, property groups, and enum/bitfield hints, plus designs for
+  methods and class modes.
+- [ownership.md](ownership.md) - borrowed arguments, ownership transfer, and the
+  `godot.ownership` retain/release helpers.
 - [variants.md](variants.md) - `Variant` conversion and lifetime.
 - [reflect.md](reflect.md) - reflection helpers and field defaults.
-- [style.md](style.md) - project naming and comment rules.
+- [style.md](style.md) - project naming, comments, imports, formatting, and test
+  placement.
 
 ## Generator
 

@@ -12,7 +12,7 @@ discovered. `Base` declares `marker.Kind.base` for consistency, but Base
 discovery is structural and annotation-free (`reflect/base.zig`) and does not use
 marker identity.
 
-Declaration markers (`Override`, `Signal`, `Constants`) carry no `marker.Kind`.
+Declaration markers (`Override`, `Signal`, `Constants`, `PropertyGroups`) carry no `marker.Kind`.
 They describe the class rather than a field: `Override` names a virtual
 implementation, `Signal` declarations are collected by marker type, and
 `Constants` by its wrapped declarations. See [classdb.md](classdb.md).
@@ -212,14 +212,31 @@ pub const ClassConstants = godot.annotations.Constants(struct {
   `_`-prefixed fields are skipped.
 - A `u64` value above the `i64` maximum is carried in the sign bit, matching the
   API contract for 64-bit constants.
-- Non-exhaustive enums, non-bool bitfield fields, unsupported declarations,
+- Non-exhaustive enums, non-`_`-prefixed non-bool bitfield fields, unsupported declarations,
   empty markers, and duplicate `(enum, name)` pairs are compile errors.
 - A class may declare several `Constants` markers; their entries append in
   declaration order. A class with none registers no constants.
 
+The inspector hint for a `Property` field comes from its Zig value type, so an
+enum or bitpack struct works as a property type without this marker. When the
+property is declared on the same class, declaring the type here adds the
+registered metadata: the `<Class>.<Name>` `class_name` and the enum/bitfield
+usage bit (typed engine docs). Full rules, precedence, and behavior for
+unregistered or cross-class types are in
+[properties.md](properties.md#enum-and-bitfield-hints).
+
 Constants are class-level metadata written once during registration. Signals
 are too, and additionally expose `emit` on the marker for instance code to
 call. See [classdb.md](classdb.md).
+
+### `PropertyGroups(decls)`
+
+Declares the inspector section tree for a class's visible `Property` fields.
+The marker declaration name is free, at most one marker is allowed per class,
+and every visible property must be listed exactly once. Nested groups become
+subgroups; depth is the nesting level. Sections are list metadata only: no field
+is added and set/get never sees them. The declaration shape, ordering rules, and
+compile errors are in [properties.md](properties.md#property-groups).
 
 ### `NotificationCallback(T, f)`
 
@@ -231,6 +248,33 @@ pub fn onNotification(self: *@This(), p_what: i32, p_reversed: bool) void
 
 - Exactly three parameters.
 - Does not free the instance.
+
+## Module layout
+
+The flat `godot.annotations` exports remain the declaration and lifecycle API
+that user classes call:
+
+- markers: `Base`, `OnReady`, `Property`, `PropertyGroups`, `Signal`,
+  `Constants`, `Init`, `Override`, and the callback markers;
+- lifecycle helpers: `initBase`, `initAnnotFieldsDefault`,
+  `initPropertyFields`, `deinitPropertyFields`, `initOnReadyFields`;
+- discovery: `findSignals`, `findConstants`, and `callComptimeArg1`.
+
+Two submodules hold the implementation and tooling introspection behind those
+exports. They are not part of the declaration API:
+
+- `godot.annotations.property` - the `Property`/`PropertyGroups`
+  implementation plus descriptor/layout tables (`descriptors`, `layout`,
+  `PropertyDescriptor`, `PropertyValueType`), getter/setter/deinit
+  introspection, field discovery, and the cleanup internals.
+- `godot.annotations.constants` - the `Constants` internals, constant
+  discovery, and the type-hint helpers (`typeHint`, `findEnumName`) that derive
+  inspector hints from a Zig value type.
+
+Tooling and tests import the submodules directly; user classes stay on the flat
+exports. The facade also exports the `marker` submodule (`marker.Kind`,
+`kindOf`, `is`) because discovery compares marker identity. The same split is
+summarized in [CONTEXT.md](../CONTEXT.md#layout).
 
 ## Annotation initialization
 

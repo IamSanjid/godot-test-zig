@@ -122,49 +122,12 @@ fn signalArgumentType(
     ));
 }
 
-// Compile-only coverage; analyzed on every build.
-
-const Fixture = struct {
-    pub const HealthChanged = annotations.Signal("health_changed", .{
-        .{ "health", i32 },
-        .{ "source", ?*classes.core.Node },
-    });
-    pub const Pinged = annotations.Signal("pinged", .{});
-
-    pub const ClassConstants = annotations.Constants(struct {
-        pub const MAX_HEALTH = 100;
-        pub const State = enum(i32) { idle, running = 3 };
-        pub const Flags = bitpack struct(u32) {
-            first: bool = false,
-            _pad0: u31 = 0,
-        };
-    });
-};
-
-/// A class with no class-level metadata must not build a callback.
-const NoSurface = struct {};
-
-fn checkRegistrationPaths() void {
-    if (comptime postRegistrationCallback(NoSurface) != null) {
-        @compileError("a class without signals/constants must get no post-registration callback");
-    }
-    _ = postRegistrationCallback(Fixture); // instantiates constant and signal registration
-}
-
-comptime {
-    _ = &checkRegistrationPaths;
-}
-
 const std = @import("std");
 
 const bindings = @import("bindings");
 const interface = bindings.interface;
 
-const builtins = @import("../builtins/builtins.zig");
-const classes = @import("../classes/classes.zig");
-
 const annotations = @import("../annotations/annotations.zig");
-
+const builtins = @import("../builtins/builtins.zig");
 const reflect = @import("../reflect/reflect.zig");
-
 const runtime = @import("../runtime.zig");

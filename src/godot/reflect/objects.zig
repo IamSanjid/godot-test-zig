@@ -62,6 +62,18 @@ pub fn isClassType(comptime T: type) bool {
     return isEngineObjectClass(T) or isExtensionClass(T);
 }
 
+/// True when `T` is a class type that inherits `Node`; object pointers and
+/// non-class types return false.
+pub fn isNodeClass(comptime T: type) bool {
+    return isClassType(T) and hierarchy.inheritsFrom(T, classes.core.Node);
+}
+
+/// True when `T` is a class type that inherits `Resource`; object pointers and
+/// non-class types return false.
+pub fn isResourceClass(comptime T: type) bool {
+    return isClassType(T) and hierarchy.inheritsFrom(T, classes.core.Resource);
+}
+
 /// The class behind a pointer/optional-pointer type, or null when `T` is not a
 /// single-item pointer to a class type.
 ///
@@ -126,130 +138,6 @@ fn targetOf(comptime Class: type, comptime optional: bool, comptime is_const: bo
     };
 }
 
-// Compile-only coverage with fake extension classes over real engine classes.
-//
-// The fakes classify types only: extension -> engine base resolution (and the
-// Base markers it requires) is covered by `extension.zig`. `comptime` evaluation
-// below runs on every build that references `reflect`.
-
-const EngineObject = classes.core.Object;
-const EngineNode = classes.core.Node;
-
-/// Direct extension class over an engine class; no Base marker needed to be
-/// classified as an extension class.
-const DirectExtension = struct {
-    pub const Extends = EngineNode;
-};
-
-/// Extension class whose `Extends` is another extension class.
-const ChainedExtension = struct {
-    pub const Extends = DirectExtension;
-    value: u32 = 0,
-};
-
-/// Zero-field extension declarations are valid extension classes.
-const ZeroFieldExtension = struct {
-    pub const Extends = EngineNode;
-};
-
-/// Extension class over a RefCounted descendant.
-const RefCountedExtension = struct {
-    pub const Extends = classes.core.RefCounted;
-};
-
-const NotAClass = struct {
-    value: u32 = 0,
-};
-
-fn check(comptime condition: bool, comptime message: []const u8) void {
-    if (!condition) @compileError("reflect.objects: " ++ message);
-}
-
-fn comptimeChecks() void {
-    check(isEngineObjectClass(EngineObject), "classes.core.Object must be an engine object class");
-    check(isEngineObjectClass(EngineNode), "classes.core.Node must be an engine object class");
-    check(!isEngineObjectClass(DirectExtension), "an extension class is not an engine object class");
-    check(!isEngineObjectClass(NotAClass), "a plain struct is not an engine object class");
-    check(!isEngineObjectClass(u32), "a scalar is not an engine object class");
-
-    check(isExtensionClass(DirectExtension), "a struct extending an engine class is an extension class");
-    check(isExtensionClass(ChainedExtension), "extension -> extension chains are extension classes");
-    check(isExtensionClass(ZeroFieldExtension), "zero-field extension classes are extension classes");
-    check(isExtensionClass(RefCountedExtension), "extension classes may extend any engine object class");
-    check(!isExtensionClass(EngineNode), "engine object classes are not extension classes");
-    check(!isExtensionClass(NotAClass), "a struct without Extends is not an extension class");
-    check(!isExtensionClass(u32), "a scalar is not an extension class");
-
-    check(isClassType(EngineObject) and isClassType(EngineNode), "engine object classes are class types");
-    check(isClassType(DirectExtension) and isClassType(ChainedExtension) and isClassType(ZeroFieldExtension), "extension classes are class types");
-    check(!isClassType(u32) and !isClassType(NotAClass), "non-class types are not class types");
-
-    check(isRefCounted(classes.core.RefCounted), "RefCounted is refcounted");
-    check(!isRefCounted(EngineObject), "Object is not refcounted");
-    check(!isRefCounted(EngineNode), "Node is not refcounted");
-    check(isRefCounted(RefCountedExtension), "an extension class over RefCounted is refcounted");
-    check(!isRefCounted(DirectExtension), "an extension class over Node is not refcounted");
-    check(!isRefCounted(u32), "a scalar is not refcounted");
-
-    check(isRefCountedPointer(*classes.core.RefCounted), "*RefCounted is a refcounted pointer");
-    check(isRefCountedPointer(?*const classes.core.RefCounted), "?*const RefCounted is a refcounted pointer");
-    check(isRefCountedPointer(*const RefCountedExtension), "*RefCountedExtension is a refcounted pointer");
-    check(!isRefCountedPointer(classes.core.RefCounted), "a class value is not a refcounted pointer");
-    check(!isRefCountedPointer(*EngineNode), "an Object/Node pointer is not refcounted");
-    check(!isRefCountedPointer(*DirectExtension), "an extension over Node is not refcounted");
-    check(!isRefCountedPointer([2]*classes.core.RefCounted), "an array of RefCounted pointers is not a refcounted pointer");
-    check(!isRefCountedPointer([*]*classes.core.RefCounted), "a many-pointer to RefCounted pointers is not a refcounted pointer");
-    check(!isRefCountedPointer([]*classes.core.RefCounted), "a slice of RefCounted pointers is not a refcounted pointer");
-    check(!isRefCountedPointer(?[*]*classes.core.RefCounted), "an optional many-pointer is not a refcounted pointer");
-    check(!isRefCountedPointer(*u32), "a scalar pointer is not a refcounted pointer");
-    check(!isRefCountedPointer(u32), "a scalar is not a refcounted pointer");
-
-    {
-        const target = objectTarget(*EngineNode);
-        check(target != null, "*EngineNode must be an object pointer");
-        check(target.?.class == EngineNode, "objectTarget must report the pointee class");
-        check(target.?.kind == .engine, "*EngineNode must be reported as engine kind");
-        check(!target.?.optional and !target.?.is_const, "*EngineNode is a mutable non-optional pointer");
-    }
-    {
-        const target = objectTarget(?*const EngineNode);
-        check(target != null, "?*const EngineNode must be an object pointer");
-        check(target.?.kind == .engine, "?*const EngineNode must be reported as engine kind");
-        check(target.?.optional and target.?.is_const, "?*const EngineNode is an optional const pointer");
-    }
-    {
-        const target = objectTarget(*DirectExtension);
-        check(target != null, "*Extension must be an object pointer");
-        check(target.?.kind == .extension, "extension pointers must be reported as extension kind");
-        check(target.?.class == DirectExtension, "objectTarget must report the extension class");
-    }
-    check(objectTarget(ChainedExtension) == null, "class values are not object pointers");
-    check(objectTarget(*u32) == null, "scalar pointers are not object pointers");
-    check(objectTarget(*anyopaque) == null and objectTarget(?*const anyopaque) == null, "anyopaque pointers are not object pointers");
-    check(objectTarget([*]DirectExtension) == null and objectTarget([]DirectExtension) == null, "many pointers and slices are not object pointers");
-    check(objectTarget(?[*]const DirectExtension) == null, "optional many pointers are not object pointers");
-    check(objectClassOf(?*ChainedExtension) == ChainedExtension, "objectClassOf unwraps optional pointers");
-    check(objectClassOf(*u32) == null, "objectClassOf returns null for non-class pointers");
-    check(isObjectPointer(*EngineNode) and isObjectPointer(?*ChainedExtension), "isObjectPointer accepts class pointers");
-    check(!isObjectPointer(usize) and !isObjectPointer(EngineNode), "isObjectPointer rejects non-pointers");
-}
-
-comptime {
-    comptimeChecks();
-}
-
-/// Runs this module's compile-only checks. `reflect.zig` calls it from a
-/// container-level `comptime` block so a plain build analyzes this module (and
-/// its checks) even while no runtime caller references the helpers yet.
-pub fn comptimeSelfCheck() void {
-    comptimeChecks();
-}
-
-test "object class reflection" {
-    comptime comptimeChecks();
-}
-
 const classes = @import("../classes/classes.zig");
-
 const hierarchy = @import("hierarchy.zig");
 const meta = @import("meta.zig");

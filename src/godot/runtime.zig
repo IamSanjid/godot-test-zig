@@ -155,20 +155,17 @@ pub fn deinitialize(_: ?*anyopaque, p_level: interface.InitializationLevel) call
 
 const std = @import("std");
 const assert = std.debug.assert;
-pub const is_wasm = @import("builtin").cpu.arch.isWasm();
 
 const bindings = @import("bindings");
 const interface = bindings.interface;
-pub const DefaultDispatcher = bindings.Dispatcher(&.{});
-
 const build_options = @import("build_options");
 
-pub const reflect = @import("reflect/reflect.zig");
-
+const builtins = @import("builtins/builtins.zig");
 const registration = @import("registration/registration.zig");
 const Registry = registration.Registry;
-
-const builtins = @import("builtins/builtins.zig");
 const utility = @import("utility/utility.zig");
 
+pub const DefaultDispatcher = bindings.Dispatcher(&.{});
 pub const engine_allocator = @import("heap.zig").engine_allocator;
+pub const is_wasm = @import("builtin").cpu.arch.isWasm();
+pub const reflect = @import("reflect/reflect.zig");

@@ -14,9 +14,9 @@ is forced.
 
 Three kinds of files live here:
 
-- **Durable support code** - the hand-written runtime, generator, build helpers,
-  and reference docs. Users should be able to keep these unchanged while they
-  write their game.
+- **Durable support code** - the hand-written runtime and its tests, generator,
+  build helpers, and reference docs. Users should be able to keep these
+  unchanged while they write their game.
 - **Example scaffold** - `src/entrypoint.zig`, `src/example/`, the generated
   `src/example.gen.zig` wiring, and example-specific build scan settings. A
   future project-generation step will remove or rewrite these.
@@ -59,6 +59,7 @@ src/godot/                hand-written runtime plus generated subtrees
   godot.zig               public facade imported as `godot`
   abi.zig                 canonical ptrcall slot/read/write helpers
   heap.zig                engine-backed allocator
+  ownership.zig           engine-object retain/release and constructed-base destruction
   reflect/                type, hierarchy, object, and function helpers
     reflect.zig
     hierarchy.zig
@@ -73,6 +74,7 @@ src/godot/                hand-written runtime plus generated subtrees
     base.zig
     on_ready.zig
     property.zig
+    property_hint.zig
     init.zig
     marker.zig
     init_callback.zig
@@ -100,7 +102,15 @@ src/godot/                hand-written runtime plus generated subtrees
   native.zig
   singletons.zig
   naming.zig
-  tests.zig               hand-written runtime tests
+  tests/                  hand-written tests and compile-only checks
+    all.zig               test root; imports every test file
+    abi.zig
+    classes.zig           generated bindings/codegen analysis
+    ownership.zig         engine object ownership helpers
+    annotations/          tests mirroring the annotation modules
+    builtins/             tests mirroring the builtin modules
+    reflect/              tests mirroring the reflect modules
+    registration/         tests mirroring the registration modules
 build/                    build helpers and example scan wiring
   generator.zig
   class_files.zig
@@ -115,14 +125,30 @@ vendor/                   submodule or path dependencies
 `reflect` contains hand-written reflection helpers (`classNameOf` maps an object
 pointer type to its engine class name). `annotations` contains
 opt-in markers. `registration` contains optional lifecycle, virtual dispatch,
-property registration, and class-level ClassDB metadata. Declared-type Variant
-work lives on `Variant` itself: `initDeclared`/`asDeclared` for values and
-`typeFor` for the Variant type.
+property registration, and class-level ClassDB metadata. `ownership.zig` is the
+engine-object ownership and lifetime primitive: `retainRefCounted` /
+`releaseRefCounted` / `retainObjectReference` for `RefCounted` values and
+`releaseConstructedBase` for a base constructed by
+`classdb_construct_object3`. It depends on `reflect` and `classes`, never on
+`annotations` or `registration`. Declared-type Variant work lives on `Variant`
+itself: `initDeclared`/`asDeclared` for values and `typeFor` for the Variant type.
 `initFieldsDefault` belongs to `reflect/defaults.zig`; annotation field setup
 belongs to `annotations.initAnnotFieldsDefault`, which only resets wrapper
 defaults and leaves `OnReady` values unresolved. Property `.init` values are
 creation-time initializers run by `annotations.initPropertyFields` after the
 instance is attached.
+
+`annotations` is a facade; its flat exports are the declaration and lifecycle
+API. The `property` and `constants` submodules hold the implementation and
+introspection behind them: `godot.annotations.property` exposes
+`descriptors`, `layout`, `PropertyDescriptor`, `PropertyValueType`,
+getter/setter/deinit introspection, field discovery, and cleanup internals;
+`godot.annotations.constants` exposes the `Constants` internals and type-hint
+helpers (`typeHint`, `findEnumName`). The flat exports
+(`Property`, `PropertyGroups`, `Constants`, `ConstantEntry`, `findConstants`,
+`initPropertyFields`, `deinitPropertyFields`, ...) remain the declaration and
+lifecycle API that user classes and registration call. `marker`
+(`marker.Kind`, `kindOf`, `is`) is also exported for marker-identity checks.
 
 ## Bootstrap
 
@@ -176,11 +202,19 @@ godot.utility.general
 godot.reflect.isExtensionClass(T)
 godot.reflect.objectTarget(T)
 godot.reflect.classNameOf(T)
+godot.reflect.isNodeClass(T)
+godot.reflect.isResourceClass(T)
 godot.reflect.EngineBaseType(T)
 godot.reflect.initFieldsDefault(T, child)
 
 godot.abi.readArgument(T, ptr)
 godot.abi.writeReturn(T, ptr, value)
+
+godot.ownership.retainRefCounted(T, value)
+godot.ownership.releaseRefCounted(T, value)
+godot.ownership.retainObjectReference(object)
+godot.ownership.releaseConstructedBase(Base, base)
+godot.builtins.isManaged(T)
 
 godot.builtins.Variant.wrap(T, value)
 godot.builtins.Variant.init(T, value)
@@ -193,11 +227,14 @@ godot.builtins.Variant.asDeclared(T)
 
 godot.annotations.OnReady(...)
 godot.annotations.Property(T, .{ .usage = ..., .read_only = true, .type = .object })
+godot.annotations.PropertyGroups(.{ ... })
 godot.enums.PropertyUsageFlags.exported
 godot.annotations.Init(T, func, args)
 godot.annotations.Property(T, options).Init(func, args)
 godot.annotations.initPropertyFields(T, Base, owner, base)
-godot.annotations.descriptors(T)
+godot.annotations.property.descriptors(T)
+godot.annotations.property.layout(T)
+godot.annotations.property.PropertyDescriptor
 godot.annotations.deinitPropertyFields(T, instance)
 godot.annotations.Base(Extends)
 godot.annotations.Override("_get_cursor_shape", fn)
@@ -206,6 +243,7 @@ godot.annotations.findSignals(T)
 godot.annotations.Constants(struct { ... })
 godot.annotations.findConstants(T)
 godot.annotations.ConstantEntry
+godot.annotations.constants.typeHint(T)
 
 godot.registration.Registry
 godot.Registry
@@ -233,7 +271,13 @@ A registered extension class receives:
 - `set_func` / `get_func` when the class declares at least one
   `annotations.Property` field
 - `get_property_list_func` / `free_property_list_func` when at least one
-  property has non-zero usage
+  property has non-zero usage; the list interleaves `annotations.PropertyGroups`
+  sections with the visible fields. Property hints are type-derived (enum,
+  bitfield, Node/Resource object pointer); a same-class `Constants` declaration
+  only adds the registered `class_name` and enum/bitfield usage bits
+
+Contracts: [properties.md](docs/properties.md#property-groups) and
+[properties.md](docs/properties.md#property-hints).
 
 After the class itself, `Registry`'s per-class `post_registration_callback`
 registers the class's `Signal` declarations and `Constants` markers (integer
@@ -253,14 +297,16 @@ in the `.gdextension` and is editor-only. See
 creation-time values (`.init`, assigned after the instance is attached and
 before `InitCallback`); neither is `OnReady`-coupled or changes cleanup policy.
 
-Virtual overrides, instance construction, recreation, and freeing, notifications,
-dynamic property callbacks, signals, and integer constants are wired
+Virtual overrides, instance construction, recreation and freeing,
+notifications, dynamic property callbacks (including `PropertyGroups` sections
+and type-derived hints), signals, and integer constants are wired
 automatically from the markers. Zig methods and static ClassDB properties are
 not registered for GDScript yet. Adding those surfaces is deliberate work, not
 an implicit side effect of registering a class; the design is in
-[docs/classdb.md](docs/classdb.md). Property lifetime is explicit: the default setter
-manages only known managed builtins and `RefCounted` references, and free-time
-cleanup is opt-in through `ClassOptions.auto_property_cleanup` or a manual
+[docs/classdb.md](docs/classdb.md). Property lifetime is explicit: the default
+setter manages only `godot.builtins.isManaged` builtins, `Variant`, and `RefCounted`
+references through `godot.ownership`, and free-time cleanup is opt-in through
+`ClassOptions.auto_property_cleanup` or a manual
 `annotations.deinitPropertyFields` call. Dynamic `Property` semantics are
 documented in [docs/properties.md](docs/properties.md).
 
@@ -272,7 +318,17 @@ documented in [docs/properties.md](docs/properties.md).
 - Generated bindings do not depend on annotations or registration.
 - Generated dispatch code imports `runtime.zig`, never the `godot.zig` facade.
 - Codegen does not generate `godot.zig` or `runtime.zig`.
+- Hand-written tests live under `src/godot/tests/`; `all.zig` is the root that
+  `zig build test-godot` builds and runs. Implementation modules stay test-free;
+  tests import the public `godot` facade, not relative parent paths.
 - Annotations are optional. Missing annotations do not prevent registration.
+- `ownership.zig` is the only engine-object retain/release path: property
+  overwrite/cleanup and Variant conversion call it instead of carrying their own
+  reference-count policy. It imports `reflect` and `classes`, never `annotations`
+  or `registration`.
+- Annotation implementation and introspection helpers live in the
+  `annotations/property.zig` and `annotations/constants.zig` submodules; the flat
+  `annotations` exports stay the declaration and lifecycle API user classes call.
 - `Registry` is optional; its creation, recreation, free, notification, and
   virtual builders are usable directly.
 - No forced pooling or creation strategy. `ClassRegistration.instance_allocator` and
@@ -303,8 +359,8 @@ documented in [docs/properties.md](docs/properties.md).
 7. [docs/virtuals.md](docs/virtuals.md) - virtual metadata and ABI callbacks.
 8. [docs/ownership.md](docs/ownership.md) - borrowed arguments, returned ownership, Variant and RefCounted rules.
 9. [docs/variants.md](docs/variants.md) - `Variant` ownership, `wrap`/`init`/`as`, packed arrays, and type mapping.
-10. [docs/properties.md](docs/properties.md) - `Property` field annotation, dynamic registration backend, usage flags, and lifetime cleanup.
+10. [docs/properties.md](docs/properties.md) - `Property` fields, `PropertyGroups` sections, type-derived hints, usage flags, and lifetime cleanup.
 11. [docs/signals.md](docs/signals.md) - signal declarations, registration, typed emit, and argument conversion.
 12. [docs/callables.md](docs/callables.md) - custom callable design: Zig closures as engine `Callable`s, identity, and typed connect.
-13. [docs/classdb.md](docs/classdb.md) - class-level ClassDB surfaces, methods/constants/groups design, and class modes.
-14. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, and established exceptions.
+13. [docs/classdb.md](docs/classdb.md) - class-level ClassDB surfaces, methods/constants/property-group decisions, and class modes.
+14. [docs/style.md](docs/style.md) - naming, bottom imports, formatting, test placement, and established exceptions.

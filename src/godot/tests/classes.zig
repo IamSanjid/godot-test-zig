@@ -1,14 +1,10 @@
-//! Hand-written runtime tests plus full semantic analysis of generated output.
+//! Full semantic analysis of generated bindings/codegen output.
 //!
 //! `zig build test-godot` regenerates bindings/codegen for the selected build
 //! configuration, then compiles and runs this test root. The generated layers
 //! are lazy in Zig, so `refAllDecls` is used to force their declarations through
 //! the semantic analyzer even though most of them are not called by runtime
 //! tests.
-
-const std = @import("std");
-const bindings = @import("bindings");
-const godot = @import("godot.zig");
 
 fn refAllDeclsShallow(comptime M: type) void {
     @setEvalBranchQuota(1_000_000);
@@ -77,15 +73,7 @@ test "generated bindings and codegen declarations are analyzed" {
     refAllDeclsShallow(godot.utility.random);
 }
 
-test "generated Variant uses the engine ABI alignment" {
-    try std.testing.expectEqual(@as(usize, 8), @alignOf(bindings.builtins.Variant));
-}
+const std = @import("std");
 
-test "hand-written runtime tests are linked" {
-    _ = @import("abi.zig");
-    _ = @import("annotations/annotations.zig");
-    _ = @import("builtins/builtins.zig");
-    _ = @import("reflect/reflect.zig");
-    _ = @import("registration/property.zig");
-    _ = @import("registration/classdb.zig");
-}
+const bindings = @import("bindings");
+const godot = @import("godot");

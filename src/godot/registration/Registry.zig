@@ -210,25 +210,16 @@ fn addClass(
     };
 }
 
-comptime {
-    // Keep the dynamic property backend's compile-only coverage analyzed even
-    // when the example registers no property.
-    property.comptimeSelfCheck();
-}
-
 const std = @import("std");
 
 const bindings = @import("bindings");
 const interface = bindings.interface;
 
-const reflect = @import("../reflect/reflect.zig");
-
 const builtins = @import("../builtins/builtins.zig");
-
-const property = @import("property.zig");
+const reflect = @import("../reflect/reflect.zig");
 const classdb = @import("classdb.zig");
-
 const CreateInstance = @import("instance.zig").CreateInstance;
-const RecreateInstance = @import("instance.zig").RecreateInstance;
 const FreeInstance = @import("instance.zig").FreeInstance;
+const RecreateInstance = @import("instance.zig").RecreateInstance;
 const Notification = @import("notification.zig").Notification;
+const property = @import("property.zig");

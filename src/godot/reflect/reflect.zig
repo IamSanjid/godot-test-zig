@@ -24,6 +24,8 @@ pub const ObjectTarget = objects.ObjectTarget;
 pub const isEngineObjectClass = objects.isEngineObjectClass;
 pub const isExtensionClass = objects.isExtensionClass;
 pub const isClassType = objects.isClassType;
+pub const isNodeClass = objects.isNodeClass;
+pub const isResourceClass = objects.isResourceClass;
 pub const objectTarget = objects.objectTarget;
 pub const objectClassOf = objects.objectClassOf;
 pub const classNameOf = objects.classNameOf;
@@ -51,13 +53,3 @@ pub const FnReturnType = meta.FnReturnType;
 
 const defaults = @import("defaults.zig");
 pub const initFieldsDefault = defaults.initFieldsDefault;
-
-comptime {
-    // Keep the hierarchy/object/extension helpers analyzed (and their
-    // compile-only checks live) even while no runtime caller references them
-    // directly. `Variant` and registration build on these helpers; a plain
-    // `zig build` must still catch a broken contract here.
-    hierarchy.comptimeSelfCheck();
-    objects.comptimeSelfCheck();
-    extension.comptimeSelfCheck();
-}

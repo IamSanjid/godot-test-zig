@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) !void {
     const gdext_codegen_output_dir = b.option(
         []const u8,
         "gdext_codegen_output_dir",
-        "Root directory of the generated codegen layer; must contain runtime.zig, godot.zig, naming.zig, and tests.zig.",
+        "Root directory of the generated codegen layer; must contain runtime.zig, godot.zig, and naming.zig.",
     ) orelse "src/godot";
     const gdext_interface_import = b.option(
         []const u8,
@@ -154,11 +154,12 @@ pub fn build(b: *std.Build) !void {
 
     const godot_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path(b.fmt("{s}/tests.zig", .{layer_root})),
+            .root_source_file = b.path("src/godot/tests/all.zig"),
             .imports = &.{
                 .{ .name = "build_options", .module = build_options_module },
                 .{ .name = "bindings", .module = bindings },
                 .{ .name = "naming", .module = naming },
+                .{ .name = "godot", .module = godot },
             },
             .target = target,
             .optimize = optimize,
@@ -170,11 +171,13 @@ pub fn build(b: *std.Build) !void {
     run_godot_tests.skip_foreign_checks = true;
     godot_tests.step.dependOn(&run_codegen.step);
     run_godot_tests.step.dependOn(&run_codegen.step);
-    const test_godot_step = b.step("test-godot", "Run runtime tests and analyze generated bindings/codegen");
+    const test_godot_step = b.step("test-godot", "Run all bindings/godot layer tests and analyze generated code");
     test_godot_step.dependOn(&run_godot_tests.step);
 
-    const test_step = b.step("test", "Run generator and runtime tests");
-    test_step.dependOn(test_generator_step);
+    // Normal project test step: runs the runtime/layer tests without the
+    // template-only generator suite. `test-generator` remains available for
+    // template development.
+    const test_step = b.step("test", "Run the project's runtime tests");
     test_step.dependOn(test_godot_step);
 
     const lib = b.addLibrary(.{
@@ -212,8 +215,9 @@ pub fn build(b: *std.Build) !void {
 }
 
 const std = @import("std");
+
 const build_zon = @import("build.zig.zon");
 const Translator = @import("translate_c").Translator;
 
-const generator = @import("build/generator.zig");
 const class_files = @import("build/class_files.zig");
+const generator = @import("build/generator.zig");

@@ -54,15 +54,13 @@ pub fn Notification(
 
 const bindings = @import("bindings");
 const interface = bindings.interface;
+
+const annotations = @import("../annotations/annotations.zig");
+const annot_base = @import("../annotations/base.zig");
+const findBaseFieldName = annot_base.findBaseFieldName;
+const annot_on_ready = @import("../annotations/on_ready.zig");
+const findOnReadyFieldNames = annot_on_ready.findOnReadyFieldNames;
 const classes = @import("../classes/classes.zig");
 const Node = classes.core.Node;
 const Object = classes.core.Object;
-
-const annotations = @import("../annotations/annotations.zig");
 const reflect = @import("../reflect/reflect.zig");
-
-const annot_base = @import("../annotations/base.zig");
-const findBaseFieldName = annot_base.findBaseFieldName;
-
-const annot_on_ready = @import("../annotations/on_ready.zig");
-const findOnReadyFieldNames = annot_on_ready.findOnReadyFieldNames;

@@ -8,8 +8,10 @@
 | codegen output | `bindings`, `runtime.zig`, `reflect` | Generated dispatcher wrappers, typed classes, virtual metadata. Never imports `godot.zig`, annotations, or registration. |
 | `runtime.zig` | `bindings`, codegen builtins/utility, `registration`, `reflect` | Process-wide dispatcher/registry state and engine lifecycle. |
 | hand-written support | `runtime.zig`, `bindings`, `reflect` | `abi.zig`, `heap.zig`, annotations, registration helpers. |
+| `ownership.zig` | codegen `classes`, `reflect` | Engine-object retain/release and constructed-base destruction; no runtime, annotations, or registration dependency. |
 | `godot.zig` | `runtime.zig` and codegen modules | Facade only; nothing else imports it. |
 | user entrypoint | `godot.zig`, or the raw `bindings` module | The bindings-only path skips the runtime and codegen layers. |
+| `src/godot/tests/` | `godot` (and `bindings` for generated-layer analysis) | Hand-written tests; mirror the module layout, never generated. |
 
 `godot.zig` is a facade only: user code imports it, and nothing else under
 `src/godot` imports it, so the facade adds no cycle of its own.
@@ -93,12 +95,19 @@ registration.
 - `godot.zig` - public facade re-exporting `runtime.zig` and the codegen type
   modules; the entry point imports it as `godot`.
 - `abi.zig` - canonical ptrcall widths and shared argument/return marshalling.
+- `ownership.zig` - the engine-object ownership and lifetime primitive:
+  `RefCounted` retain/release (`retainRefCounted`, `releaseRefCounted`,
+  `retainObjectReference`) and destruction of a base constructed by
+  `classdb_construct_object3` (`releaseConstructedBase`). It depends on codegen
+  `classes` plus `reflect`, never on `runtime.zig`, annotations, or registration.
+- `tests/` - hand-written tests and compile-only checks that mirror the module
+  layout; `all.zig` is the root used by `zig build test-godot`.
 - `reflect/` - type/object predicates, inheritance traversal, Base-marker
   discovery, function-shape helpers, generic field-default initialization, and
   the engine class name of an object pointer type (`classNameOf`).
 - `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
   `InitCallback`, `DeinitCallback`, `NotificationCallback`, plus the
-  class-level `Signal` and `Constants` markers.
+  class-level `Signal`, `Constants`, and `PropertyGroups` markers.
 - `registration/` - optional `Registry`, class creation, recreation, and free,
   notification, virtual-method registration, dynamic property callbacks, and
   class-level ClassDB metadata.
@@ -107,12 +116,14 @@ registration.
 
 The layer root holds only files that two layers must share, that the build pins
 there, or that are process-wide: the facade and lifecycle (`godot.zig`,
-`runtime.zig`), the engine boundary primitives (`abi.zig` for ptrcall slots),
-allocation (`heap.zig`), and naming (`naming.zig`). A helper owned by a single
-layer, or a composition of one layer's primitives, lives in that layer's
-directory: `PropertyInfo` metadata is built inside `registration/` from
-`builtins.Variant.typeFor` and `reflect.classNameOf`, and the declared
-value conversions are Variant operations
+`runtime.zig`), the engine boundary primitives (`abi.zig` for ptrcall slots,
+`ownership.zig` for engine-object retain/release and constructed-base
+destruction), allocation (`heap.zig`), and naming (`naming.zig`). A helper owned
+by a single layer, or a composition of one layer's primitives, lives in that
+layer's directory: property hints and object class names are resolved from the
+declared type in `annotations/property_hint.zig`, while `registration/` builds
+the `PropertyInfo` table from those descriptors plus `builtins.Variant.typeFor`,
+and the declared value conversions are Variant operations
 (`Variant.initDeclared` / `Variant.asDeclared`) rather than a standalone module.
 
 ## Naming decisions

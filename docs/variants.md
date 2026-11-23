@@ -258,9 +258,10 @@ Variant size from `Data.float`.
 Canonical scalars wider than 64 bits return `null`; they cannot fit the engine's
 `i64`/`f64` payload and are rejected rather than mis-reported. It only reports
 the Variant type; it does not carry per-class object metadata.
-The dynamic property backend derives `PropertyInfo` type and class names from
-`Variant.typeFor` plus `reflect.classNameOf`; see
-[properties.md](properties.md).
+The dynamic property backend derives `PropertyInfo` type from `Variant.typeFor`,
+object class names from `reflect.classNameOf`, and enum/bitfield hints from the
+declared Zig type; `Constants` adds the registered class name and typed-doc usage
+bits. See [properties.md](properties.md).
 
 Codegen builtins bridge through `toBinding` / `fromBinding`. Generated bindings
 are not used as public property/user types.

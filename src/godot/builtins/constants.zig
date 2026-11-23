@@ -41,7 +41,7 @@ pub fn For(comptime Real: type) type {
     return if (Real == f64) double else single;
 }
 
-const precision = if (@import("bindings").is_double_precision) double else single;
+const precision = if (bindings.is_double_precision) double else single;
 pub const cmp_epsilon = precision.cmp_epsilon;
 pub const cmp_epsilon_squared = precision.cmp_epsilon_squared;
 pub const unit_epsilon = precision.unit_epsilon;
@@ -52,11 +52,4 @@ pub const ray_epsilon = precision.ray_epsilon;
 pub const color_byte_max = precision.color_byte_max;
 pub const color_word_max = precision.color_word_max;
 
-test "precision-selected constants" {
-    try std.testing.expectEqual(@as(f64, 0.001), single.unit_epsilon);
-    try std.testing.expectEqual(@as(f64, 0.00001), double.unit_epsilon);
-    try std.testing.expectEqual(single, For(f32));
-    try std.testing.expectEqual(double, For(f64));
-}
-
-const std = @import("std");
+const bindings = @import("bindings");

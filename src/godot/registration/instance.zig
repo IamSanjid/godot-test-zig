@@ -30,7 +30,7 @@ pub fn CreateInstance(
             const base = Base.construct() orelse return null;
 
             const child = allocator.create(T) catch {
-                releaseConstructedBase(Base, base);
+                ownership.releaseConstructedBase(Base, base);
                 return null;
             };
 
@@ -38,7 +38,7 @@ pub fn CreateInstance(
                 std.log.err("Failed to create {s}: {}", .{ @typeName(T), e });
                 base.detachInstance(T);
                 allocator.destroy(child);
-                releaseConstructedBase(Base, base);
+                ownership.releaseConstructedBase(Base, base);
                 return null;
             };
 
@@ -119,55 +119,14 @@ fn initializeInstance(
     try annotations.callInitCallback(T, Base, child, base, gpa);
 }
 
-/// Release a base whose creation failed. A `RefCounted` base owns one reference
-/// from `classdb_construct_object3`; `unreference` only decrements and reports
-/// whether the object must be destroyed, so destroy it when that returns true.
-/// A non-`RefCounted` base is destroyed directly.
-fn releaseConstructedBase(comptime Base: type, base: *Base) void {
-    if (comptime reflect.isRefCounted(Base)) {
-        if (base.unreference()) classes.core.Object.destroy(@ptrCast(base));
-    } else {
-        classes.core.Object.destroy(@ptrCast(base));
-    }
-}
-
-// Compile-only coverage; analyzed on every build.
-
-/// Initializer covers both pointer placeholders: `owner` is the extension
-/// instance and `base` is the engine base.
-fn seededHealth(owner: *InitPropertyOwner, base: *classes.core.Node) i32 {
-    _ = owner;
-    _ = base;
-    return 100;
-}
-
-const InitPropertyOwner = struct {
-    pub const Extends = classes.core.Node;
-    base: annotations.Base(Extends) = .{},
-    health: annotations.Property(i32, .{
-        .usage = .exported,
-        .init = annotations.Init(i32, seededHealth, .{ .owner, .base }),
-    }) = .init(0),
-};
-
-fn checkInstanceCallbacks() void {
-    _ = &CreateInstance(InitPropertyOwner, InitPropertyOwner.Extends);
-    _ = &RecreateInstance(InitPropertyOwner, InitPropertyOwner.Extends);
-}
-
-comptime {
-    _ = &checkInstanceCallbacks;
-}
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const bindings = @import("bindings");
 const interface = bindings.interface;
 
-const ClassRegistration = @import("ClassRegistration.zig");
-const classes = @import("../classes/classes.zig");
-
-const runtime = @import("../runtime.zig");
-const reflect = @import("../reflect/reflect.zig");
 const annotations = @import("../annotations/annotations.zig");
+const classes = @import("../classes/classes.zig");
+const ownership = @import("../ownership.zig");
+const reflect = @import("../reflect/reflect.zig");
+const ClassRegistration = @import("ClassRegistration.zig");

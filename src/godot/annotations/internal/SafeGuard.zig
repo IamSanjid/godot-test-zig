@@ -31,6 +31,5 @@ pub inline fn setGuard(
 
 const std = @import("std");
 const assert = std.debug.assert;
-
 const builtin = @import("builtin");
 const is_safe_mode = builtin.mode.runtimeSafety();

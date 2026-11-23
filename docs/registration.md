@@ -253,7 +253,7 @@ For a class extending `RefCounted`, `construct` returns an object
 with refcount 1, which the engine create-instance contract expects. Do not call
 `initRef` or `unreference` on a live extension object manually; `free_instance`
 runs when the engine releases it. A failed creation is the exception: it
-releases the base with `releaseConstructedBase`, per
+releases the base with `godot.ownership.releaseConstructedBase`, per
 [ownership.md](ownership.md#construction).
 
 `initFieldsDefault` is a generic helper and remains public. It is not
@@ -361,7 +361,7 @@ later initialization level or after another class derives from it.
 `godot.deinitialize` needs no extra calls.
 
 See [classdb.md](classdb.md) for the engine contract and the remaining class-level
-surfaces (methods, groups, static properties).
+surfaces (methods and static properties).
 
 ## Namespace detection
 

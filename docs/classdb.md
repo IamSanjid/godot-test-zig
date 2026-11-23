@@ -3,14 +3,17 @@
 Godot learns about an extension class from two different places: the
 `ClassCreationInfo6` callback table it receives when the class is registered,
 and the `classdb_register_extension_class_*` calls a library makes afterwards.
-This page covers the second group - methods, signals, integer constants,
-property groups, and static properties - plus the two class flags
-`is_virtual`/`is_abstract`, which look symmetric and are not.
+This page covers the class-level surfaces - methods, signals, integer constants,
+and static properties - plus property groups, which are spliced into the
+dynamic property list, and the two class flags `is_virtual`/`is_abstract`, which
+look symmetric and are not.
 
 Status: the callback-table surfaces and the first class-metadata slice are
 implemented - signals, integer constants, the `is_virtual` flag, and the
-per-class post-registration hook. Methods, property groups, and `is_abstract`
-are designed here but not implemented yet.
+per-class post-registration hook. Property groups and type-derived property
+hints (enum, bitfield, and Node/Resource object pointers) are implemented on
+the dynamic property list. Methods and `is_abstract` are designed here but not
+implemented yet.
 
 ## Two families
 
@@ -26,8 +29,8 @@ per class and dispatched by the engine against an instance the extension created
 
 Class-level metadata is registered separately, per class, after
 `classdb_register_extension_class6` returns. It describes the type, not a
-value: what a method's signature is, what a signal carries, which enum a
-constant belongs to, where an inspector section starts.
+value: what a method's signature is, what a signal carries, and which enum a
+constant belongs to.
 
 The distinction drives the whole design: an annotation that needs an instance
 can be a field marker, and an annotation that describes the type is a
@@ -119,30 +122,40 @@ must be visible in ClassDB before any instance exists.
 
 Groups are inspector metadata for a property list, and the engine reads them
 from the dynamic list, so the ClassDB group calls have no advantage over an
-entry in the same table that already exists. Model them as additive `Property`
-options, as [properties.md](properties.md#options) anticipated:
+entry in the same table that already exists. Declare the section tree once per
+class with `PropertyGroups`; [properties.md](properties.md#property-groups) owns
+the contract:
 
 ```zig
-// planned: `.group` and `.subgroup` are not implemented yet.
-health: godot.annotations.Property(i32, .{
-    .usage = .exported,
-    .group = "Combat",
-    .subgroup = "Vitals",
-}) = .init(100),
+pub const Groups = godot.annotations.PropertyGroups(.{
+    .{
+        .name = "Combat",
+        .fields = .{ "health" },
+        .groups = .{
+            .{ .name = "Vitals", .fields = .{ "stamina" } },
+        },
+    },
+});
 ```
 
-- A `.group` emits a `PROPERTY_USAGE_GROUP` entry immediately before its
-  anchor property, then the property itself.
-- A `.subgroup` emits a `PROPERTY_USAGE_SUBGROUP` entry and requires a group
-  already emitted earlier in the same class.
-- The anchor must be a listed property (non-zero usage). A group attached to a
-  hidden property would put a section in front of nothing; reject it.
-- `.group = "Combat"` is shorthand for `.{ .name = "Combat", .prefix = "" }`.
-  The struct form adds `.prefix` and `.depth`. When the prefix is non-empty the
-  anchor property name must match it, otherwise the group would exclude its own
-  anchor.
-- A group is list metadata, not a stored value: it adds no field and never
-  dispatches through set/get.
+- The marker is a class declaration, not a `Property` option: there is no
+  `.group`, `.subgroup`, `.depth`, or prefix. The declaration name is free.
+  A per-field option would derive section order and membership from field
+  declaration order and repeat the name on every field; one class-level tree
+  keeps the list authority in one declaration.
+- The marker is authoritative when present: every visible `Property` field
+  must be listed exactly once. Unknown fields, hidden fields, duplicate
+  listings, and sections with no fields anywhere below them are compile errors.
+- The entries are spliced into the dynamic `PropertyInfo` table: a section is
+  `PROPERTY_USAGE_GROUP` at depth 0 or `PROPERTY_USAGE_SUBGROUP` above it,
+  `type = NIL`, `hint = NONE`, and the depth rides in `hint_string` (for
+  example `",1"`), leaving the prefix slot empty. No field is added and set/get
+  never sees a section.
+- Names are verbatim engine strings and need not be unique. The engine labels
+  sections by name, and duplicate names are legal.
+- Field order inside a section is the listed order, and a section emits its
+  direct fields before its child sections. Without the marker the dynamic list
+  stays in field declaration order.
 
 The static group calls (`..._property_group`, `..._property_subgroup`) are not
 wrapped. A static group is appended to the ClassDB list, which always precedes
@@ -234,12 +247,21 @@ pub const ClassConstants = godot.annotations.Constants(struct {
   marker on the class, appending entries in declaration order. The declaration
   shapes, name conversion, and compile-error rules are in
   [annotations.md](annotations.md#constantsdecls).
-- Only enum and bitfield declarations can feed the inspector: a property whose
-  value type is one of them should get `PROPERTY_HINT_ENUM` plus
-  `hint_string = "Idle:0,Running:3"`, and, for docs and GDScript typing,
-  `PROPERTY_USAGE_CLASS_IS_ENUM` with `class_name = "<Class>.<Enum>"`. That
-  wiring is additive `Property` metadata for planned work, not part of the
-  registration call.
+- The inspector hint for a `Property` comes from its Zig value type, not from
+  this marker: an exhaustive enum with variants becomes `PROPERTY_HINT_ENUM`
+  with `hint_string = "Idle:0,Running:3"`, and a bitpack struct with bool flag
+  fields becomes `PROPERTY_HINT_FLAGS` with `"First:1,Second:2"`. Full rule:
+  [properties.md](properties.md#property-hints).
+- When the same class declares that exact enum/bitpack type in a `Constants`
+  marker, the property additionally gets `class_name = "<Class>.<Name>"` and
+  `PROPERTY_USAGE_CLASS_IS_ENUM` / `PROPERTY_USAGE_CLASS_IS_BITFIELD` (typed
+  engine docs). An enum/bitfield declared on another class, or not declared at
+  all, gets the hint string only - no `class_name` and no added usage bit.
+- An explicit `.hint` or `.hint_string` wins and leaves the property without
+  the automatic hint and enrichment; a hidden property gets no automatic hint.
+- The hint registers nothing. `Constants` already owns the enum/bitfield
+  values; the hint only marks the int property as that type for the inspector
+  and docs. Contract: [properties.md](properties.md#enum-and-bitfield-hints).
 
 ### D6. `is_virtual` is a tooling flag; only `is_abstract` removes instances
 
@@ -296,9 +318,9 @@ descendants. Treat it as a separate feature with its own use case.
 Codegen emits metadata for *engine* classes: `Virtual.{Required,Optional,Meta}`,
 `MemberFunctions`, `StaticFunctions`, and enum/constant aliases. None of it
 describes a user extension class, and the extension API does not need it to.
-Method, signal, and constant metadata is authored in the user class and read at
-comptime by the runtime, exactly like `Property` descriptors. Bindgen and
-codegen stay untouched by this work, which is also the boundary in
+Method, signal, constant, and property-group metadata is authored in the user
+class and read at comptime by the runtime, exactly like `Property` descriptors.
+Bindgen and codegen stay untouched by this work, which is also the boundary in
 [architecture.md](architecture.md).
 
 ## API surface
@@ -310,6 +332,7 @@ godot.annotations.findSignals(T)         // signal discovery
 godot.annotations.Constants(struct { ... }) // one constants marker
 godot.annotations.findConstants(T)       // constants discovery
 godot.annotations.ConstantEntry          // one discovered integer constant
+godot.annotations.PropertyGroups(.{ ... }) // one property-section tree
 godot.registration.classdb.postRegistrationCallback(T)
 godot.registration.PostRegistrationCallback
 godot.registration.ClassOptions.is_virtual
@@ -324,7 +347,7 @@ New files:
 | File | Owns | State |
 |---|---|---|
 | `src/godot/annotations/signal.zig` | `Signal` marker, argument validation, discovery, typed `emit` | implemented |
-| `src/godot/annotations/constants.zig` | `Constants` marker, constant/enum/bitfield discovery | implemented |
+| `src/godot/annotations/constants.zig` | `Constants` marker, constant/enum/bitfield discovery, and enum/bitfield hint metadata | implemented |
 | `src/godot/registration/classdb.zig` | family gate, registration calls, copied argument metadata | implemented |
 | `src/godot/annotations/method.zig` | `Method` marker, signature checks | planned |
 

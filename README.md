@@ -11,7 +11,7 @@ You keep control of the layers:
 |---|---|---|
 | generated raw bindings | `src/godot/bindings/` except `bindings.zig` | ABI wrappers only |
 | codegen | `src/godot/classes/`, `src/godot/builtins/generated/`, `src/godot/utility/`, and the generated root modules | automatic dispatch and typed classes |
-| hand-written runtime | `src/godot/` files outside the generated subtrees | `Registry`, annotations, lifecycle, `Variant` helpers |
+| hand-written runtime | `src/godot/` files outside the generated subtrees | `Registry`, annotations, lifecycle, ownership, `Variant` helpers |
 | generator | `generator/`, `build/generator.zig`, `gd_interface/` | regenerating for another Godot version |
 
 A project can keep the full stack, use the runtime without `Registry`, or use
@@ -81,8 +81,11 @@ zig build test
 Generated bindings and codegen output are not committed. `zig build gen` runs
 bindgen, codegen, and the example class-file scan. `zig build` requires that
 generation step on a fresh checkout; it does not regenerate implicitly.
-`test-godot` regenerates first, then runs the runtime tests and analyzes the
-generated modules.
+`zig build test` is the normal project test step and a wrapper over `test-godot`.
+`zig build test-godot` runs all bindings/godot layer tests: it regenerates
+bindings/codegen, then builds and runs the hand-written test root
+`src/godot/tests/all.zig` and analyzes the generated modules.
+`zig build test-generator` runs the host-side generator tests separately.
 
 Cross-target test binaries are compiled and semantically analyzed; they run
 only when the host can execute them. The builtin layout defaults from the target
@@ -98,12 +101,14 @@ src/example.gen.zig       generated example class namespace (ignored)
 src/godot/                hand-written runtime plus generated subtrees
   godot.zig               public facade imported as `godot`
   runtime.zig             process-wide dispatcher/registry state and lifecycle
+  ownership.zig           engine-object retain/release and constructed-base destruction
   bindings/               bindgen output + hand-written bindings.zig entry
   classes/                codegen class output
   builtins/               hand-written builtins + generated builtins
   reflect/                type, hierarchy, and object helpers
   annotations/            opt-in markers
   registration/           optional Registry and lifecycle helpers
+  tests/                  hand-written tests; all.zig is the test root
 build/                    build helpers and optional class-file scanner
 build/generator.zig       bindgen/codegen build wiring
 generator/                host-side bindgen/codegen generator
@@ -138,9 +143,10 @@ lives inside the bindgen root.
 
 ## Using only raw bindings
 
-The raw ABI layer has no dependency on `godot.zig` or `runtime.zig`. The root
-module already exposes it as the `bindings` import; replace the helpful facade
-import and call generated wrappers with your own dispatcher. See
+The raw ABI layer has no dependency on `godot.zig` or `runtime.zig`. The default
+`build.zig` has a commented-out `bindings` module import for the entrypoint; add
+or uncomment it, replace the helpful facade import, and call generated wrappers
+with your own dispatcher. See
 [docs/bindings-only.md](docs/bindings-only.md) for a minimal entry point and
 the caveats around dispatcher initialization and allocators.
 
@@ -194,8 +200,9 @@ modules are build artifacts; they are ignored and must not be edited.
 
 ## Known limitations
 
-- Tests are Zig unit/build-analysis tests. They do not run the extension in a
-  Godot engine; validate runtime callbacks in Godot.
+- The hand-written tests under `src/godot/tests/` are Zig unit/build-analysis
+  tests. They do not run the extension in a Godot engine; validate runtime
+  callbacks in Godot.
 - Zig methods and static ClassDB properties are not registered for GDScript
   yet.
 - Extension-to-extension class inheritance is rejected for registered classes.

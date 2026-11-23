@@ -9,14 +9,26 @@ health: godot.annotations.Property(i32, .{
     .hint = .range,
     .hint_string = "0,100",
 }) = .init(100),
+/// Node and Resource pointers derive their picker hint from the declared type.
 the_child: godot.annotations.Property(?*godot.classes.core.Node, .{
     .usage = .exported,
-    .hint = .node_type,
-    .hint_string = "Node",
+}) = .init(null),
+the_resource: godot.annotations.Property(?*godot.classes.core.Resource, .{
+    .usage = .exported,
+}) = .init(null),
+the_texture: godot.annotations.Property(?*godot.classes.core.Texture, .{
+    .usage = .exported,
 }) = .init(null),
 the_name: godot.annotations.Property(godot.builtins.String, .{
     .usage = .exported,
-}).Init(.fromLatin1, .{"TheName!"}),
+}).Init(.fromLatin1, .{"TheName2!"}),
+/// Value types come from `ClassConstants`, so enum/bitfield hints auto-wire.
+state: godot.annotations.Property(ClassConstants.decls.State, .{
+    .usage = .exported,
+}) = .init(.idle),
+flags: godot.annotations.Property(ClassConstants.decls.Flags, .{
+    .usage = .exported,
+}) = .init(.{}),
 base: godot.annotations.Base(Extends) = .{},
 child_node: godot.annotations.OnReady(godot.classes.core.Node).Node("./ChildNode"),
 label: godot.annotations.OnReady(godot.builtins.String).Call(.fromLatin1, .{"TestingString..."}),
@@ -43,6 +55,25 @@ pub const ClassConstants = godot.annotations.Constants(struct {
         second: bool = false,
         _pad0: u30 = 0,
     };
+});
+
+/// Inspector sections for every visible `Property` field, each listed once.
+pub const Groups = godot.annotations.PropertyGroups(.{
+    .{
+        .name = "Combat",
+        .fields = .{ "health", "state", "flags" },
+        .groups = .{
+            .{ .name = "Targeting", .fields = .{"the_child"} },
+        },
+    },
+    .{
+        .name = "Naming",
+        .fields = .{"the_name"},
+    },
+    .{
+        .name = "Assets",
+        .fields = .{ "the_resource", "the_texture" },
+    },
 });
 
 pub const OnInit = godot.annotations.InitCallback(@This(), onInit);

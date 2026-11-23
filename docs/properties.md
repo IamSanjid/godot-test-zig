@@ -1,15 +1,21 @@
 # Properties
 
 `Property` is an opt-in field annotation that exposes a Zig field as an engine
-property. The implemented backend uses dynamic `ClassCreationInfo6` callbacks;
-bindgen/codegen play no part in it.
+property. Inspector hints are derived from the declared value type, so enum,
+bitfield, and object pointer fields need no hint options. The implemented
+backend uses dynamic `ClassCreationInfo6` callbacks; bindgen/codegen play no
+part in it.
 
 Status:
 
 - Dynamic `ClassCreationInfo6` backend implemented: `set_func`, `get_func`,
   `get_property_list_func`, `free_property_list_func`.
-- Property lifetime is explicit: the default setter manages only known managed
-  builtins and `RefCounted` references; free-time cleanup is opt-in per class.
+- `PropertyGroups` section trees and type-derived property hints (enum,
+  bitfield, and Node/Resource object pointers) are implemented on the dynamic
+  list.
+- Property lifetime is explicit: the default setter manages only managed
+  builtins (`godot.builtins.isManaged`), `Variant`, and `RefCounted` references
+  (`godot.ownership`); free-time cleanup is opt-in per class.
 - Read-only properties (`.read_only`) and eager creation-time initializers
   (`.init`) are implemented on the same field annotation.
 - Static ClassDB property registration and extension method registration remain
@@ -68,8 +74,8 @@ accessor shapes are compile errors.
 |---|---|---|---|
 | `usage` | `enums.PropertyUsageFlags`, a named flag literal, or an anonymous struct of flags | yes | Engine property usage flags |
 | `name` | `?[:0]const u8` | no | Exact engine property name; defaults from the field name |
-| `hint` | `enums.PropertyHint` or an enum literal such as `.range` | no | Inspector hint; `.none` when omitted |
-| `hint_string` | `[]const u8` | no | Inspector hint string; empty when omitted, copied at comptime |
+| `hint` | `enums.PropertyHint` or an enum literal such as `.range` | no | Inspector hint; derived from the value type when both `.hint` and `.hint_string` are omitted ([Property hints](#property-hints)), else `.none` |
+| `hint_string` | `[]const u8` | no | Inspector hint string; derived for enum/bitfield/object types when both `.hint` and `.hint_string` are omitted, else empty; copied at comptime |
 | `type` | `interface.VariantType` or an enum literal such as `.object` | no | Explicit engine Variant type; defaults to `Variant.typeFor(T)` |
 | `get` | `fn (*Owner) T` or `fn (*const Owner) T` | no | Custom getter; defaults to reading the field value |
 | `set` | `fn (*Owner, T) void` | no | Custom setter; defaults to writing the field value |
@@ -78,8 +84,9 @@ accessor shapes are compile errors.
 | `deinit` | `fn (*Owner) void` | no | Cleanup hook for `deinitPropertyFields`; overrides that field's automatic cleanup |
 
 There is no `.export` key (`export` is a Zig keyword), no `.ownership` option,
-and no `group` key yet. Groups and other new options must be additive and must
-not change the annotation shape.
+and no group option. Sections are declared once per class with
+`PropertyGroups`; see [Property groups](#property-groups). New options must stay
+additive and must not change the annotation shape.
 
 ## Usage flags
 
@@ -104,8 +111,9 @@ Semantics:
 
 - Zero usage: the property is omitted from `get_property_list`, but set/get
   dispatch still matches it.
-- Non-zero usage: the property is included in `get_property_list` in field
-  declaration order.
+- Non-zero usage: the property is included in `get_property_list`; without a
+  `PropertyGroups` marker the list is in field declaration order, otherwise the
+  marker's section order applies.
 - Only the usage bits decide list visibility. No other flag combination is
   special.
 
@@ -115,6 +123,111 @@ a zero-usage property stays reachable programmatically while staying out of the
 inspector and serialization. This engine contract is the reason hidden
 properties are omitted rather than rejected; the repository's coverage of it is
 compile-time only.
+
+## Property groups
+
+Inspector sections are declared once per class with a `PropertyGroups` marker,
+not per field. The marker declaration name is free:
+
+```zig
+pub const Groups = godot.annotations.PropertyGroups(.{
+    .{
+        .name = "Combat",
+        .fields = .{ "health" },                 // direct fields, listed order
+        .groups = .{
+            .{ .name = "Vitals", .fields = .{ "stamina" } },
+        },
+    },
+});
+```
+
+- At most one marker is allowed per class, and it must declare at least one
+  group.
+- `.name` is required and must not be empty. `.fields` and `.groups` are
+  optional tuples; unknown keys in a group declaration are compile errors.
+- `.fields` entries are Zig field names on the class, not engine property names.
+- The marker is authoritative: every visible `Property` field (`usage != 0`)
+  must be listed exactly once. Hidden properties may be omitted.
+- Unknown field names, hidden properties, duplicate listings, and sections with
+  no fields anywhere below them are compile errors.
+- Ordering is the section entry, its direct `.fields` in listed order, then its
+  child `.groups` depth-first. Direct fields therefore always precede child
+  sections inside one section; field declaration order is not preserved across
+  sections.
+- Nesting sets the depth: a top-level group is depth 0, its child groups depth
+  1, and so on. There is no `.depth`, parent name, or prefix option.
+- Names are verbatim engine strings. No naming conversion or uniqueness check
+  applies, so two sections may share a name.
+- Each section becomes one `PropertyInfo` entry: `PROPERTY_USAGE_GROUP` at
+  depth 0, `PROPERTY_USAGE_SUBGROUP` above it, `type = NIL`,
+  `PROPERTY_HINT_NONE`, and the depth in `hint_string` (for example `",1"` for
+  a subgroup at depth 1). The usage is exactly that group bit, with no other
+  flag ORed in. A section adds no field and never reaches set/get.
+- The resolved list order is available at comptime as
+  `godot.annotations.property.layout(T)` for tooling and tests.
+- Without a marker, `get_property_list` keeps the visible fields in field
+  declaration order, as before.
+
+## Property hints
+
+Hints are derived from the declared Zig value type independently of
+`Constants`. A same-class `Constants` declaration only adds registered
+enum/bitfield metadata: `class_name` and the matching usage bit.
+
+These rules apply to every type-derived hint:
+
+- The hint applies only to visible properties (`usage != 0`). A hidden property
+  gets no automatic hint and no added usage; it stays hidden.
+- Setting either `.hint` or `.hint_string` disables the type-derived hint and
+  the registered enum/bitfield enrichment, even when the value is `.none` or an
+  empty string. The explicit values are used verbatim.
+- Scalar and plain builtin value types (`Vector2`, `Color`, `String`, ...) have
+  no type-inherent hint. Typed `Array`/`Dictionary` hints are not derived yet.
+- Hints are metadata only: they change inspector UI and engine documentation,
+  not storage, conversion, or registration.
+
+### Enum and bitfield hints
+
+| Zig value type | Hint | Hint string example |
+|---|---|---|
+| exhaustive `enum` with variants | `PROPERTY_HINT_ENUM` | `"Idle:0,Running:3"` |
+| `bitpack struct` with bool flag fields | `PROPERTY_HINT_FLAGS` | `"First:1,Second:2"` |
+
+- The hint comes from the type declaration itself, including generated Godot
+  core enum and bitfield types. Labels are PascalCase from the Zig field names,
+  and values are the declared enum values or bitpack masks, joined with commas.
+  For a bitpack struct only `bool` fields contribute; `_`-prefixed and non-bool
+  fields are ignored. A type with no variants or bool flag fields gets no hint.
+- When the same class declares that exact type in one of its `Constants`
+  markers, the property also gets `class_name = "<Class>.<Name>"` and
+  `PROPERTY_USAGE_CLASS_IS_ENUM` or `PROPERTY_USAGE_CLASS_IS_BITFIELD`, which
+  makes engine documentation typed.
+- An enum or bitpack type that is unregistered, or declared on another class,
+  gets the hint string only: no `class_name`, no added usage bit, and engine
+  docs show an int. The editor still gets the dropdown or flag checkboxes.
+- The property stays an int in storage and conversion; `Constants` owns the
+  registered enum/bitfield values.
+- `Constants` declaration rules are in
+  [annotations.md](annotations.md#constantsdecls); the registration decision is
+  in [classdb.md](classdb.md#d5-integer-constants-come-from-zig-enums-and-bitfields).
+
+### Object pointer hints
+
+The class behind an object pointer value type selects the picker hint, for
+engine and extension classes:
+
+| `C` in `*C` / `*const C` / `?*C` / `?*const C` | Hint | Hint string | `class_name` |
+|---|---|---|---|
+| inherits `Node` | `PROPERTY_HINT_NODE_TYPE` | class name | class name |
+| inherits `Resource` | `PROPERTY_HINT_RESOURCE_TYPE` | class name | class name |
+| any other class (plain `Object`, non-`Resource` `RefCounted`, ...) | none | empty | class name |
+
+- The hint string and `class_name` are the class's registered name: the engine
+  class name for an engine class, the registered extension class name for an
+  extension class.
+- A class that inherits neither `Node` nor `Resource` gets no picker hint;
+  `class_name` is still set, and registration keeps its own class-name fallback.
+- Optional and `const` pointer forms resolve the same way.
 
 ## Custom get/set
 
@@ -309,16 +422,22 @@ dispatch can key on the name without ambiguity.
 
 ## Discovery and descriptors
 
-`findPropertyFieldNames(T)` scans only fields declared directly on `T`. Identity
-comes from `marker.Kind.property`. Marker filtering keeps `Property` fields from
-being initialized as `OnReady` fields and vice versa; lookalike structs without
-the marker are ignored. Inherited engine properties come from ClassDB; inherited
-Zig fields are not scanned.
+The declaration and lifecycle API stays on the flat `godot.annotations` exports
+(`Property`, `PropertyGroups`, `initPropertyFields`, `deinitPropertyFields`).
+The implementation and tooling introspection helpers live on the
+`godot.annotations.property` submodule.
 
-`descriptors(T)` returns the per-class comptime descriptor table in field
-declaration order:
+`godot.annotations.property.findPropertyFieldNames(T)` scans only fields
+declared directly on `T`. Identity comes from `marker.Kind.property`. Marker
+filtering keeps `Property` fields from being initialized as `OnReady` fields and
+vice versa; lookalike structs without the marker are ignored. Inherited engine
+properties come from ClassDB; inherited Zig fields are not scanned.
+
+`godot.annotations.property.descriptors(T)` returns the per-class comptime
+descriptor table in field declaration order:
 
 ```zig
+// godot.annotations.property.PropertyDescriptor
 pub const PropertyDescriptor = struct {
     field_name: [:0]const u8,
     godot_name: [:0]const u8,
@@ -326,17 +445,19 @@ pub const PropertyDescriptor = struct {
     usage: enums.PropertyUsageFlags,
     hint: enums.PropertyHint,
     hint_string: [:0]const u8,
+    class_name: ?[:0]const u8,
     type: ?interface.VariantType,
 };
 ```
 
 Accessors are not part of the descriptor. The backend resolves them through the
-`getterFn`/`setterFn` helpers, which also validate the owner pointer shapes and
-derive whether a field is read-only; `.read_only` is part of that same decision.
-`hasCustomDeinit`/`deinitFn` are the same shape check for the optional `.deinit`
-hook, and `deinitPropertyFields` is the cleanup tool built on them.
-`hasCustomInitializer` reports the optional `.init` option, and
-`initPropertyFields` is the pass that runs it.
+`godot.annotations.property.getterFn`/`setterFn` helpers, which also validate
+the owner pointer shapes and derive whether a field is read-only; `.read_only`
+is part of that same decision. `godot.annotations.property.hasCustomDeinit`/
+`deinitFn` are the same shape check for the optional `.deinit` hook, and
+`deinitPropertyFields` is the cleanup tool built on them.
+`godot.annotations.property.hasCustomInitializer` reports the optional `.init`
+option, and `initPropertyFields` is the pass that runs it.
 
 ## Dynamic backend
 
@@ -354,9 +475,8 @@ are all zero-usage still gets set/get, but no property list.
 - `set_func` matches the incoming engine `StringName` against every descriptor,
   including zero-usage ones, converts the borrowed `Variant` with
   `Variant.asDeclared`, and calls the
-  setter. Unknown names, read-only properties (`.read_only` or a getter-only
-  property), and type mismatches return false. `nil` and null objects are
-  accepted for optional object pointers.
+  setter. Unknown names, read-only properties (`.read_only`), and type mismatches
+  return false. `nil` and null objects are accepted for optional object pointers.
   Engine object values are additionally checked at runtime with `Object.isClass`
   against the declared engine class (engine subclasses are accepted) before the
   backend stores or retains the pointer; a Variant holding an object of the
@@ -366,10 +486,11 @@ are all zero-usage still gets set/get, but no property list.
 - `get_func` calls the getter and writes an owned `Variant` built with
   `Variant.initDeclared` into the engine return slot.
 - `get_property_list_func` returns a lazy per-class, process-lifetime static
-  table of `PropertyInfo` entries for the non-zero-usage descriptors, in
-  declaration order. First-use initialization is unsynchronized, matching the
-  other static literal caches; initialize/register classes before cross-thread
-  use.
+  table of `PropertyInfo` entries: the `PropertyGroups` section tree
+  interleaved with the non-zero-usage descriptors, or those descriptors in
+  declaration order when no marker is present. First-use initialization is
+  unsynchronized, matching the other static literal caches;
+  initialize/register classes before cross-thread use.
 - `free_property_list_func` is a no-op: the table and its `StringName`/`String`
   storage are process-lifetime and never freed. The engine copies a
   `PropertyInfo` by dereferencing its pointers, so every entry points at stable
@@ -386,10 +507,16 @@ are all zero-usage still gets set/get, but no property list.
   Supported default values are scalars,
   enums, packed bitfields, codegen builtins, and engine/extension object class
   pointers.
-- `name` from the engine property name.
-- `class_name` from `reflect.classNameOf(value_type)` for object properties (the
-  extension class name for extension classes); empty otherwise.
+- `name` from the engine property name, or the verbatim section name for a
+  `PropertyGroups` entry.
+- `class_name` from the object class name for object properties (the extension
+  class name for extension classes), from the `<Class>.<Enum>` /
+  `<Class>.<Flags>` qualifier for same-class registered enum/bitfield hints, and
+  empty otherwise.
 - `hint`, `hint_string`, and `usage` from the descriptor.
+- A `PropertyGroups` entry uses `type = NIL`, `hint = NONE`, `hint_string` for
+  the depth, and exactly `PROPERTY_USAGE_GROUP` or `PROPERTY_USAGE_SUBGROUP` as
+  its usage.
 
 No `classdb_register_extension_class_property*` call is made. The backend is
 dynamic only.
@@ -407,24 +534,29 @@ A field uses the default setter when it declares no custom `.set`. A custom
 still writes `.value` using this type-driven policy. On each engine set the
 converted value is stored type-driven:
 
-- managed builtin (`annotations.isKnownManagedBuiltin`, generated from
+- managed builtin (`godot.builtins.isManaged`, generated from
   `extension_api.json` `has_destructor`) or `Variant`: the previous field value
   is deinitialized, then the new value is stored. `Property(Variant)` requires an
   explicit `.type` override.
 - `RefCounted` object pointer: the new reference is retained before the previous
-  one is released, so assigning the current value back is safe. The value from
-  `Variant.as` is borrowed and ownership follows the declared type, so only
-  `RefCounted` pointer types are retained/released; non-`RefCounted` object
-  pointers (for example `*Object` or `*Node`) are borrowed and stored unchanged.
+  one is released (`godot.ownership.retainRefCounted` /
+  `godot.ownership.releaseRefCounted`), so assigning the current value back is
+  safe. The value from `Variant.as` is borrowed and ownership follows the
+  declared type, so only `RefCounted` pointer types are retained/released;
+  non-`RefCounted` object pointers (for example `*Object` or `*Node`) are
+  borrowed and stored unchanged.
 - everything else (scalars, enums, bitfields, plain value builtins, arbitrary
   user structs): plain assignment. The backend does not guess ownership for user
   types, even when they declare `deinit`.
 
 Plain value builtins such as `Vector2` and user structs are not managed by the
 setter. `Variant` is handled separately because it is not a codegen builtin with
-`toBinding` conversion. The policy is exposed through
-`annotations.isKnownManagedBuiltin`, `annotations.retainRefCounted`, and
-`annotations.releaseRefCounted`.
+`toBinding` conversion. The policy lives in `godot.ownership` and
+`godot.builtins`: `godot.builtins.isManaged` for managed builtins,
+`godot.ownership.retainRefCounted` / `godot.ownership.releaseRefCounted` for
+`RefCounted` values, `godot.ownership.retainObjectReference` when only the engine
+`Object*` is known, and `godot.ownership.releaseConstructedBase` for a base
+constructed by `classdb_construct_object3`.
 
 ### Custom accessors
 
@@ -453,8 +585,9 @@ helper. Per `Property` field, in order:
 
 1. a custom `.deinit` hook is called (it handles null and any other state);
 2. otherwise a struct value type declaring `deinit` is deinitialized;
-3. otherwise a `RefCounted` object pointer releases its reference (a null
-   optional pointer is skipped, never read as non-null);
+3. otherwise a `RefCounted` object pointer releases its reference
+   (`godot.ownership.releaseRefCounted`; a null optional pointer is skipped,
+   never read as non-null);
 4. otherwise nothing happens.
 
 The helper ignores custom accessors, usage flags, and engine dispatch: it walks
@@ -466,7 +599,8 @@ non-struct type is a compile error.
 
 `.deinit` is a normal `fn (*Owner) void` option. Its shape is validated when the
 `Property` is declared and its owner pointer when the field is resolved for the
-owning class (`descriptors` or cleanup). It runs only when cleanup is requested
+owning class (`godot.annotations.property.descriptors` or cleanup). It runs only
+when cleanup is requested
 (a manual `deinitPropertyFields` call or the opt-in class flag), not on engine
 set: the default setter's overwrite handling is unchanged. It overrides the
 automatic rules above for its field, so it must handle everything that field
@@ -514,8 +648,10 @@ Failure order during creation, including which values are already assigned when
 - no static ClassDB property registration; [classdb.md](classdb.md#d1-the-dynamic-property-backend-stays-the-only-property-backend)
   records why the dynamic backend stays the only one for instanced classes
 - no extension method registration here; it is [classdb.md](classdb.md) work
-- no property groups/subgroups yet (a planned additive `.group`/`.subgroup`
-  option, [classdb.md](classdb.md#d2-groups-and-subgroups-are-list-entries-not-registrations))
+- no group prefixes or a manual `.depth` option; nesting sets the depth and names
+  are verbatim labels
+- no explicit enum/bitfield hint labels; they come from the Zig declaration's
+  field names
 - no indexed or array properties
 - no `property_can_revert` / `property_get_revert`
 - no signals from the property backend; see [signals.md](signals.md)
@@ -532,5 +668,7 @@ Failure order during creation, including which values are already assigned when
 
 ## Future work
 
-- Add groups/subgroups and the enum hint wiring ([classdb.md](classdb.md)).
+- Add group prefixes and explicit section depths.
+- Add explicit enum/bitfield hint labels through `Constant(value, opts)`.
+- Add typed `Array`/`Dictionary` hints.
 - Add property revert callbacks.

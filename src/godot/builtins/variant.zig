@@ -222,237 +222,6 @@ pub const Variant = extern struct {
     pub const nil: Variant = .{ .tag = .nil, .data = .{ .nil = {} } };
 };
 
-comptime {
-    bindings.builtins.variant.checkTypeLayout(Variant);
-
-    // Variant::_data is alignas(8) in every configuration; the data area starts at 8.
-    if (@alignOf(Variant) != 8) @compileError("Variant alignment must be 8");
-    if (@offsetOf(Variant, "data") != 8) @compileError("Variant data must start at offset 8");
-    const expected_data_size = @sizeOf(Variant) - 8;
-    if (@sizeOf(Variant.Data) != expected_data_size) @compileError("Variant Data size does not match the engine layout");
-}
-
-comptime {
-    @setEvalBranchQuota(1_000_000);
-    // The type mapping is part of the public contract: every codegen builtin type
-    // must have exactly its GDExtension VariantType, scalars must map to the
-    // canonical scalar tags, object class pointers must map to `object`, and
-    // `Variant` itself must stay transparent (no VariantType).
-    for (builtin_mappings) |mapping| {
-        if (Variant.typeFor(mapping.Type) != mapping.variant_type) {
-            @compileError("Variant.typeFor is missing or mis-maps builtin: " ++ @typeName(mapping.Type));
-        }
-        const Binding = BindingType(mapping.Type);
-        if (bindings.builtins.traits.kindOf(mapping.Type) != bindings.builtins.traits.kindOf(Binding)) {
-            @compileError("codegen/binding builtin classification mismatch: " ++ @typeName(mapping.Type));
-        }
-    }
-
-    for (.{ i8, u8, i16, u16, i32, u32, i64, u64 }) |T| {
-        if (Variant.typeFor(T) != .int) @compileError("Variant.typeFor must map integer type to .int: " ++ @typeName(T));
-    }
-    for (.{ f32, f64 }) |T| {
-        if (Variant.typeFor(T) != .float) @compileError("Variant.typeFor must map float type to .float: " ++ @typeName(T));
-    }
-    if (Variant.typeFor(bool) != .bool) @compileError("Variant.typeFor must map bool to .bool");
-
-    if (Variant.typeFor(Variant) != null) @compileError("Variant.typeFor(Variant) must be null (transparent storage)");
-    if (Variant.typeFor(i128) != null) @compileError("Variant.typeFor must reject scalar types wider than 64 bits");
-    const WideEnum = enum(u128) { a };
-    if (Variant.typeFor(WideEnum) != null) @compileError("Variant.typeFor must reject enums wider than 64 bits");
-
-    if (Variant.typeFor(*Object) != .object or Variant.typeFor(?*Object) != .object) {
-        @compileError("Variant.typeFor must map object class pointers to .object");
-    }
-    if (Variant.typeFor(*classes.core.RefCounted) != .object or Variant.typeFor(*classes.core.Node) != .object) {
-        @compileError("Variant.typeFor must map engine class pointers to .object");
-    }
-
-    {
-        const Mode = enum(u32) { a = 0, b = 1 };
-        const Flags = bitpack struct(u32) {
-            first: bool = false,
-            padding0: u31 = 0,
-        };
-        if (Variant.typeFor(Mode) != .int) @compileError("Variant.typeFor must map enums to .int");
-        if (Variant.typeFor(Flags) != .int) @compileError("Variant.typeFor must map readable bitfields to .int");
-    }
-}
-
-comptime {
-    // Compile-only coverage for object and builtin conversion.
-    const Coverage = struct {
-        fn FakeBase(comptime B: type) type {
-            return struct {
-                pub const BaseFor = B;
-
-                base_ptr: *B = undefined,
-
-                pub fn get(self: *const @This()) *B {
-                    return self.base_ptr;
-                }
-
-                pub fn set(self: *@This(), value: *B) void {
-                    self.base_ptr = value;
-                }
-            };
-        }
-
-        /// Direct extension class over an engine class.
-        const DirectExtension = struct {
-            pub const Extends = classes.core.Node;
-            base: FakeBase(Extends) = .{},
-        };
-
-        /// Extension class whose `Extends` is another extension class.
-        const ChainedExtension = struct {
-            pub const Extends = DirectExtension;
-            base: FakeBase(Extends) = .{},
-        };
-
-        fn check() void {
-            var variant: Variant = undefined;
-
-            // Raw values: scalars and inline plain builtins are copied into the
-            // borrowed Variant data; raw object pointers are borrowed directly.
-            _ = Variant.wrap(i32, 7);
-            _ = Variant.wrap(f32, 1.5);
-            _ = Variant.wrap(builtins.Vector2, builtins.Vector2.zero);
-            _ = Variant.wrap(*classes.core.Node, @as(*classes.core.Node, undefined));
-            _ = Variant.wrap(?*const classes.core.Node, null);
-            const Mode = enum(u2) { a, b };
-            _ = Variant.wrap(Mode, .b);
-
-            // Engine class pointers: existing pointer behavior.
-            _ = Variant.wrap(classes.core.Object, @as(*const classes.core.Object, undefined));
-            _ = Variant.wrap(classes.core.Node, @as(?*const classes.core.Node, null));
-            _ = Variant.init(*classes.core.Node, @as(*classes.core.Node, undefined));
-            _ = Variant.init(?*classes.core.RefCounted, null);
-            _ = variant.as(*classes.core.Object);
-            _ = variant.as(*const classes.core.Node);
-            _ = variant.objectInstance();
-            _ = variant.isNullObject();
-
-            // Direct extension class.
-            _ = Variant.wrap(*const DirectExtension, @as(*const DirectExtension, undefined));
-            _ = Variant.wrap(DirectExtension, @as(*const DirectExtension, undefined));
-            _ = Variant.wrap(DirectExtension, @as(?*DirectExtension, null));
-            _ = Variant.init(*DirectExtension, @as(*DirectExtension, undefined));
-            _ = Variant.init(*const DirectExtension, @as(*const DirectExtension, undefined));
-            _ = Variant.init(?*const DirectExtension, null);
-            _ = Variant.init(?*DirectExtension, @as(?*DirectExtension, null));
-            _ = variant.as(*DirectExtension);
-            _ = variant.as(*const DirectExtension);
-
-            // Extension -> extension chain.
-            _ = Variant.wrap(ChainedExtension, @as(*const ChainedExtension, undefined));
-            _ = Variant.init(*ChainedExtension, @as(*ChainedExtension, undefined));
-            _ = Variant.init(*const ChainedExtension, @as(*const ChainedExtension, undefined));
-            _ = variant.as(*ChainedExtension);
-
-            if (comptime reflect.isExtensionClass(DirectExtension) == false) {
-                @compileError("Variant.wrap/init extension conversion: direct extension class was not recognized");
-            }
-            if (comptime Variant.typeFor(*DirectExtension) == null) {
-                @compileError("Variant.typeFor must map direct extension class pointers to .object");
-            }
-            if (comptime Variant.typeFor(?*ChainedExtension) == null) {
-                @compileError("Variant.typeFor must map chained extension class pointers to .object");
-            }
-
-            // Declared-type conversions, declared and inferred forms.
-            _ = Variant.initDeclared(i32, 7);
-            _ = Variant.initDeclared(f32, 1.5);
-            _ = Variant.initDeclared(?*classes.core.Node, null);
-            _ = Variant.initDeclared(?*classes.core.Node, @as(*classes.core.Node, undefined));
-            _ = Variant.initDeclared(?*classes.core.Node, @as(*DirectExtension, undefined));
-            _ = Variant.initDeclared(*classes.core.Object, @as(*classes.core.Node, undefined));
-            _ = Variant.initDeclared(*DirectExtension, @as(*DirectExtension, undefined));
-            _ = Variant.initDeclared(?*const DirectExtension, @as(*const DirectExtension, undefined));
-            _ = Variant.initDeclared(builtins.PackedByteArray, @as(builtins.PackedByteArray, undefined));
-            _ = Variant.initDeclared(builtins.Transform3D, @as(builtins.Transform3D, undefined));
-            _ = variant.asDeclared(i32);
-            _ = variant.asDeclared(?*classes.core.Node);
-            _ = variant.asDeclared(*const classes.core.Node);
-            _ = variant.asDeclared(*DirectExtension);
-            _ = variant.asDeclared(builtins.PackedByteArray);
-            _ = variant.asDeclared(builtins.Transform3D);
-        }
-
-        // The raw bindgen `Variant.wrap` has a separate generic object branch.
-        // Instantiate it here with concrete binding classes so the binding
-        // layer's class-pointer cast cannot regress lazily.
-        fn rawWrapEngine(dispatcher: *const runtime.DefaultDispatcher, node: *bindings.classes.core.Node) void {
-            _ = bindings.builtins.Variant.wrap(dispatcher, bindings.classes.core.Node, node);
-        }
-
-        fn rawWrapOptional(dispatcher: *const runtime.DefaultDispatcher, node: ?*bindings.classes.core.Node) void {
-            _ = bindings.builtins.Variant.wrap(dispatcher, bindings.classes.core.Node, node);
-        }
-
-        fn rawWrapRefCounted(dispatcher: *const runtime.DefaultDispatcher, resource: *bindings.classes.core.RefCounted) void {
-            _ = bindings.builtins.Variant.wrap(dispatcher, bindings.classes.core.RefCounted, resource);
-        }
-
-        fn rawWrapInline(dispatcher: *const runtime.DefaultDispatcher) void {
-            inline for (.{
-                bindings.builtins.String,
-                bindings.builtins.StringName,
-                bindings.builtins.NodePath,
-                bindings.builtins.RID,
-                bindings.builtins.Callable,
-                bindings.builtins.Signal,
-                bindings.builtins.Array,
-                bindings.builtins.Dictionary,
-                bindings.builtins.Vector2,
-                bindings.builtins.Vector2i,
-                bindings.builtins.Vector3,
-                bindings.builtins.Vector3i,
-                bindings.builtins.Vector4,
-                bindings.builtins.Vector4i,
-                bindings.builtins.Rect2,
-                bindings.builtins.Rect2i,
-                bindings.builtins.Plane,
-                bindings.builtins.Quaternion,
-                bindings.builtins.Color,
-            }) |Inline| {
-                var value: Inline = undefined;
-                _ = bindings.builtins.Variant.wrap(dispatcher, Inline, &value);
-            }
-        }
-
-        fn scalarCoverage(variant: *const Variant) void {
-            const Mode = enum(u32) { a = 0, b = 1 };
-            const Flags = bitpack struct(u32) {
-                first: bool = false,
-                padding0: u31 = 0,
-            };
-            _ = variant.as(Mode);
-            _ = variant.as(Flags);
-            _ = variant.as(usize);
-            _ = variant.as(i8);
-            _ = variant.as(u8);
-        }
-
-        // Exercise every mapped builtin's engine constructor bridges without
-        // executing any engine call. Layout compatibility is owned by the
-        // generated checkTypeLayout blocks and builtins.zig's layoutCheck.
-        fn builtinCoverage(variant: *const Variant) void {
-            inline for (builtin_mappings) |mapping| {
-                _ = Variant.init(mapping.Type, undefined);
-                _ = variant.as(mapping.Type);
-            }
-        }
-    };
-    _ = &Coverage.check;
-    _ = &Coverage.rawWrapEngine;
-    _ = &Coverage.rawWrapOptional;
-    _ = &Coverage.rawWrapRefCounted;
-    _ = &Coverage.rawWrapInline;
-    _ = &Coverage.scalarCoverage;
-    _ = &Coverage.builtinCoverage;
-}
-
 // Conversion helpers
 
 /// A builtin type and the GDExtension Variant type it occupies.
@@ -655,21 +424,15 @@ fn nonNullObjectPointer(
 fn initEngineObject(object: *Object) Variant {
     const instance_id = objectInstanceId(object);
 
-    // Do not use `get_variant_from_type_constructor(.object)` here: Godot's
-    // `Variant(const Object*)` calls `RefCounted::init_ref()`, whose
-    // creation-reference accounting may either consume an unclaimed creation
-    // reference (sharing the caller's ownership) or fail with refcount 0 and
-    // store an empty ObjData. Build the object data ourselves and add one plain
-    // owning reference for RefCounted objects; Variant cleanup unrefs it.
+    // Build the object data ourselves and add one plain owning reference for
+    // RefCounted objects; Variant cleanup unrefs it. The engine Variant
+    // constructor goes through `RefCounted::init_ref()`, which is not the
+    // ownership shape this path needs.
     if (instance_id & object_id_ref_counted_bit != 0) {
-        if (!addObjectReference(object)) return Variant.nil;
+        if (!ownership.retainObjectReference(object)) return Variant.nil;
     }
 
     return objectVariant(instance_id, object);
-}
-
-fn addObjectReference(object: *Object) bool {
-    return classes.core.RefCounted.reference(@ptrCast(object));
 }
 
 fn asBuiltin(comptime T: type, comptime variant_type: interface.VariantType, self: *const Variant) T {
@@ -877,73 +640,15 @@ fn isDeclaredEngineClass(comptime target: reflect.ObjectTarget, object: anytype)
     return Object.isClass(@ptrCast(object), class_name);
 }
 
-test "initDeclared coerces literals and null" {
-    const int_value = Variant.initDeclared(i32, 7);
-    try std.testing.expectEqual(interface.VariantType.int, int_value.tag);
-    try std.testing.expectEqual(@as(i64, 7), int_value.as(i32).?);
-
-    const float_value = Variant.initDeclared(f32, 1.5);
-    try std.testing.expectEqual(interface.VariantType.float, float_value.tag);
-    try std.testing.expectEqual(@as(f32, 1.5), float_value.as(f32).?);
-
-    const Mode = enum(u32) { idle = 0, running = 1 };
-    const enum_value = Variant.initDeclared(Mode, .running);
-    try std.testing.expectEqual(Mode.running, enum_value.as(Mode).?);
-
-    try std.testing.expectEqual(interface.VariantType.nil, Variant.initDeclared(?*classes.core.Node, null).tag);
-}
-
-test "asDeclared round-trips scalars and rejects mismatches" {
-    var int_variant = Variant.initDeclared(i32, 13);
-    try std.testing.expectEqual(@as(i32, 13), int_variant.asDeclared(i32).?);
-    try std.testing.expectEqual(@as(?f32, null), int_variant.asDeclared(f32));
-
-    const Mode = enum(u32) { idle = 0, running = 1 };
-    var mode_variant = Variant.initDeclared(Mode, .running);
-    try std.testing.expectEqual(Mode.running, mode_variant.asDeclared(Mode).?);
-
-    var nil_variant = Variant.initDeclared(?*classes.core.Node, null);
-    const nil_result = nil_variant.asDeclared(?*classes.core.Node);
-    try std.testing.expect(nil_result != null); // matched the declared type
-    try std.testing.expect(nil_result.? == null); // and holds a null object
-}
-
 const std = @import("std");
 
 const bindings = @import("bindings");
+const interface = bindings.interface;
 
 const abi = @import("../abi.zig");
+const classes = @import("../classes/classes.zig");
+const Object = classes.core.Object;
+const ownership = @import("../ownership.zig");
 const reflect = @import("../reflect/reflect.zig");
 const runtime = @import("../runtime.zig");
-
-const AABB = @import("aabb.zig").AABB;
-const Array = builtins.Array;
-const Basis = @import("basis.zig").Basis;
-const Callable = builtins.Callable;
-const Color = @import("color.zig").Color;
-const Dictionary = builtins.Dictionary;
-const NodePath = builtins.NodePath;
-const Plane = @import("plane.zig").Plane;
-const Projection = @import("projection.zig").Projection;
-const Quaternion = @import("quaternion.zig").Quaternion;
-const rect = @import("rect.zig");
-const Rect2 = rect.Rect2;
-const Rect2i = rect.Rect2i;
-const RID = @import("rid.zig").RID;
-const Signal = builtins.Signal;
-const String = builtins.String;
-const StringName = builtins.StringName;
-const Transform2D = @import("transform2d.zig").Transform2D;
-const Transform3D = @import("transform3d.zig").Transform3D;
-const vector = @import("vector.zig");
-const Vector2 = vector.Vector2;
-const Vector2i = vector.Vector2i;
-const Vector3 = vector.Vector3;
-const Vector3i = vector.Vector3i;
-const Vector4 = vector.Vector4;
-const Vector4i = vector.Vector4i;
-
-const Object = classes.core.Object;
-const interface = bindings.interface;
 const builtins = @import("builtins.zig");
-const classes = @import("../classes/classes.zig");

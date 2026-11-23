@@ -20,9 +20,9 @@ class-file scanner/`zlob` dependency if you do not use them. Regenerate with
 
 ## Expose the module
 
-The root module already receives the raw `bindings` module import in the default
-`build.zig`. Replace the helpful `godot` module import in your entrypoint module
-with the raw one:
+The default `build.zig` has the raw `bindings` module import for the entrypoint
+commented out. Add or uncomment it, and replace the helpful `godot` module
+import in your entrypoint module with the raw one:
 
 ```zig
 const bindings_module = b.createModule(.{

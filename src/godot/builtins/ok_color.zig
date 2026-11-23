@@ -359,17 +359,4 @@ fn toeInv(x: f32) f32 {
     return (x * x + k_1 * x) / (k_3 * (x + k_2));
 }
 
-test "okhsl grayscale and round-trip" {
-    const gray = okhslToSrgb(.{ .h = 0.5, .s = 0, .l = 0.5 });
-    try std.testing.expectApproxEqAbs(gray.r, gray.g, 0.00001);
-    try std.testing.expectApproxEqAbs(gray.g, gray.b, 0.00001);
-
-    const source = Rgb{ .r = 0.2, .g = 0.5, .b = 0.8 };
-    const hsl = srgbToOkhsl(source);
-    const round_trip = okhslToSrgb(hsl);
-    try std.testing.expectApproxEqAbs(source.r, round_trip.r, 0.0001);
-    try std.testing.expectApproxEqAbs(source.g, round_trip.g, 0.0001);
-    try std.testing.expectApproxEqAbs(source.b, round_trip.b, 0.0001);
-}
-
 const std = @import("std");

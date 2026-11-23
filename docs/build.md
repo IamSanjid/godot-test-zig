@@ -25,8 +25,22 @@ project-generation step.
 | `zig build codegen` | codegen output | Depends on bindgen; uses `gdext_codegen_output_dir`. |
 | `zig build scan` | example class namespace | Example scaffold; configured in `build.zig`. |
 | `zig build test-generator` | generator test binary | Host-side generator tests. |
-| `zig build test-godot` | test binary | Regenerates first, then unit-tests the runtime and analyzes generated modules. |
-| `zig build test` | both test suites | Convenience umbrella. |
+| `zig build test-godot` | test binary | All bindings/godot layer tests: regenerates first, then builds and runs `src/godot/tests/all.zig` and analyzes generated modules. |
+| `zig build test` | test binary | Normal project test step: wrapper over `test-godot`; runs the runtime/layer tests, not the generator suite. |
+
+## Tests
+
+Hand-written tests are committed source, not generated output. They live under
+`src/godot/tests/`, mirror the module layout, and import the runtime through the
+public `godot` facade. `src/godot/tests/all.zig` is the test root: it imports
+every test file, and `zig build test-godot` regenerates first, then builds and
+runs it. `src/godot/tests/classes.zig` adds the semantic analysis of the
+generated bindings/codegen. Implementation modules carry no `test` blocks.
+
+`zig build test` is a wrapper over `test-godot` and runs the normal runtime/layer
+test root. `test-generator` is the template-only generator suite; `test-godot`
+is the explicit layer-test step. The test root path is fixed in `build.zig`; if
+the runtime layer moves, move the test tree with it and update that path.
 
 ## Options
 
@@ -41,7 +55,7 @@ project-generation step.
 | `-Dgdext_extension_api_json` | `gd_interface/extension_api.json` | Godot extension API JSON input. |
 | `-Dgdext_builtin_build_conf` | target pointer width | `float_32`/`float_64` layout configuration. Must match the engine precision. |
 | `-Dgdext_bindgen_output_dir` | `src/godot/bindings` | Bindgen layer root; must contain the hand-written `bindings.zig` module root. |
-| `-Dgdext_codegen_output_dir` | `src/godot` | Runtime/codegen layer root; must contain `runtime.zig`, `godot.zig`, `naming.zig`, and `tests.zig`. Generated code imports hand-written files at fixed relative depths. |
+| `-Dgdext_codegen_output_dir` | `src/godot` | Runtime/codegen layer root; must contain `runtime.zig`, `godot.zig`, and `naming.zig`. Generated code imports hand-written files at fixed relative depths; hand-written tests are separate under `src/godot/tests/`. |
 | `-Dgdext_interface_import` | `godot_interface` | Module name generated bindings use for the translated interface. |
 | `-Dgdext_member_init` | `zero` | Initialization of generated extern struct members. |
 | `-Dgdext_strip_deprecation` | `false` | Strip deprecated interface/API members from generated output. |
@@ -71,10 +85,12 @@ There are two layer roots, not two arbitrary output folders:
 - `gdext_bindgen_output_dir` owns the bindgen tree, including the hand-written
   `bindings.zig` module entry point. Moving that directory means moving the
   entry point too.
-- `gdext_codegen_output_dir` is the parent of `runtime.zig`, `godot.zig`,
-  `naming.zig`, and `tests.zig`, because generated imports are relative to that
-  layout. It is not safe to copy only the generated subtrees without the
-  hand-written layer beside them.
+- `gdext_codegen_output_dir` is the parent of `runtime.zig`, `godot.zig`, and
+  `naming.zig`, because generated imports are relative to that layout. It is not
+  safe to copy only the generated subtrees without the hand-written layer beside
+  them.
+- Hand-written tests are not part of either layer root; they are committed
+  source under `src/godot/tests/`.
 
 The repository `.gitignore` currently knows only the default paths. If a
 project changes either layer root, update `.gitignore` (and the example scan

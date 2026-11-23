@@ -68,8 +68,33 @@ to the engine:
 - a non-`RefCounted` result carries no reference; destroy it with
   `object_destroy` (`Object.destroy` on the generated class).
 
+Use `godot.ownership.releaseConstructedBase(Base, base)` for that release: it
+applies the `RefCounted` creation-reference rule to a base constructed by
+`classdb_construct_object3` and destroys a non-`RefCounted` base directly. Do not
+open-code the unref-vs-destroy choice.
+
 The create-instance failure path applies this rule; see
 [registration.md](registration.md#instance-lifecycle).
+
+## Ownership helpers
+
+The engine-object helpers live in `src/godot/ownership.zig` and are exported as
+`godot.ownership`:
+
+- `retainRefCounted(T, value)` / `releaseRefCounted(T, value)` - retain or
+  release a `RefCounted` object pointer value. Null optionals are a no-op and
+  non-`RefCounted` types are a compile error; `releaseRefCounted` destroys the
+  object when it releases the last reference.
+- `retainObjectReference(object)` - take an owning reference on an engine
+  `Object*` already known to be `RefCounted`. Returns `false` when the engine
+  refuses the reference because the object's reference count is zero.
+- `releaseConstructedBase(Base, base)` - release a base constructed by
+  `classdb_construct_object3`, per [Construction](#construction).
+
+These are the runtime's only retain/release primitives. The `Property` default
+setter and `deinitPropertyFields` call them instead of carrying their own
+reference-count policy, and `Variant` uses `retainObjectReference`. The module
+imports `reflect` and codegen `classes`, never annotations or registration.
 
 ## `Variant`
 
@@ -120,6 +145,8 @@ Class-pointer returns from generated bindings:
   pointer returned by the binding represents that reference. Release it with
   `unreference` when done, and destroy it with `object_destroy` when that call
   reports the last reference, unless you transfer it to another owner.
+  `godot.ownership.releaseRefCounted(T, value)` is that release-and-destroy step
+  for a typed pointer value; do not duplicate the unref-vs-destroy choice.
 - The binding initializes the return storage to `null` first. Do not remove that
   initialization: Godot's ptrcall encode assigns into a real `Ref<T>`, and an
   undefined slot would unref garbage.

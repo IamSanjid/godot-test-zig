@@ -136,17 +136,4 @@ pub fn FnReturnType(comptime f: anytype) ?type {
     return info.@"fn".return_type;
 }
 
-test "isOptionalPointer accepts single-item pointer optionals only" {
-    try std.testing.expect(isOptionalPointer(?*u32));
-    try std.testing.expect(isOptionalPointer(?*const u32));
-    try std.testing.expect(isOptionalPointer(?*anyopaque));
-    try std.testing.expect(!isOptionalPointer(*u32));
-    try std.testing.expect(!isOptionalPointer(*const u32));
-    try std.testing.expect(!isOptionalPointer(u32));
-    try std.testing.expect(!isOptionalPointer(?u32));
-    try std.testing.expect(!isOptionalPointer(?[*]u32));
-    try std.testing.expect(!isOptionalPointer(?[*:0]u32));
-    try std.testing.expect(!isOptionalPointer(?[]u32));
-}
-
 const std = @import("std");

@@ -1,5 +1,5 @@
-//! `Property` field annotation: wrapper type, option normalization, accessors,
-//! discovery, and lifetime helpers. See docs/properties.md.
+//! `Property` field annotation, `PropertyGroups` layout, option normalization,
+//! accessors, discovery, and lifetime helpers. See docs/properties.md.
 
 /// A direct field type that stores a Zig value and declares an engine property.
 /// Options and lifetime rules: docs/properties.md.
@@ -68,6 +68,30 @@ pub fn Property(comptime T: type, comptime p_options: anytype) type {
     };
 }
 
+/// Declares the inspector section tree for a class's visible `Property` fields.
+/// Every visible field must be listed exactly once; nesting gives the section
+/// depth. The marker declaration name is free.
+pub fn PropertyGroups(comptime p_groups: anytype) type {
+    @setEvalBranchQuota(1_000_000);
+    validateGroupDecls(p_groups);
+    return struct {
+        pub const groups = p_groups;
+    };
+}
+
+/// One inspector section emitted before its fields.
+pub const Section = struct {
+    name: [:0]const u8,
+    /// 0 for a top-level group, 1 for its subgroup, and so on.
+    depth: u32,
+};
+
+/// One entry in the property list layout: a section header or a field index.
+pub const LayoutEntry = union(enum) {
+    section: Section,
+    field: u32,
+};
+
 /// Comptime metadata for one `Property` field.
 pub const PropertyDescriptor = struct {
     field_name: [:0]const u8,
@@ -76,6 +100,10 @@ pub const PropertyDescriptor = struct {
     usage: enums.PropertyUsageFlags,
     hint: enums.PropertyHint,
     hint_string: [:0]const u8,
+    /// `<Class>.<Name>` for a same-class `Constants` enum/bitfield, the object
+    /// class name for a visible object pointer, null otherwise. Registration
+    /// falls back to `reflect.classNameOf` when null.
+    class_name: ?[:0]const u8,
     type: ?interface.VariantType,
 };
 
@@ -128,6 +156,236 @@ pub fn isPropertyField(comptime F: type) bool {
     if (!@hasDecl(F, "PropertyFor") or
         !@hasDecl(F, "options")) return false;
     return F == Property(F.PropertyFor, F.options);
+}
+
+/// Returns `T`'s `PropertyGroups` marker, or an empty slice.
+pub fn findPropertyGroups(comptime T: type) []const type {
+    comptime {
+        if (@typeInfo(T) != .@"struct") @compileError("Expected a class struct, found: " ++ @typeName(T));
+
+        var found: [1]type = undefined;
+        var count: usize = 0;
+        for (@typeInfo(T).@"struct".decl_names) |decl_name| {
+            const Decl = @field(T, decl_name);
+            if (@TypeOf(Decl) != type or !isPropertyGroups(Decl)) continue;
+            if (count != 0) @compileError(std.fmt.comptimePrint(
+                "Class '{s}' declares more than one PropertyGroups marker; keep a single layout declaration.",
+                .{@typeName(T)},
+            ));
+            found[0] = Decl;
+            count = 1;
+        }
+        const out = found[0..count].*;
+        return &out;
+    }
+}
+
+/// Property-list layout: section headers interleaved with visible field indices.
+///
+/// Without a `PropertyGroups` marker this is the visible fields in declaration
+/// order. With a marker it is the declared section tree; every visible field
+/// must be listed exactly once.
+pub fn layout(comptime T: type) []const LayoutEntry {
+    comptime {
+        const descs = descriptors(T);
+        const descs_slice = descs[0..];
+        const marker = findPropertyGroups(T);
+        if (marker.len == 0) return visibleLayout(descs_slice);
+
+        const groups = marker[0].groups;
+        const section_count = sectionCount(groups);
+        const visible_count = visibleCount(descs_slice);
+        var entries: [section_count + visible_count]LayoutEntry = undefined;
+        var count: usize = 0;
+        var seen: [descs.len]bool = @splat(false);
+        var field_count: usize = 0;
+        const map = descriptorMap(descs_slice);
+        flattenGroups(groups, 0, T, descs_slice, map, &entries, &count, &seen, &field_count);
+
+        for (descs_slice, 0..) |desc, i| {
+            if (usageBits(desc.usage) != 0 and !seen[i]) @compileError(std.fmt.comptimePrint(
+                "Visible property '{s}' on class '{s}' is not listed in PropertyGroups. " ++
+                    "List it or set '.usage = .none'.",
+                .{ desc.field_name, @typeName(T) },
+            ));
+        }
+
+        const out = entries[0..count].*;
+        return &out;
+    }
+}
+
+fn isPropertyGroups(comptime OtherT: type) bool {
+    if (@typeInfo(OtherT) != .@"struct") return false;
+    if (!@hasDecl(OtherT, "groups")) return false;
+    return OtherT == PropertyGroups(OtherT.groups);
+}
+
+fn visibleCount(comptime descs: []const PropertyDescriptor) usize {
+    var total: usize = 0;
+    for (descs) |desc| {
+        if (usageBits(desc.usage) != 0) total += 1;
+    }
+    return total;
+}
+
+fn visibleLayout(comptime descs: []const PropertyDescriptor) []const LayoutEntry {
+    var entries: [visibleCount(descs)]LayoutEntry = undefined;
+    var count: usize = 0;
+    for (descs, 0..) |desc, i| {
+        if (usageBits(desc.usage) != 0) {
+            entries[count] = .{ .field = @intCast(i) };
+            count += 1;
+        }
+    }
+    const out = entries[0..count].*;
+    return &out;
+}
+
+fn descriptorMap(comptime descs: []const PropertyDescriptor) std.StaticStringMap(u32) {
+    const Pair = struct { []const u8, u32 };
+    var pairs: [descs.len]Pair = undefined;
+    for (descs, 0..) |desc, i| {
+        pairs[i] = .{ desc.field_name, @intCast(i) };
+    }
+    return std.StaticStringMap(u32).initComptime(pairs);
+}
+
+fn sectionCount(comptime groups: anytype) usize {
+    comptime {
+        var total: usize = 0;
+        for (groups) |group| {
+            total += 1;
+            if (@hasField(@TypeOf(group), "groups")) {
+                const children = group.groups;
+                if (tupleLen(children) != 0) total += sectionCount(children);
+            }
+        }
+        return total;
+    }
+}
+
+fn flattenGroups(
+    comptime groups: anytype,
+    comptime depth: u32,
+    comptime Class: type,
+    comptime descs: []const PropertyDescriptor,
+    comptime map: std.StaticStringMap(u32),
+    entries: []LayoutEntry,
+    count: *usize,
+    seen: []bool,
+    field_count: *usize,
+) void {
+    for (groups) |group| {
+        const name: [:0]const u8 = group.name;
+        entries[count.*] = .{ .section = .{ .name = name, .depth = depth } };
+        count.* += 1;
+
+        const before = field_count.*;
+        if (@hasField(@TypeOf(group), "fields")) {
+            const fields = group.fields;
+            if (tupleLen(fields) != 0) appendFields(fields, name, Class, descs, map, entries, count, seen, field_count);
+        }
+        if (@hasField(@TypeOf(group), "groups")) {
+            const children = group.groups;
+            if (tupleLen(children) != 0) {
+                flattenGroups(children, depth + 1, Class, descs, map, entries, count, seen, field_count);
+            }
+        }
+        if (field_count.* == before) @compileError(std.fmt.comptimePrint(
+            "PropertyGroups section '{s}' on class '{s}' contains no fields; add a field or remove the section.",
+            .{ name, @typeName(Class) },
+        ));
+    }
+}
+
+fn appendFields(
+    comptime fields: anytype,
+    comptime section_name: [:0]const u8,
+    comptime Class: type,
+    comptime descs: []const PropertyDescriptor,
+    comptime map: std.StaticStringMap(u32),
+    entries: []LayoutEntry,
+    count: *usize,
+    seen: []bool,
+    field_count: *usize,
+) void {
+    for (fields) |field_name| {
+        const name: [:0]const u8 = field_name;
+        const index = map.get(name) orelse @compileError(std.fmt.comptimePrint(
+            "PropertyGroups section '{s}' on class '{s}' lists unknown property field '{s}'; " ++
+                "it must name a field with a Property annotation.",
+            .{ section_name, @typeName(Class), name },
+        ));
+        const desc = descs[index];
+        if (usageBits(desc.usage) == 0) @compileError(std.fmt.comptimePrint(
+            "PropertyGroups section '{s}' on class '{s}' lists hidden property field '{s}'; " ++
+                "remove it or give the property a non-zero usage.",
+            .{ section_name, @typeName(Class), name },
+        ));
+        if (seen[index]) @compileError(std.fmt.comptimePrint(
+            "Property field '{s}' on class '{s}' is listed more than once in PropertyGroups.",
+            .{ name, @typeName(Class) },
+        ));
+        seen[index] = true;
+        entries[count.*] = .{ .field = index };
+        count.* += 1;
+        field_count.* += 1;
+    }
+}
+
+fn tupleLen(comptime value: anytype) usize {
+    const info = @typeInfo(@TypeOf(value));
+    if (info != .@"struct") @compileError("PropertyGroups entries must be tuples, found: " ++ @typeName(@TypeOf(value)));
+    return info.@"struct".field_names.len;
+}
+
+fn validateGroupDecls(comptime groups: anytype) void {
+    const info = @typeInfo(@TypeOf(groups));
+    if (info != .@"struct" or !info.@"struct".is_tuple) @compileError(
+        "PropertyGroups expects a tuple of group declarations, e.g. " ++
+            ".{ .{ .name = \"Combat\", .fields = .{\"health\"} } }; found: " ++ @typeName(@TypeOf(groups)),
+    );
+    if (info.@"struct".field_names.len == 0) @compileError("PropertyGroups needs at least one group declaration");
+    for (groups) |group| validateGroup(group);
+}
+
+fn validateGroup(comptime group: anytype) void {
+    const T = @TypeOf(group);
+    const info = @typeInfo(T);
+    if (info != .@"struct" or info.@"struct".is_tuple) @compileError(
+        "PropertyGroups group declarations must be structs with a '.name' field, found: " ++ @typeName(T),
+    );
+    for (info.@"struct".field_names) |field_name| {
+        if (!std.mem.eql(u8, field_name, "name") and
+            !std.mem.eql(u8, field_name, "fields") and
+            !std.mem.eql(u8, field_name, "groups"))
+        {
+            @compileError(std.fmt.comptimePrint(
+                "PropertyGroups group has unknown field '.{s}'. Supported fields: .name, .fields, .groups.",
+                .{field_name},
+            ));
+        }
+    }
+    if (!@hasField(T, "name")) @compileError("PropertyGroups group is missing the required '.name' field");
+    const name: [:0]const u8 = group.name;
+    if (name.len == 0) @compileError("PropertyGroups group '.name' must not be empty");
+    if (@hasField(T, "fields")) validateFieldList(group.fields);
+    if (@hasField(T, "groups")) {
+        const children = group.groups;
+        if (tupleLen(children) != 0) validateGroupDecls(children);
+    }
+}
+
+fn validateFieldList(comptime fields: anytype) void {
+    const info = @typeInfo(@TypeOf(fields));
+    if (info != .@"struct") @compileError("PropertyGroups '.fields' must be a tuple of property field names");
+    if (info.@"struct".field_names.len == 0) return;
+    if (!info.@"struct".is_tuple) @compileError("PropertyGroups '.fields' must be a tuple of property field names");
+    for (fields) |field_name| {
+        const name: [:0]const u8 = field_name;
+        if (name.len == 0) @compileError("PropertyGroups property field name must not be empty");
+    }
 }
 
 /// The value type stored by a `Property` field wrapper.
@@ -188,13 +446,13 @@ pub fn setterFn(comptime Owner: type, comptime field_name: [:0]const u8) ?fn (*O
             // The default setter is the one place that replaces a managed
             // value. Keep its ownership policy here so every caller gets the
             // same behavior as engine dispatch.
-            if (comptime isKnownManagedBuiltin(Value) or Value == builtins.Variant) {
+            if (comptime builtins.isManaged(Value) or Value == builtins.Variant) {
                 field.deinit();
             } else if (comptime reflect.isRefCountedPointer(Value)) {
                 // Take the new reference first: assigning the current object
                 // back must not release the last reference before retaining it.
-                retainRefCounted(Value, value);
-                releaseRefCounted(Value, field.*);
+                ownership.retainRefCounted(Value, value);
+                ownership.releaseRefCounted(Value, field.*);
             }
 
             field.* = value;
@@ -283,7 +541,7 @@ fn deinitPropertyField(comptime T: type, comptime field_name: [:0]const u8, inst
         return;
     }
     if (comptime reflect.isRefCountedPointer(Value)) {
-        releaseRefCounted(Value, field.*);
+        ownership.releaseRefCounted(Value, field.*);
     }
 }
 
@@ -293,43 +551,6 @@ fn hasValueDeinit(comptime T: type) bool {
         .@"struct" => @hasDecl(T, "deinit"),
         else => false,
     };
-}
-
-/// True for builtins with engine-owned storage and a `deinit` contract.
-pub fn isKnownManagedBuiltin(comptime T: type) bool {
-    return bindings.builtins.traits.isManagedBuiltin(T);
-}
-
-/// Takes a reference on a `RefCounted` pointer value; null optionals are a
-/// no-op and non-`RefCounted` types are a compile error.
-pub fn retainRefCounted(comptime Value: type, value: Value) void {
-    const object = refCountedObject(Value, value) orelse return;
-    _ = classes.core.RefCounted.reference(object);
-}
-
-/// Releases a reference taken by `retainRefCounted`, destroying the object when
-/// this was the last reference.
-pub fn releaseRefCounted(comptime Value: type, value: Value) void {
-    const object = refCountedObject(Value, value) orelse return;
-    if (classes.core.RefCounted.unreference(object)) {
-        classes.core.Object.destroy(@ptrCast(object));
-    }
-}
-
-/// Engine `RefCounted` object behind a pointer value, or null.
-fn refCountedObject(comptime Value: type, value: Value) ?*classes.core.RefCounted {
-    comptime if (!reflect.isRefCountedPointer(Value)) @compileError(
-        "RefCounted ownership requires a RefCounted object pointer value type, found: " ++ @typeName(Value),
-    );
-    const target = comptime reflect.objectTarget(Value) orelse @compileError(
-        "RefCounted ownership requires an object pointer value type, found: " ++ @typeName(Value),
-    );
-    const Class = target.class;
-    const item: *const Class = if (comptime target.optional)
-        @ptrCast(value orelse return null)
-    else
-        @ptrCast(value);
-    return @ptrCast(reflect.engineBasePointer(Class, item));
 }
 
 const NormalizedOptions = struct {
@@ -342,6 +563,18 @@ const NormalizedOptions = struct {
 };
 
 const option_keys = [_][]const u8{ "usage", "name", "hint", "hint_string", "type", "get", "set", "read_only", "init", "deinit" };
+const OptionKeysFormatter = struct {
+    pub fn format(_: @This(), w: *std.Io.Writer) !void {
+        if (comptime option_keys.len == 0) return;
+        try w.writeAll(".");
+        try w.writeAll(option_keys[0]);
+        if (comptime option_keys.len == 1) return;
+        inline for (option_keys[1..]) |key| {
+            try w.writeAll(", .");
+            try w.writeAll(key);
+        }
+    }
+};
 
 fn isKnownOption(comptime key: []const u8) bool {
     inline for (option_keys) |known| {
@@ -359,8 +592,8 @@ fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptio
     inline for (info.@"struct".field_names) |key| {
         if (!isKnownOption(key)) {
             @compileError(std.fmt.comptimePrint(
-                "Property<{s}> has unknown option '.{s}'. Supported options: .usage, .name, .hint, .hint_string, .type, .get, .set, .read_only, .init, .deinit.",
-                .{ @typeName(T), key },
+                "Property<{s}> has unknown option '.{s}'. Supported options: {f}.",
+                .{ @typeName(T), key, OptionKeysFormatter{} },
             ));
         }
     }
@@ -615,14 +848,38 @@ fn descriptorFor(comptime T: type, comptime field_name: [:0]const u8) PropertyDe
     if (comptime hasCustomGetter(F)) validateGetterOwner(T, field_name, F.PropertyFor);
     if (comptime hasCustomSetter(F)) validateSetterOwner(T, field_name);
     if (comptime hasCustomDeinit(F)) validateDeinitOwner(T, field_name);
-    return .{
-        .field_name = field_name,
-        .godot_name = F.name orelse defaultGodotName(field_name),
-        .value_type = F.PropertyFor,
-        .usage = F.usage,
-        .hint = F.hint,
-        .hint_string = F.hint_string,
-        .type = F.variant_type,
+    return comptime blk: {
+        const OptionsT = @TypeOf(F.options);
+        const explicit_hint = @hasField(OptionsT, "hint") or @hasField(OptionsT, "hint_string");
+        var usage = F.usage;
+        var hint = F.hint;
+        var hint_string = F.hint_string;
+        var class_name: ?[:0]const u8 = null;
+        if (!explicit_hint and usageBits(usage) != 0) {
+            if (property_hint.resolve(F.PropertyFor)) |resolved| {
+                hint = resolved.hint;
+                hint_string = resolved.hint_string;
+                class_name = resolved.class_name;
+            }
+            if (constants.findEnumName(T, F.PropertyFor)) |registered| {
+                class_name = std.fmt.comptimePrint("{s}.{s}", .{ reflect.className(T), registered.name });
+                if (registered.is_bitfield) {
+                    usage.class_is_bitfield = true;
+                } else {
+                    usage.class_is_enum = true;
+                }
+            }
+        }
+        break :blk .{
+            .field_name = field_name,
+            .godot_name = F.name orelse defaultGodotName(field_name),
+            .value_type = F.PropertyFor,
+            .usage = usage,
+            .hint = hint,
+            .hint_string = hint_string,
+            .class_name = class_name,
+            .type = F.variant_type,
+        };
     };
 }
 
@@ -630,556 +887,21 @@ fn defaultGodotName(comptime field_name: [:0]const u8) [:0]const u8 {
     return naming.comptimeConvert(.godot, .property, field_name);
 }
 
-// Compile-time coverage. These checks are analyzed on every build that analyzes
-// annotations; `annotations.zig` calls `comptimeSelfCheck()` so the registration
-// backend does not have to import Property first.
-//
-// A duplicate engine name is a compile error and therefore cannot be exercised
-// here; `descriptors` reports it with both conflicting field names. The
-// `.read_only = true` + custom `.set` conflict and malformed `.init` initializers
-// (not an `Init` type, or a mismatched `InitFor`) are compile errors for the same
-// reason; `normalizeOptions` reports them.
-
-const UsageOwner = struct {
-    from_literal: Property(u32, .{ .usage = .none }) = .init(0),
-    from_flags: Property(u32, .{ .usage = .{ .storage = true } }) = .init(0),
-    from_value: Property(u32, .{ .usage = .default }) = .init(0),
-};
-
-const VariantTypeOwner = struct {
-    literal: Property(u32, .{ .usage = .none, .type = .string }) = .init(0),
-    explicit: Property(f32, .{ .usage = .none, .type = interface.VariantType.float }) = .init(0),
-    automatic: Property(u32, .{ .usage = .none }) = .init(0),
-};
-
-const CheckOwner = struct {
-    plain: u32 = 0,
-    count: Property(u32, .{ .usage = .none }) = .init(0),
-    health: Property(i32, .{
-        .usage = .{ .storage = true, .editor = true },
-        .hint = .range,
-        .hint_string = "0,100",
-        .name = "Health",
-        .get = getHealth,
-        .set = setHealth,
-    }) = .init(100),
-    ratio: Property(f32, .{
-        .usage = .default,
-        .get = getRatio,
-    }) = .init(1.0),
-    tag: Property(u32, .{ .usage = .{ .storage = true } }) = .init(0),
-
-    fn getHealth(self: *@This()) i32 {
-        return self.health.value;
-    }
-
-    fn setHealth(self: *@This(), value: i32) void {
-        self.health.value = value;
-    }
-
-    fn getRatio(self: *const @This()) f32 {
-        return self.ratio.value;
-    }
-};
-
-const NamingOwner = struct {
-    healthBar: Property(u32, .{ .usage = .exported }) = .init(0),
-};
-
-/// A custom setter without a getter keeps the default getter.
-const SetterOnlyOwner = struct {
-    value: Property(u32, .{ .usage = .none, .set = set }) = .init(1),
-
-    fn set(self: *@This(), stored: u32) void {
-        self.value.value = stored + 1;
-    }
-};
-
-/// `.read_only` rejects engine sets but does not change usage flags.
-const ReadOnlyOwner = struct {
-    sealed: Property(u32, .{
-        .usage = .exported,
-        .read_only = true,
-    }) = .init(9),
-    computed: Property(f32, .{
-        .usage = .none,
-        .read_only = true,
-        .get = getComputed,
-    }) = .init(1.5),
-    writable: Property(u32, .{
-        .usage = .none,
-        .read_only = false,
-        .set = setWritable,
-    }) = .init(0),
-
-    fn getComputed(self: *const @This()) f32 {
-        return self.computed.value;
-    }
-
-    fn setWritable(self: *@This(), value: u32) void {
-        self.writable.value = value;
-    }
-};
-
-const NoProperties = struct {
-    value: u32 = 0,
-};
-
-/// Lookalike marker: discovery must ignore it.
-const Lookalike = struct {
-    value: u32 = 0,
-
-    pub fn isSelf(OtherT: type) bool {
-        return OtherT == Lookalike;
-    }
-};
-
-/// Mixed annotation kinds must not cross-classify fields.
-const MixedOwner = struct {
-    node: OnReadyAnnotation(classes.core.Node).Node("./ChildNode"),
-    lookalike: Lookalike = .{},
-    health: Property(i32, .{ .usage = .exported }) = .init(0),
-};
-
-const OnReadyAnnotation = on_ready.OnReady;
-
-/// Holder-owned user value type.
-const DeinitProbe = struct {
-    deinit_called: bool = false,
-    hook_called: bool = false,
-
-    pub fn deinit(self: *@This()) void {
-        self.deinit_called = true;
-    }
-};
-
-/// Custom `.deinit` overrides automatic value cleanup.
-const HookOwner = struct {
-    probe: Property(DeinitProbe, .{
-        .usage = .none,
-        .deinit = deinitProbe,
-    }) = .init(.{}),
-    plain: Property(u32, .{
-        .usage = .none,
-        .deinit = deinitPlain,
-    }) = .init(0),
-    plain_deinit_called: bool = false,
-
-    fn deinitProbe(self: *@This()) void {
-        self.probe.value.hook_called = true;
-    }
-
-    fn deinitPlain(self: *@This()) void {
-        self.plain_deinit_called = true;
-    }
-};
-
-/// Automatic cleanup applies even with custom accessors.
-const FieldLifetimeOwner = struct {
-    plain: Property(u32, .{ .usage = .none }) = .init(0),
-    probe: Property(DeinitProbe, .{ .usage = .none }) = .init(.{}),
-    accessor: Property(DeinitProbe, .{
-        .usage = .none,
-        .get = getAccessor,
-        .set = setAccessor,
-    }) = .init(.{}),
-
-    fn getAccessor(self: *const @This()) DeinitProbe {
-        return self.accessor.value;
-    }
-
-    fn setAccessor(self: *@This(), value: DeinitProbe) void {
-        self.accessor.value = value;
-    }
-};
-
-/// Extension over `RefCounted`; helpers resolve the engine base.
-const RefCountedExtension = struct {
-    pub const Extends = classes.core.RefCounted;
-    base: annotation_base.Base(Extends) = .{},
-};
-
-/// `.base` placeholder target.
-const InitializerBase = struct {
-    bonus: u32 = 3,
-};
-
-fn initialCount() u32 {
-    return 40;
-}
-
-fn initialDoubled(seed: u32) u32 {
-    return seed * 2;
-}
-
-fn initialFromOwner(owner: *InitializerOwner) u32 {
-    return owner.seed + 1;
-}
-
-fn initialFromBase(base: *InitializerBase) u32 {
-    return base.bonus;
-}
-
-/// `.init` placeholders: values, fields, owner, and base.
-const InitializerOwner = struct {
-    seed: u32 = 5,
-    plain: Property(u32, .{ .usage = .none }) = .init(11),
-    count: Property(u32, .{
-        .usage = .none,
-        .init = init_mod.Init(u32, initialCount, .{}),
-    }) = .init(0),
-    doubled: Property(u32, .{
-        .usage = .none,
-        .init = init_mod.Init(u32, initialDoubled, .{.{ .field = "seed" }}),
-    }) = .init(0),
-    owned: Property(u32, .{
-        .usage = .none,
-        .init = init_mod.Init(u32, initialFromOwner, .{.owner}),
-    }) = .init(0),
-    based: Property(u32, .{
-        .usage = .none,
-        .init = init_mod.Init(u32, initialFromBase, .{.base}),
-    }) = .init(0),
-    shorthand: Property(u32, .{ .usage = .none }).Init(
-        initialDoubled,
-        .{.{ .field = "seed" }},
-    ) = .init(0),
-};
-
-/// Compile-only `.init` coverage; engine paths are analyzed, not executed.
-const BuiltinInitializerOwner = struct {
-    name: Property(builtins.StringName, .{
-        .usage = .none,
-        .init = init_mod.Init(builtins.StringName, .fromLatin1, .{ "probe", false }),
-    }) = .init(undefined),
-    count: Property(u32, .{
-        .usage = .none,
-        .init = init_mod.Init(u32, initialCount, .{}),
-    }) = .init(0),
-};
-
-/// Compile-only `Variant` ownership coverage.
-const VariantValueOwner = struct {
-    value: Property(builtins.Variant, .{ .usage = .none, .type = .string }) = .init(builtins.Variant.nil),
-};
-
-/// Compile-only ownership coverage; engine calls are not executed.
-const RefLifetimeOwner = struct {
-    engine: Property(?*classes.core.RefCounted, .{ .usage = .none }) = .init(null),
-    engine_const: Property(*const classes.core.RefCounted, .{ .usage = .none }) = .init(undefined),
-    extension: Property(?*RefCountedExtension, .{ .usage = .none }) = .init(null),
-    extension_const: Property(*const RefCountedExtension, .{ .usage = .none }) = .init(undefined),
-    node: Property(?*classes.core.Node, .{ .usage = .none }) = .init(null),
-};
-
 pub fn usageBits(comptime flags: enums.PropertyUsageFlags) u32 {
     return @bitCast(flags);
 }
 
-fn check(comptime condition: bool, comptime message: []const u8) void {
-    if (!condition) @compileError("property.zig: " ++ message);
-}
-
-fn checkVariantValueProperty() void {
-    const set = setterFn(VariantValueOwner, "value") orelse @compileError("Variant value property must have a setter");
-    _ = set;
-    const desc = descriptors(VariantValueOwner)[0];
-    check(desc.type == .string, "Variant value property must use the explicit type override");
-}
-
-fn checkUsageNormalization() void {
-    check(usageBits(enums.PropertyUsageFlags.none) == 0, ".none must be zero flags");
-    check(usageBits(enums.PropertyUsageFlags.default) == 6, ".default must be PROPERTY_USAGE_DEFAULT (storage + editor)");
-    check(usageBits(enums.PropertyUsageFlags.exported) == 6, ".exported must be storage + editor");
-
-    const usage_descs = descriptors(UsageOwner);
-    check(usageBits(usage_descs[0].usage) == 0, "'.usage = .none' must normalize to zero flags");
-    check(usageBits(usage_descs[1].usage) == 2, "anonymous flag structs must normalize into PropertyUsageFlags");
-    check(usageBits(usage_descs[2].usage) == 6, "PropertyUsageFlags values must pass through unchanged");
-}
-
-fn checkVariantTypeOverride() void {
-    const descs = descriptors(VariantTypeOwner);
-    check(descs[0].type == .string, ".type enum literal must normalize");
-    check(descs[1].type == .float, "interface.VariantType value must pass through");
-    check(descs[2].type == null, "omitted .type must stay automatic");
-    check(@FieldType(VariantTypeOwner, "literal").variant_type == .string, "wrapper must expose normalized variant_type");
-}
-
-fn checkDiscovery() void {
-    const names = findPropertyFieldNames(CheckOwner);
-    check(names.len == 4, "findPropertyFieldNames must collect only Property fields, in declaration order");
-    check(std.mem.eql(u8, names[0], "count"), "findPropertyFieldNames must keep declaration order (1)");
-    check(std.mem.eql(u8, names[1], "health"), "findPropertyFieldNames must keep declaration order (2)");
-    check(std.mem.eql(u8, names[2], "ratio"), "findPropertyFieldNames must keep declaration order (3)");
-    check(std.mem.eql(u8, names[3], "tag"), "findPropertyFieldNames must keep declaration order (4)");
-
-    check(findPropertyFieldNames(NoProperties).len == 0, "classes without Property fields must report no properties");
-    check(findPropertyFieldNames(Lookalike).len == 0, "a lookalike isSelf must not be discovered"); // Lookalike itself has no Property field
-    check(isPropertyField(@FieldType(CheckOwner, "health")), "Property wrappers must identify themselves");
-    check(!isPropertyField(u32), "scalars are not Property wrappers");
-    check(!isPropertyField(@FieldType(CheckOwner, "plain")), "plain fields are not Property wrappers");
-    check(!isPropertyField(Lookalike), "a lookalike isSelf is not a Property wrapper");
-}
-
-fn checkDescriptors() void {
-    const descs = descriptors(CheckOwner);
-    check(descs.len == 4, "descriptors must cover every discovered field");
-    check(std.mem.eql(u8, descs[0].field_name, "count"), "descriptor field_name must be the Zig field name");
-    check(descs[0].value_type == u32, "descriptor value_type must be the wrapper PropertyFor");
-    check(std.mem.eql(u8, descs[0].godot_name, "count"), "default engine name must come from the field name");
-    check(std.mem.eql(u8, descs[1].godot_name, "Health"), "explicit '.name' must be used verbatim");
-    check(descs[1].value_type == i32, "descriptor value_type must follow the field");
-    check(descs[1].hint == enums.PropertyHint.range, "'.hint = .range' must normalize to PropertyHint.range");
-    check(std.mem.eql(u8, descs[1].hint_string, "0,100"), "hint_string must keep the declared bytes");
-    check(descs[1].hint_string[descs[1].hint_string.len] == 0, "hint_string must be sentinel-terminated");
-    check(usageBits(descs[1].usage) == usageBits(enums.PropertyUsageFlags.exported), "anonymous flag struct must equal the exported preset");
-    check(descs[2].hint == .none, "omitted hints default to .none");
-    check(descs[2].hint_string.len == 0, "omitted hint strings default to empty");
-    check(descs[2].hint_string[0] == 0, "omitted hint strings must still be sentinel-terminated");
-    check(usageBits(descs[3].usage) == 2, "single anonymous flag must normalize");
-
-    const naming_descs = descriptors(NamingOwner);
-    check(std.mem.eql(u8, naming_descs[0].godot_name, "health_bar"), "default engine names must use naming.comptimeConvert");
-}
-
-fn checkAccessors() void {
-    const Health = @FieldType(CheckOwner, "health");
-    check(hasCustomGetter(Health), "custom .get must be detected");
-    check(hasCustomSetter(Health), "custom .set must be detected");
-    check(!hasCustomGetter(@FieldType(CheckOwner, "count")), "properties without .get must report no custom getter");
-    check(!hasCustomSetter(@FieldType(CheckOwner, "count")), "properties without .set must report no custom setter");
-    check(hasCustomGetter(@FieldType(CheckOwner, "ratio")), "const getters must be detected");
-
-    const health_getter = getterFn(CheckOwner, "health");
-    const health_setter = setterFn(CheckOwner, "health") orelse @compileError("property.zig: custom setter must be discovered");
-    check(@TypeOf(health_getter) == fn (*CheckOwner) i32, "custom getter thunk must take a mutable owner pointer");
-    check(@TypeOf(health_setter) == fn (*CheckOwner, i32) void, "custom setter thunk must match the accessor shape");
-    check(isWritable(CheckOwner, "health"), "custom setter properties are writable");
-    check(isWritable(CheckOwner, "count"), "stored-value properties are writable by default");
-    check(isWritable(CheckOwner, "ratio"), "custom getters without setters use the default write");
-    check(setterFn(CheckOwner, "ratio") != null, "custom getters without setters expose the default setter");
-    check(@TypeOf(getterFn(CheckOwner, "ratio")) == fn (*CheckOwner) f32, "const getters must be callable through a mutable owner");
-    check(@TypeOf(getterFn(CheckOwner, "count")) == fn (*CheckOwner) u32, "default getters use the owner pointer");
-
-    const setter_only = @FieldType(SetterOnlyOwner, "value");
-    check(!hasCustomGetter(setter_only), "setter-only properties keep the default getter");
-    check(hasCustomSetter(setter_only), "setter-only properties must report their custom setter");
-    check(isWritable(SetterOnlyOwner, "value"), "setter-only properties are writable");
-    var setter_only_owner: SetterOnlyOwner = .{};
-    check(getterFn(SetterOnlyOwner, "value")(&setter_only_owner) == 1, "setter-only properties read the stored value");
-    setterFn(SetterOnlyOwner, "value").?(&setter_only_owner, 41);
-    check(getterFn(SetterOnlyOwner, "value")(&setter_only_owner) == 42, "setter-only properties call the custom setter");
-
-    var owner: CheckOwner = .{};
-    check(health_getter(&owner) == 100, "default field values must be readable through the accessor");
-    health_setter(&owner, 7);
-    check(health_getter(&owner) == 7, "custom accessors must see the same stored value");
-    setterFn(CheckOwner, "count").?(&owner, 3);
-    check(getterFn(CheckOwner, "count")(&owner) == 3, "default setter must write the stored value");
-    setterFn(CheckOwner, "ratio").?(&owner, 2.5);
-    check(getterFn(CheckOwner, "ratio")(&owner) == 2.5, "default setter must write .value behind a custom getter");
-
-    const Wrapper = Property(i32, .{ .usage = .exported });
-    var wrapper: Wrapper = .init(5);
-    check(wrapper.get() == 5, "Property.get must read the stored value");
-    wrapper.set(9);
-    check(wrapper.get() == 9, "Property.set must write the stored value");
-    check(Wrapper.PropertyFor == i32, "PropertyFor must expose the value type");
-    check(usageBits(Wrapper.usage) == usageBits(enums.PropertyUsageFlags.exported), "wrapper options must be normalized");
-    check(Wrapper.marker == marker_kind.Kind.property, "Property wrappers must declare marker.Kind.property");
-}
-
-fn checkReadOnly() void {
-    const sealed = @FieldType(ReadOnlyOwner, "sealed");
-    check(sealed.read_only, "read_only must be exposed on the wrapper");
-    check(!sealed.has_custom_get, ".read_only must keep the default getter");
-    check(!sealed.has_custom_set, ".read_only must not declare a custom setter");
-    check(isReadOnly(ReadOnlyOwner, "sealed"), ".read_only properties must reject engine set dispatch");
-    check(!isWritable(ReadOnlyOwner, "sealed"), ".read_only properties must not be writable");
-    check(setterFn(ReadOnlyOwner, "sealed") == null, ".read_only properties expose no setter");
-
-    var owner: ReadOnlyOwner = .{};
-    check(getterFn(ReadOnlyOwner, "sealed")(&owner) == 9, ".read_only properties keep the default getter");
-    check(getterFn(ReadOnlyOwner, "computed")(&owner) == 1.5, "read-only properties keep their custom getter");
-
-    check(isReadOnly(ReadOnlyOwner, "computed"), "explicit .read_only must reject the default setter");
-    check(setterFn(ReadOnlyOwner, "computed") == null, "explicit .read_only exposes no setter");
-
-    const writable = @FieldType(ReadOnlyOwner, "writable");
-    check(!writable.read_only, "read_only must normalize an explicit false");
-    check(isWritable(ReadOnlyOwner, "writable"), "explicit read_only = false must keep a custom setter writable");
-    setterFn(ReadOnlyOwner, "writable").?(&owner, 4);
-    check(owner.writable.value == 4, "explicit read_only = false must dispatch the custom setter");
-
-    // Usage flags are untouched: `.read_only` is dispatch policy, not inspector
-    // metadata. The inspector flag stays an explicit usage flag.
-    const descs = descriptors(ReadOnlyOwner);
-    check(descs.len == 3, "read-only checks must cover every Property field");
-    check(usageBits(descs[0].usage) == usageBits(enums.PropertyUsageFlags.exported), ".read_only must not change usage flags");
-    const inspector_read_only = usageBits(.{ .read_only = true });
-    check((usageBits(descs[0].usage) & inspector_read_only) == 0, ".read_only must not imply PropertyUsageFlags.read_only");
-}
-
-fn checkInitializers() void {
-    const count = @FieldType(InitializerOwner, "count");
-    check(count.has_custom_init, "has_custom_init must mirror the option");
-    check(hasCustomInitializer(count), "hasCustomInitializer must detect a declared .init");
-    check(!hasCustomInitializer(@FieldType(InitializerOwner, "plain")), "fields without .init must report no custom initializer");
-    check(!count.has_custom_get and !count.has_custom_set, ".init is creation-time only and not an engine accessor");
-
-    // Eager creation-time assignment: replace ordinary field defaults with the
-    // initializer results, resolving every placeholder form.
-    var owner: InitializerOwner = .{};
-    var base: InitializerBase = .{};
-    initPropertyFields(InitializerOwner, InitializerBase, &owner, &base);
-    check(owner.count.value == 40, ".init initializer results must be assigned eagerly");
-    check(owner.doubled.value == 10, ".init 'field' arguments must resolve owner fields");
-    check(owner.owned.value == 6, ".init 'owner' arguments must pass the owner pointer");
-    check(owner.based.value == 3, ".init 'base' arguments must pass the base pointer");
-    check(owner.shorthand.value == 10, ".Init(...) shorthand must add the same eager initializer");
-    check(hasCustomInitializer(@FieldType(InitializerOwner, "shorthand")), ".Init(...) shorthand must expose the initializer");
-    check(owner.plain.value == 11, "initPropertyFields must leave fields without .init alone");
-
-    var no_props: NoProperties = .{};
-    var dummy_base: void = {};
-    initPropertyFields(NoProperties, void, &no_props, &dummy_base);
-    check(no_props.value == 0, "initPropertyFields must ignore classes without Property fields");
-}
-
-fn checkMarkerIdentity() void {
-    check(marker_kind.is(@FieldType(CheckOwner, "health"), .property), "Property marker kind must be property");
-    check(!marker_kind.is(@FieldType(CheckOwner, "health"), .on_ready), "Property marker must not read as OnReady");
-    check(!marker_kind.is(@FieldType(CheckOwner, "health"), .base), "Property marker must not read as Base");
-
-    const mixed_props = findPropertyFieldNames(MixedOwner);
-    const mixed_on_ready = on_ready.findOnReadyFieldNames(MixedOwner);
-    check(mixed_props.len == 1, "mixed classes must report exactly their Property fields");
-    check(std.mem.eql(u8, mixed_props[0], "health"), "mixed classes must not report OnReady fields as properties");
-    check(mixed_on_ready.len == 1, "mixed classes must report exactly their OnReady fields");
-    check(std.mem.eql(u8, mixed_on_ready[0], "node"), "mixed classes must not report Property fields as OnReady");
-    check(!isPropertyField(@FieldType(MixedOwner, "node")), "OnReady wrappers are not Property fields");
-    check(!marker_kind.is(@FieldType(MixedOwner, "lookalike"), .property), "lookalikes must not declare a marker");
-}
-
-fn checkLifetime() void {
-    // Custom `.deinit` hooks: detected, callable, and validated through
-    // `descriptors` once the owning class is known.
-    const hooked = @FieldType(HookOwner, "probe");
-    check(hasCustomDeinit(hooked), "custom .deinit must be detected");
-    check(hooked.has_custom_deinit, "has_custom_deinit must mirror the option");
-    check(!hasCustomDeinit(@FieldType(FieldLifetimeOwner, "probe")), "fields without .deinit report no custom deinit");
-    const hook_fn = deinitFn(HookOwner, "probe") orelse @compileError("property.zig: custom .deinit must be discoverable");
-    check(@TypeOf(hook_fn) == fn (*HookOwner) void, "custom .deinit thunk must take a mutable owner pointer");
-    check(deinitFn(FieldLifetimeOwner, "probe") == null, "fields without .deinit expose no custom deinit hook");
-    _ = descriptors(HookOwner);
-
-    // Custom hook overrides the automatic value cleanup.
-    var hook_owner: HookOwner = .{};
-    deinitPropertyFields(HookOwner, &hook_owner);
-    check(hook_owner.probe.value.hook_called, "custom .deinit must run");
-    check(!hook_owner.probe.value.deinit_called, "custom .deinit must override the automatic value cleanup");
-    check(hook_owner.plain_deinit_called, "custom .deinit must run for any value type");
-
-    // Automatic cleanup: value types with `deinit`, independent of accessors.
-    var field_owner: FieldLifetimeOwner = .{};
-    deinitPropertyFields(FieldLifetimeOwner, &field_owner);
-    check(field_owner.probe.value.deinit_called, "struct value types declaring deinit must be deinitialized");
-    check(field_owner.accessor.value.deinit_called, "custom accessors must not skip automatic cleanup");
-
-    // Non-property fields and classes without Property fields are no-ops.
-    var no_props: NoProperties = .{};
-    deinitPropertyFields(NoProperties, &no_props);
-    check(no_props.value == 0, "deinitPropertyFields must ignore non-property fields");
-
-    // The managed-builtin allow-list is explicit and does not accept arbitrary
-    // structs, even ones declaring `deinit`.
-    check(isKnownManagedBuiltin(builtins.String), "String must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.StringName), "StringName must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.NodePath), "NodePath must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.Callable), "Callable must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.Signal), "Signal must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.Array), "Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.Dictionary), "Dictionary must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedByteArray), "PackedByteArray must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedColorArray), "PackedColorArray must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedFloat32Array), "PackedFloat32Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedFloat64Array), "PackedFloat64Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedInt32Array), "PackedInt32Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedInt64Array), "PackedInt64Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedStringArray), "PackedStringArray must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedVector2Array), "PackedVector2Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedVector3Array), "PackedVector3Array must be a known managed builtin");
-    check(isKnownManagedBuiltin(builtins.PackedVector4Array), "PackedVector4Array must be a known managed builtin");
-    check(!isKnownManagedBuiltin(builtins.Vector2), "plain value builtins are not managed builtins");
-    check(!isKnownManagedBuiltin(builtins.Variant), "Variant is not a managed builtin");
-    check(!isKnownManagedBuiltin(u32), "scalars are not managed builtins");
-    check(!isKnownManagedBuiltin(DeinitProbe), "arbitrary structs are not known managed builtins");
-    check(!isKnownManagedBuiltin(?*classes.core.RefCounted), "RefCounted pointers are managed by references, not deinit");
-}
-
-/// Compile-only ownership coverage.
-fn checkOwnershipRuntimePaths() void {
-    retainRefCounted(?*classes.core.RefCounted, null);
-    releaseRefCounted(?*const classes.core.RefCounted, null);
-    retainRefCounted(*const RefCountedExtension, undefined);
-    releaseRefCounted(*RefCountedExtension, undefined);
-
-    var owner: RefLifetimeOwner = .{};
-    deinitPropertyFields(RefLifetimeOwner, &owner);
-}
-
-/// Compile-only `.init` coverage.
-fn checkInitializerEnginePaths() void {
-    var owner: BuiltinInitializerOwner = .{};
-    var dummy_base: void = {};
-    initPropertyFields(BuiltinInitializerOwner, void, &owner, &dummy_base);
-}
-
-fn comptimeChecks() void {
-    @setEvalBranchQuota(500_000);
-    checkUsageNormalization();
-    checkVariantTypeOverride();
-    checkVariantValueProperty();
-    checkDiscovery();
-    checkDescriptors();
-    checkAccessors();
-    checkReadOnly();
-    checkInitializers();
-    checkMarkerIdentity();
-    checkLifetime();
-}
-
-comptime {
-    comptimeChecks();
-    _ = &checkOwnershipRuntimePaths;
-    _ = &checkInitializerEnginePaths;
-}
-
-/// Runs this module's compile-only checks.
-pub fn comptimeSelfCheck() void {
-    comptime comptimeChecks();
-    _ = &checkOwnershipRuntimePaths;
-    _ = &checkInitializerEnginePaths;
-}
-
 const std = @import("std");
+
 const bindings = @import("bindings");
 const interface = bindings.interface;
 const naming = @import("naming");
 
-const enums = @import("../enums.zig");
-
-const reflect = @import("../reflect/reflect.zig");
-
 const builtins = @import("../builtins/builtins.zig");
-
-const classes = @import("../classes/classes.zig");
-
-const annotation_base = @import("base.zig");
-
+const enums = @import("../enums.zig");
+const ownership = @import("../ownership.zig");
+const reflect = @import("../reflect/reflect.zig");
+const constants = @import("constants.zig");
 const init_mod = @import("init.zig");
-
-const on_ready = @import("on_ready.zig");
-
 const marker_kind = @import("marker.zig");
+const property_hint = @import("property_hint.zig");
