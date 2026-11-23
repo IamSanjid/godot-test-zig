@@ -4,7 +4,8 @@
 property. Inspector hints are derived from the declared value type, so enum,
 bitfield, and object pointer fields need no hint options. The implemented
 backend uses dynamic `ClassCreationInfo6` callbacks; bindgen/codegen play no
-part in it.
+part in it. Declared types, property metadata, and set/get values go through
+`godot.conversion`; see [conversion.md](conversion.md).
 
 Status:
 
@@ -13,9 +14,11 @@ Status:
 - `PropertyGroups` section trees and type-derived property hints (enum,
   bitfield, and Node/Resource object pointers) are implemented on the dynamic
   list.
-- Property lifetime is explicit: the default setter manages only managed
-  builtins (`godot.builtins.isManaged`), `Variant`, and `RefCounted` references
-  (`godot.ownership`); free-time cleanup is opt-in per class.
+- Property ownership is explicit per field: `.set` and `.deinit` accept
+  `.best_effort` or a function. Non-trivial value types (managed builtins,
+  `Variant`, `RefCounted` pointers, and structs declaring `deinit`) must declare
+  `.deinit` and, unless read-only, `.set`; trivial types keep implicit plain
+  assignment and no cleanup. Free-time cleanup stays opt-in per class.
 - Read-only properties (`.read_only`) and eager creation-time initializers
   (`.init`) are implemented on the same field annotation.
 - Static ClassDB property registration and extension method registration remain
@@ -65,6 +68,8 @@ The returned wrapper:
 - exposes the original `options` plus normalized option constants (`name`,
   `usage`, `hint`, `hint_string`, `variant_type`, `read_only`,
   `has_custom_get`, `has_custom_set`, `has_custom_init`, `has_custom_deinit`)
+- reports `has_custom_set` / `has_custom_deinit` as true only when the option
+  holds a function value; `.best_effort` is a mode, not a custom accessor
 - exposes `marker = marker.Kind.property` for discovery
 
 Unknown option names, wrong option value types, a missing `.usage`, and invalid
@@ -78,17 +83,115 @@ accessor shapes are compile errors.
 | `name` | `?[:0]const u8` | no | Exact engine property name; defaults from the field name |
 | `hint` | `enums.PropertyHint` or an enum literal such as `.range` | no | Inspector hint; derived from the value type when both `.hint` and `.hint_string` are omitted ([Property hints](#property-hints)), else `.none` |
 | `hint_string` | `[]const u8` | no | Inspector hint string; derived for enum/bitfield/object types when both `.hint` and `.hint_string` are omitted, else empty; copied at comptime |
-| `type` | `interface.VariantType` or an enum literal such as `.object` | no | Explicit engine Variant type; defaults to `Variant.typeFor(T)` |
+| `type` | `interface.VariantType` or an enum literal such as `.object` | no | Explicit engine Variant type; defaults to `godot.conversion.variantType(T)` |
 | `get` | `fn (*Owner) T` or `fn (*const Owner) T` | no | Custom getter; defaults to reading the field value |
-| `set` | `fn (*Owner, T) void` | no | Custom setter; defaults to writing the field value |
+| `set` | `.best_effort` or `fn (*Owner, T) void` | no for trivial types; yes for non-trivial writable types | Write mode. `.best_effort` applies the type-driven preset; a function is a custom setter. Omitted on a trivial type means plain assignment. A `read_only` field has no setter. See [Ownership modes](#ownership-modes) |
 | `read_only` | `bool` | no | Rejects engine set dispatch while keeping the getter; cannot be combined with `.set` |
 | `init` | `Init(T, func, args)` type from `annotations/init.zig` | no | Eager creation-time initializer for the stored value |
-| `deinit` | `fn (*Owner) void` | no | Cleanup hook for `deinitPropertyFields`; overrides that field's automatic cleanup |
+| `deinit` | `.best_effort` or `fn (*Owner) void` | no for trivial types; yes for non-trivial types | Cleanup mode for `deinitPropertyFields`. `.best_effort` applies the type-driven preset; a function is a custom cleanup hook. Omitted on a trivial type means no cleanup. Omitted on a non-trivial type is a compile error. See [Ownership modes](#ownership-modes) |
 
-There is no `.export` key (`export` is a Zig keyword), no `.ownership` option,
-and no group option. Sections are declared once per class with
-`PropertyGroups`; see [Property groups](#property-groups). New options must stay
-additive and must not change the annotation shape.
+There is no `.export` key (`export` is a Zig keyword), no separate `.ownership`
+option (`.set`/`.deinit`, with `.read_only` deciding writability, are the
+ownership declaration), and no group option. Sections are declared once per class
+with `PropertyGroups`; see [Property groups](#property-groups). New options must
+stay additive and must not change the annotation shape.
+
+## Ownership modes
+
+`.set`, `.deinit`, and `.read_only` are the ownership declaration. `.set` and
+`.deinit` each accept `.best_effort` or a function; the option names themselves
+do not accept `null` or a "default" spelling.
+
+The value type decides whether the modes are required. A type is **non-trivial**
+when `godot.annotations.property.requiresExplicitOwnership(T)` is true:
+
+- a managed builtin (`godot.builtins.isManaged`, generated from the engine
+  `has_destructor` flag: `String`, `StringName`, `Array`, `Dictionary`, ...);
+- `Variant`;
+- a `RefCounted` object pointer (`godot.reflect.isRefCountedPointer`);
+- a struct value type declaring `deinit`.
+
+Everything else is **trivial**: scalars, enums, bitfields, plain value builtins
+(`Vector2`, `Color`, ...), non-`RefCounted` object pointers, and structs without
+`deinit`. A custom type with a `Conversion` marker is classified by its declared Zig type,
+not by its engine type.
+
+Rules:
+
+- Trivial type: both options may be omitted. Omitted `.set` writes `.value` by
+  plain assignment; omitted `.deinit` cleans nothing. `.best_effort` is accepted
+  and behaves as the preset below.
+- Non-trivial writable type: `.set` and `.deinit` are both required. `.set` must
+  be `.best_effort` or a function; `.deinit` must be `.best_effort` or a
+  function. Leaving either one out is a compile error.
+- Non-trivial `.read_only = true`: there is no setter; `.deinit` is required.
+  `.read_only` with any `.set` is a compile error.
+- The backend never calls a `.deinit` function from a setter; it calls it only
+  through `deinitPropertyFields` (directly or via
+  `ClassOptions.auto_property_cleanup`). How a new value replaces the old one is
+  entirely the `.set` mode's job. (The `.best_effort` setter still calls a
+  managed builtin's own `deinit` while replacing it; that is setter behavior, not
+  the `.deinit` option.)
+
+A scalar with both options omitted, plus `String` and `RefCounted` properties
+with explicit best-effort modes:
+
+```zig
+// Trivial: no modes; writes are plain assignment, cleanup does nothing.
+health: godot.annotations.Property(i32, .{
+    .usage = .exported,
+}) = .init(100),
+
+// Managed builtin: writable and cleanup modes are explicit.
+label: godot.annotations.Property(godot.builtins.String, .{
+    .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
+}).Init(.fromLatin1, .{"hero"}),
+
+// RefCounted pointer: the same preset retains/releases the reference.
+target: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+    .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
+}) = .init(null),
+```
+
+### `.best_effort`
+
+The preset reproduces the type-driven behavior the backend used to apply
+implicitly; it is still a per-field opt-in:
+
+- setter: managed builtin or `Variant` - deinitialize the previous value, then
+  assign the new one; `RefCounted` pointer - retain the new reference before
+  releasing the old one, then assign; everything else - plain assignment. The
+  new value is stored even when it is the current value.
+- cleanup: call the value type's `deinit` when it declares one (managed builtins
+  and `Variant` do); otherwise release a `RefCounted` pointer's reference
+  (`godot.ownership.releaseRefCounted`; a null optional is a no-op); otherwise
+  do nothing.
+
+`.best_effort` is a preset, not a universal owner. It does not deinitialize a
+user struct that is not a managed builtin: a struct with `deinit` gets plain
+assignment on set, so use a function `.set` (or a `.deinit`-aware custom setter)
+when replacing the value must release the old one. It also does not inspect a
+converter's engine type: a custom struct whose engine is a `RefCounted` pointer
+is plain assignment and no-op cleanup, as above. Use the pointer type directly or
+write custom functions when setter retain/release is wanted.
+
+The public helpers behind the preset live in `godot.annotations.property`:
+
+```zig
+const property = godot.annotations.property;
+property.setBestEffort(T, &field, value);
+property.deinitBestEffort(T, &field);
+if (property.requiresExplicitOwnership(T)) { ... }
+```
+
+`setBestEffort` and `deinitBestEffort` are the preset bodies. Use them directly
+only when a function `.set`/`.deinit` needs the same behavior, or when tooling
+must apply the same classification. The option values are the normal declaration
+surface.
 
 ## Usage flags
 
@@ -169,6 +272,10 @@ pub const Groups = godot.annotations.PropertyGroups(.{
   `godot.annotations.property.layout(T)` for tooling and tests.
 - Without a marker, `get_property_list` keeps the visible fields in field
   declaration order, as before.
+
+The marker declares `marker.Kind.property_groups`; discovery checks that identity
+and still applies every rule above. See
+[annotations.md](annotations.md#marker-identity).
 
 ## Property hints
 
@@ -252,11 +359,14 @@ fn setHealth(self: *@This(), value: i32) void {
 ```
 
 - Accepted getter shapes: `fn (*Owner) T` and `fn (*const Owner) T`.
-- Accepted setter shape: `fn (*Owner, T) void`.
-- Both must be normal runtime functions, not generic ones.
-- No getter: the default reads `.value`. No setter: the default writes `.value`.
-- A custom getter without a custom setter reads through the getter and writes
-  the default `.value`; add `.read_only = true` to reject engine writes. A
+- Accepted setter values: `.best_effort` or `fn (*Owner, T) void`.
+- A function form must be a normal runtime function, not a generic one.
+- No getter: the default reads `.value`. No setter on a trivial field: plain
+  assignment. A writable non-trivial field cannot omit `.set`; see
+  [Ownership modes](#ownership-modes).
+- A custom getter on a trivial field without `.set` reads through the getter and
+  plain-assigns; add `.read_only = true` to reject engine writes. On a
+  non-trivial field a custom getter does not remove the `.set` requirement. A
   custom setter without a custom getter keeps the default getter and stays
   writable.
 - `.read_only = true` is the explicit read-only form; see
@@ -265,8 +375,10 @@ fn setHealth(self: *@This(), value: i32) void {
 - The wrapper does not know the owner type, so owner-pointer shapes are
   validated when descriptors are collected for the owning class (compile time).
 
-Custom-accessor fields are user-managed: the backend forwards the engine value
-through the declared accessor but does not manage the field's lifetime; see
+Fields with a function `.set` or `.deinit` are user-managed: a function `.set`
+owns replacement of the engine value, a function `.deinit` owns cleanup, and the
+backend does not manage their lifetime. `.best_effort` is the backend preset. A
+custom getter is read-only policy and never manages lifetime. See
 [Lifetime](#lifetime).
 
 ## Read-only properties
@@ -285,16 +397,28 @@ sealed: godot.annotations.Property(u32, .{
 - `set_func` returns false for the property, so engine `Object.set` does not
   change it. The property still appears in `get_property_list` according to its
   `usage` bits.
-- `.read_only` cannot be combined with a custom `.set`; that combination is a
-  compile error.
+- `.read_only` cannot be combined with `.set` (function or `.best_effort`); that
+  combination is a compile error.
 - `.read_only = true` is the only read-only form. It can be used alone or with a
-  custom getter. A custom getter without a custom setter remains writable through
-  the default `.value` writer unless `.read_only` is set.
+  custom getter. A non-trivial read-only field must still declare `.deinit`; a
+  trivial field may omit both modes.
+- On a trivial field, a custom getter without a setter remains writable through
+  plain assignment unless `.read_only` is set.
 - `.read_only` is dispatch policy only. It does not set
   `enums.PropertyUsageFlags.read_only`; that flag is inspector and
   serialization metadata and stays whatever `.usage` declares.
 - Zig-side access is unaffected: the wrapper's `set()` method and direct field
   writes still store values.
+
+A non-trivial read-only property declares only `.deinit`:
+
+```zig
+sealed_label: godot.annotations.Property(godot.builtins.String, .{
+    .usage = .exported,
+    .read_only = true,
+    .deinit = .best_effort,
+}).Init(.fromLatin1, .{"sealed"}),
+```
 
 ## Creation-time initializers
 
@@ -304,6 +428,8 @@ creation, before user `InitCallback` code runs:
 ```zig
 name: godot.annotations.Property(godot.builtins.StringName, .{
     .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
     .init = godot.annotations.Init(
         godot.builtins.StringName,
         .fromLatin1,
@@ -313,6 +439,8 @@ name: godot.annotations.Property(godot.builtins.StringName, .{
 
 label: godot.annotations.Property(godot.builtins.String, .{
     .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
     .init = godot.annotations.Init(godot.builtins.String, .fromLatin1, .{"Hero"}),
 }) = .init(undefined),
 ```
@@ -322,6 +450,8 @@ The same initializer can be chained with `.Init(...)`:
 ```zig
 the_name: godot.annotations.Property(godot.builtins.StringName, .{
     .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
 }).Init(.fromLatin1, .{ "hero", false }),
 ```
 
@@ -373,9 +503,9 @@ storage-usage property values; see [registration.md](registration.md#hot-reload)
 
 ### Initializer ownership
 
-The initializer result is stored directly in `.value`; custom accessors are not
-called, and the backend applies no conversion, retain, or cleanup. The returned
-value must be valid and owned according to the field's cleanup model:
+The initializer result is stored directly in `.value`; `.set`, a custom getter,
+and conversion are not called, and the backend applies no retain or cleanup. The
+returned value must be valid and owned according to the field's `.deinit` mode:
 
 - managed builtins must come from owning constructors
   (`String.fromLatin1`, `StringName.fromLatin1(..., false)`, ...), never a cached
@@ -384,9 +514,9 @@ value must be valid and owned according to the field's cleanup model:
   optional pointer;
 - a user struct value with `deinit` must be fully initialized.
 
-Cleanup stays explicit: the default setter's overwrite handling and
-`deinitPropertyFields`/`auto_property_cleanup` apply to initialized values as
-usual (see [Lifetime](#lifetime)).
+Cleanup stays explicit: the field's `.set` mode handles overwrite and its
+`.deinit` mode (or none) handles free-time cleanup; both apply to initialized
+values as usual (see [Lifetime](#lifetime)).
 
 ## Property type override
 
@@ -403,10 +533,12 @@ The value must be a concrete `interface.VariantType` value or an enum literal
 such as `.int`, `.string`, or `.object`. `.nil` and `.variant_max` are rejected.
 
 This is a metadata override, not a conversion hook: storage and conversion still
-use the declared `PropertyFor` (`Variant.asDeclared`/`Variant.initDeclared`). Use
-it only when the value type and the desired engine type are consistent; future
-custom-type adapter hooks can layer on top of it and the rest of the property
-pipeline keeps its normal behavior.
+follow the declared `PropertyFor` through `godot.conversion`
+(`decodeVariant`/`encodeVariant`), including a `Conversion` marker. An
+explicit `.type` does not bypass the required `.variant` support and does not
+change how a value is encoded. Use it only when the declared type's engine
+representation and the desired engine type are consistent; see
+[conversion.md](conversion.md).
 
 ## Engine property name
 
@@ -455,9 +587,13 @@ pub const PropertyDescriptor = struct {
 Accessors are not part of the descriptor. The backend resolves them through the
 `godot.annotations.property.getterFn`/`setterFn` helpers, which also validate
 the owner pointer shapes and derive whether a field is read-only; `.read_only`
-is part of that same decision. `godot.annotations.property.hasCustomDeinit`/
-`deinitFn` are the same shape check for the optional `.deinit` hook, and
-`deinitPropertyFields` is the cleanup tool built on them.
+is part of that same decision. `setterFn` resolves `.best_effort` and function
+setters; `setBestEffort` is the preset body. `hasCustomSetter` and the wrapper's
+`has_custom_set` stay false for `.best_effort`. `hasCustomDeinit`/`deinitFn` are
+the shape check for the function-valued `.deinit` only: `.best_effort` is not a
+custom hook, and `deinitPropertyFields` branches on the declared mode, using
+`deinitBestEffort` for the preset. `requiresExplicitOwnership` is the value-type
+classification behind the required-mode compile errors.
 `godot.annotations.property.hasCustomInitializer` reports the optional `.init`
 option, and `initPropertyFields` is the pass that runs it.
 
@@ -476,17 +612,17 @@ are all zero-usage still gets set/get, but no property list.
 
 - `set_func` matches the incoming engine `StringName` against every descriptor,
   including zero-usage ones, converts the borrowed `Variant` with
-  `Variant.asDeclared`, and calls the
-  setter. Unknown names, read-only properties (`.read_only`), and type mismatches
-  return false. `nil` and null objects are accepted for optional object pointers.
-  Engine object values are additionally checked at runtime with `Object.isClass`
-  against the declared engine class (engine subclasses are accepted) before the
-  backend stores or retains the pointer; a Variant holding an object of the
-  wrong class is rejected and takes no reference. Extension-class targets need
-  no extra check because the conversion resolves only that exact registered
-  extension instance.
+  `godot.conversion.decodeVariant`, and calls the setter. Unknown names,
+  read-only properties (`.read_only`), and type mismatches return false. `nil`
+  and null objects are accepted for optional object pointers. Engine object
+  values are additionally checked at runtime with `Object.isClass` against the
+  declared engine class (engine subclasses are accepted) before the backend
+  stores or retains the pointer; a Variant holding an object of the wrong class
+  is rejected and takes no reference. Extension-class targets need no extra
+  check because `decodeVariant` resolves only that exact registered extension
+  instance.
 - `get_func` calls the getter and writes an owned `Variant` built with
-  `Variant.initDeclared` into the engine return slot.
+  `godot.conversion.encodeVariant` into the engine return slot.
 - `get_property_list_func` returns a lazy per-class, process-lifetime static
   table of `PropertyInfo` entries: the `PropertyGroups` section tree
   interleaved with the non-zero-usage descriptors, or those descriptors in
@@ -500,19 +636,25 @@ are all zero-usage still gets set/get, but no property list.
 
 `PropertyInfo` contents are derived at comptime:
 
-- `type` from `.type` when provided, otherwise `Variant.typeFor(value_type)`
-  for every descriptor, including zero-usage ones: hidden properties still
-  dispatch through set/get, so a value type with no Variant mapping (for example
-  `Variant` itself) is a compile error even when omitted from the list unless an
-  explicit `.type` is supplied. `Property(Variant)` is supported with an explicit
-  `.type`; the default setter deinitializes the previous Variant on overwrite.
-  Supported default values are scalars,
-  enums, packed bitfields, codegen builtins, and engine/extension object class
-  pointers.
+- `type` from `.type` when provided, otherwise
+  `godot.conversion.variantType(value_type)` for every descriptor, including
+  zero-usage ones: hidden properties still dispatch through set/get, so a value
+  type with no Variant type (for example `Variant` itself, whose transparent
+  storage has no tag) is a compile error even when omitted from the list unless
+  an explicit `.type` is supplied. `Property(Variant)` is supported with an
+  explicit `.type`; because `Variant` is non-trivial it also needs `.set` and
+  `.deinit` (or just `.deinit` when read-only). The `.best_effort` setter
+  deinitializes the previous Variant on overwrite; a custom setter owns it. A
+  type with no conversion support at all is rejected before this fallback, and
+  an explicit `.type` does not rescue it. Supported default values are scalars,
+  enums, packed bitfields, codegen builtins, engine/extension object class
+  pointers, and custom types with a `Conversion` marker whose engine type is
+  one of those.
 - `name` from the engine property name, or the verbatim section name for a
   `PropertyGroups` entry.
-- `class_name` from the object class name for object properties (the extension
-  class name for extension classes), from the `<Class>.<Enum>` /
+- `class_name` from the class behind the engine representation for object
+  properties (a custom converter contributes its `.engine` class; extension
+  classes use their registered name), from the `<Class>.<Enum>` /
   `<Class>.<Flags>` qualifier for same-class registered enum/bitfield hints, and
   empty otherwise.
 - `hint`, `hint_string`, and `usage` from the descriptor.
@@ -525,36 +667,42 @@ dynamic only.
 
 ## Lifetime
 
-Property values are not cleaned up automatically when an instance is freed. The
-default setter manages only the value families the backend understands;
-everything else, including cleanup at free, is the owner's decision.
+Property values are not cleaned up automatically when an instance is freed. Each
+field's `.set` and `.deinit` modes are the whole policy; cleanup never infers a
+mode from the value type.
 
-### Default setter
+### Setter modes
 
-A field uses the default setter when it declares no custom `.set`. A custom
-`.get` changes only the read path; unless `.read_only = true`, the default setter
-still writes `.value` using this type-driven policy. On each engine set the
-converted value is stored type-driven:
+A writable field has exactly one write path:
 
-- managed builtin (`godot.builtins.isManaged`, generated from
-  `extension_api.json` `has_destructor`) or `Variant`: the previous field value
-  is deinitialized, then the new value is stored. `Property(Variant)` requires an
-  explicit `.type` override.
-- `RefCounted` object pointer: the new reference is retained before the previous
-  one is released (`godot.ownership.retainRefCounted` /
-  `godot.ownership.releaseRefCounted`), so assigning the current value back is
-  safe. The value from `Variant.as` is borrowed and ownership follows the
-  declared type, so only `RefCounted` pointer types are retained/released;
-  non-`RefCounted` object pointers (for example `*Object` or `*Node`) are
-  borrowed and stored unchanged.
-- everything else (scalars, enums, bitfields, plain value builtins, arbitrary
-  user structs): plain assignment. The backend does not guess ownership for user
-  types, even when they declare `deinit`.
+- a function `.set` is a custom setter. The backend decodes the engine value and
+  hands it over; the function owns replacement and any reference transfer.
+- `.set = .best_effort` is the type-driven preset described in
+  [Ownership modes](#ownership-modes): a managed builtin or `Variant`
+  deinitializes the previous value then assigns; a `RefCounted` pointer retains
+  the new reference before releasing the old one then assigns; everything else
+  is plain assignment.
+- no `.set` is allowed only on a trivial type and is plain assignment.
 
-Plain value builtins such as `Vector2` and user structs are not managed by the
-setter. `Variant` is handled separately because it is not a codegen builtin with
-`toBinding` conversion. The policy lives in `godot.ownership` and
-`godot.builtins`: `godot.builtins.isManaged` for managed builtins,
+A non-trivial writable type cannot omit `.set` or `.deinit`. `.deinit` never
+participates in the write path, even when it is a function. `Property(Variant)`
+is non-trivial: it needs an explicit `.type`, `.set`, and `.deinit` (a read-only
+Variant needs `.type` and `.deinit` but no `.set`).
+
+A field managed by `.best_effort` must hold a valid owned value on every set: an
+owned `RefCounted` pointer must start as `null` or already own a reference.
+Engine builtin fields cannot use a normal field default because builtin
+construction is a runtime dispatcher call; initialize them with an `.init`
+initializer or in `InitCallback` with owned constructors
+(`String.fromLatin1`, `String.fromUtf8`, `StringName.fromLatin1(..., false)`,
+...). Never store a cached literal from `fromComptimeLatin1` in such a field:
+the `.best_effort` setter deinitializes the previous value on overwrite and its
+cleanup deinitializes it on free, and cached literals must never be
+deinitialized. A custom `.set` must make the same guarantee for whatever it
+stores.
+
+The primitive policy lives in `godot.ownership` and `godot.builtins`:
+`godot.builtins.isManaged` for managed builtins,
 `godot.ownership.retainRefCounted` / `godot.ownership.releaseRefCounted` for
 `RefCounted` values, `godot.ownership.retainObjectReference` when only the engine
 `Object*` is known, and `godot.ownership.releaseConstructedBase` for a base
@@ -562,35 +710,38 @@ constructed by `classdb_construct_object3`.
 
 ### Custom accessors
 
-A custom `.get` overrides only the read path. A custom `.set` overrides only the
-write path. When only `.get` is present, writes still go through the default
-setter and its type-driven lifetime policy unless `.read_only` is set.
+A custom `.get` overrides only the read path. A function `.set` overrides only
+the write path; `.best_effort` and an omitted setter are backend modes. When only
+`.get` is present, a trivial field still uses plain assignment and a non-trivial
+field still requires `.set`.
 
-- a custom `.set` for a deinit type receives the value owned by `Variant.as`; it
-  must store, transfer, or deinitialize it;
-- object pointers from `Variant.as` are borrowed, so a custom setter is not
+- a custom `.set` for a deinit type receives the value decoded by
+  `godot.conversion.decodeVariant`; it must store, transfer, or deinitialize it;
+- object pointers from `decodeVariant` are borrowed, so a custom setter is not
   handed a reference;
 - a custom getter must return a borrowed handle for deinit types: return the
   stored value (a shallow copy is fine), not a freshly constructed owned
-  `String`/`Array`. `Variant.init` copies the returned value and the backend
-  does not deinit it, so returning a fresh owned value leaks one reference per
-  read;
+  `String`/`Array`. `godot.conversion.encodeVariant` copies the returned value
+  and the backend does not deinit it, so returning a fresh owned value leaks one
+  reference per read;
 - a custom getter for an object pointer returns a borrowed pointer;
-  `Variant.init` takes a Variant-owned `RefCounted` reference or stores a
+  `encodeVariant` takes a Variant-owned `RefCounted` reference or stores a
   borrowed non-`RefCounted` pointer, so the object must stay valid for the
   lifetime of the returned Variant.
 
 ### Explicit cleanup
 
-`annotations.deinitPropertyFields(T, instance)` is an unconditional best-effort
-helper. Per `Property` field, in order:
+`annotations.deinitPropertyFields(T, instance)` runs each field's declared
+`.deinit` mode; it never falls back to the value type. Per `Property` field, in
+order:
 
-1. a custom `.deinit` hook is called (it handles null and any other state);
-2. otherwise a struct value type declaring `deinit` is deinitialized;
-3. otherwise a `RefCounted` object pointer releases its reference
-   (`godot.ownership.releaseRefCounted`; a null optional pointer is skipped,
-   never read as non-null);
-4. otherwise nothing happens.
+1. a function `.deinit` is called (it handles null and any other state);
+2. `.deinit = .best_effort` runs the preset: call the struct value type's
+   `deinit` when it declares one (managed builtins and `Variant` do), otherwise
+   release a `RefCounted` reference (`godot.ownership.releaseRefCounted`; a null
+   optional pointer is skipped, never read as non-null), otherwise nothing;
+3. no `.deinit` mode: nothing happens, even for a managed builtin, `Variant`,
+   `RefCounted` pointer, or struct declaring `deinit`.
 
 The helper ignores custom accessors, usage flags, and engine dispatch: it walks
 the declared fields directly. It does not free the instance or its storage, and
@@ -599,23 +750,21 @@ caller guarantees that the fields hold valid values: never call it while a field
 still holds `undefined`. A class without `Property` fields is a no-op; a
 non-struct type is a compile error.
 
-`.deinit` is a normal `fn (*Owner) void` option. Its shape is validated when the
-`Property` is declared and its owner pointer when the field is resolved for the
-owning class (`godot.annotations.property.descriptors` or cleanup). It runs only
-when cleanup is requested
-(a manual `deinitPropertyFields` call or the opt-in class flag), not on engine
-set: the default setter's overwrite handling is unchanged. It overrides the
-automatic rules above for its field, so it must handle everything that field
-needs, including null. A custom-accessor field gets automatic best-effort cleanup
-unless it declares `.deinit`; add a `.deinit` hook when the generic rules are
-wrong for that field.
+`.deinit` is `.best_effort` or a normal `fn (*Owner) void`. A function's shape is
+validated when the `Property` is declared and its owner pointer when the field is
+resolved for the owning class (`godot.annotations.property.descriptors` or
+cleanup). It runs only when cleanup is requested (a manual
+`deinitPropertyFields` call or the opt-in class flag), not on engine set: a
+`.deinit` function is cleanup only, never a set hook. It is the field's entire
+cleanup policy; there is no automatic fallback underneath it.
 
 Nothing calls the helper automatically unless the class opts in:
 
 - default (`ClassOptions.auto_property_cleanup = false`, passed to `FreeInstance`
   as `false` by `Registry`): after the optional `DeinitCallback`, the instance
-  memory is destroyed and property values are left as-is. Release them in `DeinitCallback`, either by calling
-  `deinitPropertyFields` or by releasing the fields directly:
+  memory is destroyed and property values are left as-is. Release them in
+  `DeinitCallback`, either by calling `deinitPropertyFields` or by releasing the
+  fields directly:
 
   ```zig
   pub const Deinit = godot.annotations.DeinitCallback(@This(), deinit);
@@ -630,16 +779,6 @@ Nothing calls the helper automatically unless the class opts in:
   `annotations.deinitPropertyFields(T, instance)` after `DeinitCallback`, then
   destroys the instance. Do not also clean the same fields manually in
   `DeinitCallback` when the flag is on, or they are cleaned twice.
-
-The default setter still expects valid values on set: a field it manages must
-hold a valid owned value. An owned `RefCounted` pointer must start as `null` or
-already own a reference. Engine builtin fields cannot use a normal field default,
-because builtin construction is a runtime dispatcher call; initialize them with a
-`.init` initializer or in `InitCallback` with owned constructors
-(`String.fromLatin1`, `String.fromUtf8`, `StringName.fromLatin1(..., false)`,
-...). Never store a cached literal from `fromComptimeLatin1` in such a field: the
-setter deinitializes the previous value on overwrite, cleanup deinitializes it on
-free, and cached literals must never be deinitialized.
 
 Failure order during creation, including which values are already assigned when
 `InitCallback` returns an error, is in
@@ -664,8 +803,12 @@ Failure order during creation, including which values are already assigned when
 - no `OnReady` coupling for properties; `.init` is creation-time only, and
   scene-dependent values use custom getters or `OnReady` fields
 - no lazy or per-access property initializers
-- no automatic value tracking or implicit cleanup; the lifetime tools are
-  explicit (see [Lifetime](#lifetime))
+- no implicit ownership inference for non-trivial types: managed builtins,
+  `Variant`, `RefCounted` pointers, and structs declaring `deinit` require
+  explicit `.set`/`.deinit` modes, and `deinitPropertyFields` never falls back to
+  the value type
+- no automatic value tracking; cleanup runs only through an explicit `.deinit`
+  mode (see [Lifetime](#lifetime))
 - no bindgen/codegen changes for extension properties
 
 ## Future work

@@ -18,16 +18,20 @@ const Flags = bitpack struct(u32) {
 
 // The fixture classes below are compile-only: they are never registered or
 // instantiated. Owned fields (String, StringName, object pointers) are
-// initialized with `undefined` only so the annotation-layer default setter
-// ownership paths and the opt-in `annotations.deinitPropertyFields` cleanup are
-// analyzed; those values are never read or released at runtime.
+// initialized with `undefined` only so the best-effort setter ownership paths
+// and the opt-in `annotations.deinitPropertyFields` cleanup are analyzed; those
+// values are never read or released at runtime.
 
 /// Extension class over an engine `RefCounted` base: opt-in class cleanup must
 /// release the owned builtin field of a refcounted extension class.
 const TestRefCounted = struct {
     pub const Extends = classes.core.RefCounted;
     base: annotations.Base(Extends) = .{},
-    name: annotations.Property(builtins.StringName, .{ .usage = .none }) = .init(undefined),
+    name: annotations.Property(builtins.StringName, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
 };
 
 /// Covers every supported descriptor shape on a real engine base.
@@ -45,15 +49,35 @@ const TestNode = struct {
     hidden: annotations.Property(u32, .{ .usage = .none }) = .init(0),
     position: annotations.Property(builtins.Vector2, .{ .usage = .exported }) = .init(.zero),
     alias: annotations.Property(u32, .{ .usage = .exported, .name = "HealthBar" }) = .init(0),
-    label: annotations.Property(builtins.String, .{ .usage = .exported }) = .init(undefined),
-    tag: annotations.Property(builtins.StringName, .{ .usage = .default }) = .init(undefined),
+    label: annotations.Property(builtins.String, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    tag: annotations.Property(builtins.StringName, .{
+        .usage = .default,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
     mode: annotations.Property(Mode, .{ .usage = .exported }) = .init(.idle),
     flags: annotations.Property(Flags, .{ .usage = .exported }) = .init(.{}),
     target: annotations.Property(?*classes.core.Node, .{ .usage = .exported }) = .init(null),
-    resource: annotations.Property(?*classes.core.Resource, .{ .usage = .exported }) = .init(null),
+    resource: annotations.Property(?*classes.core.Resource, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
     owner_node: annotations.Property(*const classes.core.Node, .{ .usage = .none }) = .init(undefined),
-    optional_ref: annotations.Property(?*const classes.core.RefCounted, .{ .usage = .none }) = .init(null),
-    extension_ref: annotations.Property(*TestRefCounted, .{ .usage = .none }) = .init(undefined),
+    optional_ref: annotations.Property(?*const classes.core.RefCounted, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
+    extension_ref: annotations.Property(*TestRefCounted, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
 
     // Accessor variants.
     cur: annotations.Property(i32, .{
@@ -69,9 +93,10 @@ const TestNode = struct {
 
     // Custom `.deinit` cleanup hook: honored by the opt-in
     // `annotations.deinitPropertyFields` call in the free-instance path,
-    // independently of the default-setter ownership policy.
+    // independently of the best-effort setter ownership policy.
     hooked: annotations.Property(builtins.StringName, .{
         .usage = .none,
+        .set = .best_effort,
         .deinit = deinitHooked,
     }) = .init(undefined),
 
@@ -141,10 +166,10 @@ fn check(comptime condition: bool, comptime message: []const u8) void {
 
 /// Public equivalent of the backend's private `requiredVariantType`: an explicit
 /// `.type` override wins, otherwise the declared value type is mapped through
-/// `Variant.typeFor`.
+/// `conversion.variantType`.
 fn effectiveVariantType(comptime desc: annotations.property.PropertyDescriptor) interface.VariantType {
     if (desc.type) |variant_type| return variant_type;
-    return builtins.Variant.typeFor(desc.value_type) orelse
+    return godot.conversion.variantType(desc.value_type) orelse
         @compileError(std.fmt.comptimePrint(
             "Property '{s}' has no Variant type for declared type '{s}'.",
             .{ desc.field_name, @typeName(desc.value_type) },
@@ -154,8 +179,7 @@ fn effectiveVariantType(comptime desc: annotations.property.PropertyDescriptor) 
 fn visibleDescriptorCount(comptime T: type) usize {
     var count: usize = 0;
     for (annotations.property.descriptors(T)) |desc| {
-        const bits: u32 = @bitCast(desc.usage);
-        if (bits != 0) count += 1;
+        if (annotations.property.usageBits(desc.usage) != 0) count += 1;
     }
     return count;
 }
@@ -237,13 +261,13 @@ fn checkDescriptors() void {
 fn checkLifetime() void {
     @setEvalBranchQuota(500_000);
 
-    // Default-setter ownership classification. The policy itself is owned by the
+    // Best-effort ownership classification. The policy itself is owned by the
     // annotation layer: known managed builtins are deinitialized and reassigned,
     // `RefCounted` pointers are retained/released, everything else is assigned
     // as-is.
-    check(builtins.isManaged(builtins.String), "String is a managed builtin for the default setter");
-    check(builtins.isManaged(builtins.StringName), "StringName is a managed builtin for the default setter");
-    check(builtins.isManaged(builtins.PackedStringArray), "packed arrays are managed builtins for the default setter");
+    check(builtins.isManaged(builtins.String), "String is a managed builtin for the best-effort setter");
+    check(builtins.isManaged(builtins.StringName), "StringName is a managed builtin for the best-effort setter");
+    check(builtins.isManaged(builtins.PackedStringArray), "packed arrays are managed builtins for the best-effort setter");
     check(!builtins.isManaged(builtins.Vector2), "plain value builtins are assigned by value");
     check(!builtins.isManaged(builtins.Variant), "Variant is assigned by value");
     check(!builtins.isManaged(i32), "scalars are assigned by value");
@@ -253,11 +277,12 @@ fn checkLifetime() void {
     check(!reflect.isRefCountedPointer(?*classes.core.Node), "Node pointers are not refcounted and are assigned as-is");
 
     // Custom `.deinit` hooks come from the annotation layer; the opt-in
-    // free-instance cleanup resolves and calls them.
+    // free-instance cleanup resolves and calls them. `.best_effort` is not a
+    // custom hook.
     check(annotations.property.hasCustomDeinit(@FieldType(TestNode, "hooked")), "custom .deinit must be discoverable on a registration fixture");
-    check(!annotations.property.hasCustomDeinit(@FieldType(TestNode, "label")), "fields without .deinit report no hook");
+    check(!annotations.property.hasCustomDeinit(@FieldType(TestNode, "label")), "best-effort cleanup reports no custom hook");
     check(annotations.property.deinitFn(TestNode, "hooked") != null, "custom .deinit must resolve to a callable hook");
-    check(annotations.property.deinitFn(TestNode, "label") == null, "fields without .deinit expose no hook");
+    check(annotations.property.deinitFn(TestNode, "label") == null, "best-effort cleanup exposes no custom hook");
 
     // Descriptor validation runs for every descriptor from `callbacks`, not only
     // for `get_property_list` entries, so a hidden `Property(Variant, .{ ... })`
@@ -288,10 +313,10 @@ fn checkRuntimePaths() void {
     _ = variant.asDeclared(?*const classes.core.RefCounted);
     _ = variant.asDeclared(*TestRefCounted);
 
-    // Annotation-layer default setter ownership branches: known managed
-    // builtin, `RefCounted` object pointer, and plain assignment for a borrowed
-    // non-RefCounted object pointer. The fixture instances are `undefined` on
-    // purpose: this function is never called.
+    // Best-effort setter ownership branches: known managed builtin, `RefCounted`
+    // object pointer, and plain assignment for a borrowed non-RefCounted object
+    // pointer. The fixture instances are `undefined` on purpose: this function
+    // is never called.
     annotations.property.setterFn(TestNode, "label").?(@as(*TestNode, undefined), @as(builtins.String, undefined));
     annotations.property.setterFn(TestNode, "tag").?(@as(*TestNode, undefined), @as(builtins.StringName, undefined));
     annotations.property.setterFn(TestNode, "resource").?(@as(*TestNode, undefined), @as(?*classes.core.Resource, null));

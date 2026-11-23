@@ -17,11 +17,13 @@ then use these pages by task.
   scaffold boundaries.
 - [registration.md](registration.md) - `Registry`, class options, lifecycle,
   scanned class groups.
-- [annotations.md](annotations.md) - opt-in class, field, and callback markers,
-  plus the `property`/`constants` introspection submodules.
+- [annotations.md](annotations.md) - opt-in class, field, type, and callback
+  markers, plus the `property`/`constants` introspection submodules.
+- [conversion.md](conversion.md) - one declared-type conversion layer:
+  `Conversion` markers, support/path rules, and Variant/ptrcall primitives.
 - [virtuals.md](virtuals.md) - virtual metadata and callback behavior.
-- [properties.md](properties.md) - dynamic `Property` fields, property groups,
-  enum/bitfield hints, and cleanup.
+- [properties.md](properties.md) - dynamic `Property` fields, explicit ownership
+  modes, property groups, enum/bitfield hints, and cleanup.
 - [signals.md](signals.md) - signal declarations, registration, typed emit, and
   argument conversion.
 - [callables.md](callables.md) - custom callable design: Zig closures as engine

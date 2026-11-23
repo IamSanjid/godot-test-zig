@@ -33,11 +33,14 @@ pub fn Constants(comptime p_decls: type) type {
     return struct {
         pub const decls = p_decls;
         pub const entries = resolved;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.constants;
     };
 }
 
 /// True when `OtherT` is a type produced by `Constants`.
 fn isConstants(comptime OtherT: type) bool {
+    if (!marker_kind.is(OtherT, .constants)) return false;
     if (@typeInfo(OtherT) != .@"struct") return false;
     if (!@hasDecl(OtherT, "decls") or !@hasDecl(OtherT, "entries")) return false;
     return OtherT == Constants(OtherT.decls);
@@ -397,3 +400,5 @@ fn checkDuplicateConstants(comptime T: type, entries: []const Entry) void {
 const std = @import("std");
 
 const naming = @import("naming");
+
+const marker_kind = @import("marker.zig");

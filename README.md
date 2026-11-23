@@ -239,5 +239,6 @@ modules are build artifacts; they are ignored and must not be edited.
 ## Documentation
 
 Full index: [docs/README.md](docs/README.md). Project map and decisions:
-[CONTEXT.md](CONTEXT.md). Generator internals:
-[generator/CONTEXT.md](generator/CONTEXT.md).
+[CONTEXT.md](CONTEXT.md). Declared-type conversion, including custom types with
+`Conversion` markers, is in [docs/conversion.md](docs/conversion.md).
+Generator internals: [generator/CONTEXT.md](generator/CONTEXT.md).

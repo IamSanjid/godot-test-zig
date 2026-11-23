@@ -35,6 +35,8 @@ pub const ownership = @import("ownership.zig");
 
 pub const abi = @import("abi.zig");
 
+pub const conversion = @import("conversion.zig");
+
 pub const registration = @import("registration/registration.zig");
 pub const Registry = registration.Registry;
 

@@ -67,6 +67,8 @@ pub fn InitCallback(comptime T: type, comptime method: anytype) type {
         pub const init_method = method;
         pub const init_is_member = is_member;
         pub const returns_error = @typeInfo(Ret) == .error_union;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.init_callback;
 
         pub fn makeArgs(self: *T, allocator: Allocator, base: *Extends) Args {
             var args: Args = undefined;
@@ -141,6 +143,7 @@ fn findInitCallback(comptime T: type) ?type {
 /// True if `Decl` is a type produced by `Init(...)`.
 fn isInitCallbackMarker(comptime Decl: anytype) bool {
     if (@TypeOf(Decl) != type) return false;
+    if (!marker_kind.is(Decl, .init_callback)) return false;
     if (@typeInfo(Decl) != .@"struct") return false;
     if (!@hasDecl(Decl, "InitFor") or !@hasDecl(Decl, "init_method")) return false;
     return Decl == InitCallback(Decl.InitFor, Decl.init_method);
@@ -149,3 +152,4 @@ fn isInitCallbackMarker(comptime Decl: anytype) bool {
 const std = @import("std");
 
 const reflect = @import("../reflect/reflect.zig");
+const marker_kind = @import("marker.zig");

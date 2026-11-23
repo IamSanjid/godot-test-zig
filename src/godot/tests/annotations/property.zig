@@ -119,6 +119,15 @@ const MixedOwner = struct {
     health: godot.annotations.Property(i32, .{ .usage = .exported }) = .init(0),
 };
 
+/// Same `groups` payload shape as a real marker, but no marker kind.
+const PropertyGroupsLookalike = struct {
+    pub const Groups = struct {
+        pub const groups = .{
+            .{ .name = "Nope", .fields = .{"value"} },
+        };
+    };
+};
+
 /// Holder-owned user value type.
 const DeinitProbe = struct {
     deinit_called: bool = false,
@@ -129,10 +138,11 @@ const DeinitProbe = struct {
     }
 };
 
-/// Custom `.deinit` overrides automatic value cleanup.
+/// Custom `.deinit` overrides the best-effort cleanup.
 const HookOwner = struct {
     probe: godot.annotations.Property(DeinitProbe, .{
         .usage = .none,
+        .set = .best_effort,
         .deinit = deinitProbe,
     }) = .init(.{}),
     plain: godot.annotations.Property(u32, .{
@@ -150,14 +160,19 @@ const HookOwner = struct {
     }
 };
 
-/// Automatic cleanup applies even with custom accessors.
+/// Best-effort cleanup applies even with custom accessors.
 const FieldLifetimeOwner = struct {
     plain: godot.annotations.Property(u32, .{ .usage = .none }) = .init(0),
-    probe: godot.annotations.Property(DeinitProbe, .{ .usage = .none }) = .init(.{}),
+    probe: godot.annotations.Property(DeinitProbe, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(.{}),
     accessor: godot.annotations.Property(DeinitProbe, .{
         .usage = .none,
         .get = getAccessor,
         .set = setAccessor,
+        .deinit = .best_effort,
     }) = .init(.{}),
 
     fn getAccessor(self: *const @This()) DeinitProbe {
@@ -167,6 +182,50 @@ const FieldLifetimeOwner = struct {
     fn setAccessor(self: *@This(), value: DeinitProbe) void {
         self.accessor.value = value;
     }
+};
+
+/// `.best_effort` installs the built-in policy but is not a custom hook.
+const BestEffortProbeOwner = struct {
+    probe: godot.annotations.Property(DeinitProbe, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(.{}),
+};
+
+/// Compile-only best-effort engine paths: managed builtin, `Variant`, and a
+/// `RefCounted` pointer. The values are never read.
+const BestEffortOwner = struct {
+    string: godot.annotations.Property(godot.builtins.String, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    variant: godot.annotations.Property(godot.builtins.Variant, .{
+        .usage = .none,
+        .type = .string,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(godot.builtins.Variant.nil),
+    ref: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
+};
+
+/// Read-only managed values declare cleanup and no setter.
+const ReadOnlyManagedOwner = struct {
+    name: godot.annotations.Property(godot.builtins.String, .{
+        .usage = .none,
+        .read_only = true,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    locked_ref: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+        .usage = .none,
+        .read_only = true,
+        .deinit = .best_effort,
+    }) = .init(null),
 };
 
 /// Extension over `RefCounted`; helpers resolve the engine base.
@@ -226,6 +285,8 @@ const InitializerOwner = struct {
 const BuiltinInitializerOwner = struct {
     name: godot.annotations.Property(godot.builtins.StringName, .{
         .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
         .init = godot.annotations.Init(godot.builtins.StringName, .fromLatin1, .{ "probe", false }),
     }) = .init(undefined),
     count: godot.annotations.Property(u32, .{
@@ -236,15 +297,36 @@ const BuiltinInitializerOwner = struct {
 
 /// Compile-only `Variant` ownership coverage.
 const VariantValueOwner = struct {
-    value: godot.annotations.Property(godot.builtins.Variant, .{ .usage = .none, .type = .string }) = .init(godot.builtins.Variant.nil),
+    value: godot.annotations.Property(godot.builtins.Variant, .{
+        .usage = .none,
+        .type = .string,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(godot.builtins.Variant.nil),
 };
 
 /// Compile-only ownership coverage; engine calls are not executed.
 const RefLifetimeOwner = struct {
-    engine: godot.annotations.Property(?*godot.classes.core.RefCounted, .{ .usage = .none }) = .init(null),
-    engine_const: godot.annotations.Property(*const godot.classes.core.RefCounted, .{ .usage = .none }) = .init(undefined),
-    extension: godot.annotations.Property(?*RefCountedExtension, .{ .usage = .none }) = .init(null),
-    extension_const: godot.annotations.Property(*const RefCountedExtension, .{ .usage = .none }) = .init(undefined),
+    engine: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
+    engine_const: godot.annotations.Property(*const godot.classes.core.RefCounted, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    extension: godot.annotations.Property(?*RefCountedExtension, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
+    extension_const: godot.annotations.Property(*const RefCountedExtension, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
     node: godot.annotations.Property(?*godot.classes.core.Node, .{ .usage = .none }) = .init(null),
 };
 
@@ -420,6 +502,12 @@ fn checkMarkerIdentity() void {
     check(!godot.annotations.marker.is(@FieldType(CheckOwner, "health"), .on_ready), "Property marker must not read as OnReady");
     check(!godot.annotations.marker.is(@FieldType(CheckOwner, "health"), .base), "Property marker must not read as Base");
 
+    check(GroupedOwner.Groups.marker == godot.annotations.marker.Kind.property_groups, "PropertyGroups markers must declare marker.Kind.property_groups");
+    check(godot.annotations.marker.is(GroupedOwner.Groups, .property_groups), "PropertyGroups markers must identify as the property_groups family");
+    check(godot.annotations.property.findPropertyGroups(GroupedOwner).len == 1, "marker-backed PropertyGroups must be discovered");
+    check(godot.annotations.marker.kindOf(PropertyGroupsLookalike.Groups) == null, "a PropertyGroups lookalike must not declare an annotation marker");
+    check(godot.annotations.property.findPropertyGroups(PropertyGroupsLookalike).len == 0, "a PropertyGroups lookalike without the marker kind must not be discovered");
+
     const mixed_props = godot.annotations.property.findPropertyFieldNames(MixedOwner);
     const mixed_on_ready = godot.annotations.findOnReadyFieldNames(MixedOwner);
     check(mixed_props.len == 1, "mixed classes must report exactly their Property fields");
@@ -436,24 +524,24 @@ fn checkLifetime() void {
     const hooked = @FieldType(HookOwner, "probe");
     check(godot.annotations.property.hasCustomDeinit(hooked), "custom .deinit must be detected");
     check(hooked.has_custom_deinit, "has_custom_deinit must mirror the option");
-    check(!godot.annotations.property.hasCustomDeinit(@FieldType(FieldLifetimeOwner, "probe")), "fields without .deinit report no custom deinit");
+    check(!godot.annotations.property.hasCustomDeinit(@FieldType(FieldLifetimeOwner, "probe")), ".best_effort reports no custom deinit");
     const hook_fn = godot.annotations.property.deinitFn(HookOwner, "probe") orelse @compileError("property tests: custom .deinit must be discoverable");
     check(@TypeOf(hook_fn) == fn (*HookOwner) void, "custom .deinit thunk must take a mutable owner pointer");
-    check(godot.annotations.property.deinitFn(FieldLifetimeOwner, "probe") == null, "fields without .deinit expose no custom deinit hook");
+    check(godot.annotations.property.deinitFn(FieldLifetimeOwner, "probe") == null, ".best_effort exposes no custom deinit hook");
     _ = godot.annotations.property.descriptors(HookOwner);
 
-    // Custom hook overrides the automatic value cleanup.
+    // Custom hook overrides the best-effort cleanup.
     var hook_owner: HookOwner = .{};
     godot.annotations.deinitPropertyFields(HookOwner, &hook_owner);
     check(hook_owner.probe.value.hook_called, "custom .deinit must run");
-    check(!hook_owner.probe.value.deinit_called, "custom .deinit must override the automatic value cleanup");
+    check(!hook_owner.probe.value.deinit_called, "custom .deinit must override the best-effort cleanup");
     check(hook_owner.plain_deinit_called, "custom .deinit must run for any value type");
 
-    // Automatic cleanup: value types with `deinit`, independent of accessors.
+    // Best-effort cleanup: value types with `deinit`, independent of accessors.
     var field_owner: FieldLifetimeOwner = .{};
     godot.annotations.deinitPropertyFields(FieldLifetimeOwner, &field_owner);
     check(field_owner.probe.value.deinit_called, "struct value types declaring deinit must be deinitialized");
-    check(field_owner.accessor.value.deinit_called, "custom accessors must not skip automatic cleanup");
+    check(field_owner.accessor.value.deinit_called, "custom accessors must not skip best-effort cleanup");
 
     // Non-property fields and classes without Property fields are no-ops.
     var no_props: NoProperties = .{};
@@ -486,6 +574,45 @@ fn checkLifetime() void {
     check(!godot.builtins.isManaged(?*godot.classes.core.RefCounted), "RefCounted pointers are managed by references, not deinit");
 }
 
+fn checkBestEffortPolicy() void {
+    // Ownership classification drives the explicit-mode requirement.
+    check(godot.annotations.property.requiresExplicitOwnership(godot.builtins.String), "String owns a managed value");
+    check(godot.annotations.property.requiresExplicitOwnership(godot.builtins.StringName), "StringName owns a managed value");
+    check(godot.annotations.property.requiresExplicitOwnership(godot.builtins.Variant), "Variant owns its payload");
+    check(godot.annotations.property.requiresExplicitOwnership(?*godot.classes.core.RefCounted), "RefCounted pointers own a reference");
+    check(godot.annotations.property.requiresExplicitOwnership(DeinitProbe), "structs declaring deinit own cleanup");
+    check(!godot.annotations.property.requiresExplicitOwnership(i32), "scalars are trivial");
+    check(!godot.annotations.property.requiresExplicitOwnership(godot.builtins.Vector2), "plain value builtins are trivial");
+    check(!godot.annotations.property.requiresExplicitOwnership(?*godot.classes.core.Node), "plain object pointers are borrowed");
+    check(!godot.annotations.property.requiresExplicitOwnership(NoProperties), "structs without deinit are trivial");
+
+    // `.best_effort` installs a setter and cleanup but is not a custom hook.
+    const probe = @FieldType(BestEffortProbeOwner, "probe");
+    check(!godot.annotations.property.hasCustomSetter(probe), ".best_effort is not a custom .set");
+    check(!godot.annotations.property.hasCustomDeinit(probe), ".best_effort is not a custom .deinit");
+    check(!probe.has_custom_set and !probe.has_custom_deinit, "marker custom flags must exclude .best_effort");
+    check(@TypeOf(godot.annotations.property.setterFn(BestEffortProbeOwner, "probe").?) == fn (*BestEffortProbeOwner, DeinitProbe) void, ".best_effort must expose the setter thunk");
+    check(godot.annotations.property.deinitFn(BestEffortProbeOwner, "probe") == null, ".best_effort exposes no custom cleanup thunk");
+
+    // A read-only managed value declares cleanup only.
+    const sealed = @FieldType(ReadOnlyManagedOwner, "name");
+    check(sealed.read_only, "read-only managed values stay read-only");
+    check(!godot.annotations.property.hasCustomSetter(sealed), "read-only managed values have no setter");
+    check(godot.annotations.property.setterFn(ReadOnlyManagedOwner, "name") == null, "read-only managed values expose no setter");
+    check(!godot.annotations.property.hasCustomDeinit(sealed), "best-effort cleanup is not a custom hook");
+}
+
+/// Compile-only best-effort engine paths; managed values are never read.
+fn checkBestEffortEnginePaths() void {
+    const undefined_owner: *BestEffortOwner = undefined;
+    godot.annotations.property.setterFn(BestEffortOwner, "string").?(undefined_owner, @as(godot.builtins.String, undefined));
+    godot.annotations.property.setterFn(BestEffortOwner, "variant").?(undefined_owner, @as(godot.builtins.Variant, undefined));
+    godot.annotations.property.setterFn(BestEffortOwner, "ref").?(undefined_owner, @as(?*godot.classes.core.RefCounted, null));
+    godot.annotations.deinitPropertyFields(BestEffortOwner, undefined_owner);
+    const undefined_read_only: *ReadOnlyManagedOwner = undefined;
+    godot.annotations.deinitPropertyFields(ReadOnlyManagedOwner, undefined_read_only);
+}
+
 /// Compile-only property lifetime coverage; generic RefCounted helpers are
 /// covered by `tests/ownership.zig`.
 fn checkOwnershipRuntimePaths() void {
@@ -512,6 +639,7 @@ fn comptimeChecks() void {
     checkInitializers();
     checkMarkerIdentity();
     checkLifetime();
+    checkBestEffortPolicy();
     checkGroups();
     checkNoMarkerLayout();
     checkEnumHints();
@@ -639,12 +767,28 @@ const HintOwner = struct {
     unregistered: godot.annotations.Property(UnregisteredMode, .{ .usage = .exported }) = .init(.idle),
     cross_class: godot.annotations.Property(OtherMode, .{ .usage = .exported }) = .init(.alpha),
     node: godot.annotations.Property(?*godot.classes.core.Node, .{ .usage = .exported }) = .init(null),
-    resource: godot.annotations.Property(?*godot.classes.core.Resource, .{ .usage = .exported }) = .init(null),
+    resource: godot.annotations.Property(?*godot.classes.core.Resource, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
     plain_object: godot.annotations.Property(?*godot.classes.core.Object, .{ .usage = .exported }) = .init(null),
-    ref_counted: godot.annotations.Property(?*godot.classes.core.RefCounted, .{ .usage = .exported }) = .init(null),
+    ref_counted: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
     node_ext: godot.annotations.Property(?*NodeExtension, .{ .usage = .exported }) = .init(null),
-    resource_ext: godot.annotations.Property(?*ResourceExtension, .{ .usage = .exported }) = .init(null),
-    ref_ext: godot.annotations.Property(?*RefCountedExtension, .{ .usage = .exported }) = .init(null),
+    resource_ext: godot.annotations.Property(?*ResourceExtension, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
+    ref_ext: godot.annotations.Property(?*RefCountedExtension, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
 };
 
 fn checkEnumHints() void {
@@ -707,8 +851,25 @@ fn checkEnumHints() void {
 
 comptime {
     comptimeChecks();
+    _ = &checkBestEffortEnginePaths;
     _ = &checkOwnershipRuntimePaths;
     _ = &checkInitializerEnginePaths;
+}
+
+test "best-effort setter stores without cleanup and cleanup deinitializes" {
+    var owner: BestEffortProbeOwner = .{};
+    const set = godot.annotations.property.setterFn(BestEffortProbeOwner, "probe").?;
+    set(&owner, .{});
+    try std.testing.expect(!owner.probe.value.deinit_called);
+
+    godot.annotations.deinitPropertyFields(BestEffortProbeOwner, &owner);
+    try std.testing.expect(owner.probe.value.deinit_called);
+
+    var direct: DeinitProbe = .{};
+    godot.annotations.property.setBestEffort(DeinitProbe, &direct, .{});
+    try std.testing.expect(!direct.deinit_called);
+    godot.annotations.property.deinitBestEffort(DeinitProbe, &direct);
+    try std.testing.expect(direct.deinit_called);
 }
 
 const std = @import("std");

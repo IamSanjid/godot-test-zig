@@ -28,8 +28,8 @@ pub const Virtual = struct {
 - `Required` and `Optional` are the registration categories.
 - `Meta` supplies the engine hash, staticness, and exact `godot_name` from the API JSON.
 - No binding-level function types are emitted.
-- The generated signature uses public Zig types; ABI slot conversion happens in
-  `src/godot/abi.zig` via the virtual callback adapter.
+- The generated signature uses public Zig types; ptrcall marshalling happens
+  through `godot.conversion` (`decodePtr`/`encodePtr`), backed by `abi.zig`.
 - The ABI slot width is inferred from the Zig type, not stored per virtual.
 
 ## User declaration
@@ -51,6 +51,11 @@ Rules:
 - Remaining parameter and return types must match the generated virtual type.
 - Functions must not be generic.
 - Static virtuals have no self parameter.
+- An alternate Zig declaration name may be provided with
+  `godot.annotations.Override("_engine_name", fn)`. That marker declares
+  `marker.Kind.override`; discovery checks the kind and still validates the
+  function against the generated virtual signature. See
+  [annotations.md](annotations.md#marker-identity).
 
 ## Lookup
 
@@ -65,6 +70,9 @@ pub const Entry = struct {
     callback: interface.ClassCallVirtual,
 };
 ```
+
+The result is a comptime static slice: the entry table and its specialized
+callbacks are produced during analysis, not allocated per class or instance.
 
 `get_virtual_func` compares `p_name` and `p_hash` against these entries. `entry.godot_name` comes directly from `Virtual.Meta`; registration does not re-run a naming conversion:
 
@@ -103,9 +111,10 @@ fn callback(
 - For static virtuals, `p_instance` is unused and `p_args[0]` is the first
   argument.
 
-All virtual argument/return marshalling goes through [abi.zig](../src/godot/abi.zig),
-the same shared helper available as `godot.abi`. It decides the slot from the
-Zig type:
+All virtual argument/return marshalling goes through `godot.conversion`: the
+callback calls `decodePtr`/`encodePtr`. For non-RefCounted values conversion uses
+[abi.zig](../src/godot/abi.zig), the same shared helper available as `godot.abi`,
+which decides the slot from the Zig type:
 
 - `float` / `real_t` -> `f64` slot + `@floatCast`
 - normal integers -> `i64` (or `u64` when the integer is u64)
@@ -114,9 +123,9 @@ Zig type:
 - `bool` -> `u8`
 - everything else -> its declared layout
 
-This is not virtual-specific. Any future ptrcall-facing code can call
-`godot.abi.readArgument` / `godot.abi.writeReturn` directly. `virtuals.zig` only
-adds the RefCounted `Ref<T>` rules and the callback shape on top.
+This slot mapping is not virtual-specific. Registration validates `.ptr` support
+for every parameter and non-void return, and `virtuals.zig` supplies only the
+callback shape; conversion owns the RefCounted rules described below.
 
 ## RefCounted is the exception
 
@@ -125,43 +134,22 @@ Godot virtual ABI represents `RefCounted` values differently:
 - `RefCounted` arguments arrive as `Ref<T>*`, not `Object**`.
 - `RefCounted` returns are `Ref<T>` storage, not `Object*`.
 
-Use the interface procedures:
+`godot.conversion.decodePtr` calls `ref_get_object` for arguments, and
+`encodePtr` calls `ref_set_object` for returns. The object pointer from
+`ref_get_object` is borrowed for the call; taking ownership requires an explicit
+reference. `ref_set_object` writes into engine-owned `Ref<T>` storage and adds a
+new owning reference there; see [ownership.md](ownership.md).
 
-### Argument
+A custom converter whose engine type is a `RefCounted` pointer inherits this:
+`from_engine` receives the borrowed pointer and `to_engine` returns the pointer
+that `ref_set_object` will store. Do not assign a raw pointer into `Ref<T>`
+storage.
 
-```zig
-if (comptime isRefCountedPointer(P)) {
-    const ref: interface.ConstRefPtr = @ptrCast(@alignCast(p_args[i]));
-    const object = runtime.dispatch(.ref_get_object, .{ref});
-    args[i] = if (object) |p| @ptrCast(p) else null;
-} else {
-    args[i] = @as(*const P, @ptrCast(@alignCast(p_args[i]))).*;
-}
-```
-
-The returned object pointer is borrowed for the call. Taking ownership requires
-an explicit reference.
-
-### Return
-
-```zig
-if (comptime isRefCountedPointer(R)) {
-    const object: interface.ObjectPtr = if (result) |p| @ptrCast(p) else null;
-    runtime.dispatch(.ref_set_object, .{
-        @as(interface.RefPtr, @ptrCast(@alignCast(r_ret))),
-        object,
-    });
-} else {
-    @as(*R, @ptrCast(@alignCast(r_ret))).* = result;
-}
-```
-
-Do not assign a raw pointer into `Ref<T>` storage.
-
-`isRefCountedPointer` lives in `reflect`: it resolves the single-item class
+`isRefCountedPointer` still lives in `reflect`: it resolves the single-item class
 pointer through `reflect.objectTarget` and checks
-`reflect.inheritsFrom(Class, classes.core.RefCounted)`. The virtual callback keeps
-only the ABI decision to call `ref_get_object` / `ref_set_object`.
+`reflect.inheritsFrom(Class, classes.core.RefCounted)`. Conversion uses it to
+choose the RefCounted branch; the virtual callback does not open-code
+`ref_get_object` / `ref_set_object`. See [conversion.md](conversion.md).
 
 ## Do not use upcast/downcast here
 

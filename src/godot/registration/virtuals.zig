@@ -18,49 +18,52 @@ pub const Entry = struct {
 /// Required virtuals must be declared. Optional virtuals are included only when
 /// declared. The result is a comptime slice of specialized callbacks.
 pub fn collect(comptime T: type, comptime Base: type) []const Entry {
-    const override_decls = override.findOverrideDecls(T);
-    const meta_decls = std.meta.declarations(Base.Virtual.Meta);
+    comptime {
+        const override_decls = override.findOverrideDecls(T);
+        const meta_decls = std.meta.declarations(Base.Virtual.Meta);
 
-    var entries: [meta_decls.len]Entry = undefined;
-    var count: usize = 0;
+        var entries: [meta_decls.len]Entry = undefined;
+        var count: usize = 0;
 
-    inline for (meta_decls) |name| {
-        const meta = @field(Base.Virtual.Meta, name);
-        const godot_name = meta.godot_name;
+        for (meta_decls) |name| {
+            const meta = @field(Base.Virtual.Meta, name);
+            const godot_name = meta.godot_name;
 
-        const is_required = @hasDecl(Base.Virtual.Required, name);
-        const is_optional = @hasDecl(Base.Virtual.Optional, name);
-        if (comptime is_required == is_optional) {
-            @compileError("Virtual '" ++ name ++ "' must be in exactly one of Virtual.Required or Virtual.Optional.");
+            const is_required = @hasDecl(Base.Virtual.Required, name);
+            const is_optional = @hasDecl(Base.Virtual.Optional, name);
+            if (is_required == is_optional) {
+                @compileError("Virtual '" ++ name ++ "' must be in exactly one of Virtual.Required or Virtual.Optional.");
+            }
+
+            const declared = @hasDecl(T, name) or override_decls.has(godot_name);
+            if (is_required and !declared) {
+                @compileError("Type '" ++ @typeName(T) ++ "' is missing required virtual '" ++ name ++ "'.");
+            }
+            if (!declared) continue;
+
+            const declaredFn = if (override_decls.get(godot_name)) |decl_name|
+                @field(T, decl_name).override_with
+            else
+                @field(T, name);
+            const VirtualFn = std.meta.Child(if (is_required)
+                @field(Base.Virtual.Required, name)
+            else
+                @field(Base.Virtual.Optional, name));
+
+            validateSignature(T, name, meta.static, VirtualFn, @TypeOf(declaredFn));
+
+            entries[count] = .{
+                .name = name,
+                .godot_name = godot_name,
+                .hash = meta.hash,
+                .callback = makeCallback(declaredFn, meta),
+            };
+            count += 1;
         }
 
-        const declared = @hasDecl(T, name) or override_decls.has(godot_name);
-        if (comptime is_required and !declared) {
-            @compileError("Type '" ++ @typeName(T) ++ "' is missing required virtual '" ++ name ++ "'.");
-        }
-        if (!declared) continue;
-
-        const declaredFn = if (override_decls.get(godot_name)) |decl_name|
-            @field(T, decl_name).override_with
-        else
-            @field(T, name);
-        const VirtualFn = std.meta.Child(if (is_required)
-            @field(Base.Virtual.Required, name)
-        else
-            @field(Base.Virtual.Optional, name));
-
-        validateSignature(T, name, meta.static, VirtualFn, @TypeOf(declaredFn));
-
-        entries[count] = .{
-            .name = name,
-            .godot_name = godot_name,
-            .hash = meta.hash,
-            .callback = makeCallback(declaredFn, meta),
-        };
-        count += 1;
+        const out = entries[0..count].*;
+        return &out;
     }
-
-    return entries[0..count];
 }
 
 /// Build the `get_virtual_func` callback for a class.
@@ -123,7 +126,7 @@ fn validateSignature(
         }
     }
 
-    for (declared_info.param_types[offset..], virtual_info.param_types[offset..]) |declared, virtual| {
+    inline for (declared_info.param_types[offset..], virtual_info.param_types[offset..]) |declared, virtual| {
         if (declared != virtual) {
             @compileError(std.fmt.comptimePrint(
                 "Declared virtual '{s}' parameter type mismatch.",
@@ -133,6 +136,22 @@ fn validateSignature(
     }
     if (declared_info.return_type != virtual_info.return_type) {
         @compileError("Declared virtual '" ++ name ++ "' return type mismatch.");
+    }
+
+    inline for (declared_info.param_types[offset..], 0..) |maybe_param, index| {
+        conversion.checkSupported(
+            maybe_param.?,
+            .ptr,
+            std.fmt.comptimePrint("Declared virtual '{s}' parameter {d}", .{ name, index + 1 }),
+        );
+    }
+    const Return = declared_info.return_type orelse void;
+    if (comptime Return != void) {
+        conversion.checkSupported(
+            Return,
+            .ptr,
+            std.fmt.comptimePrint("Declared virtual '{s}' return value", .{name}),
+        );
     }
 }
 
@@ -157,48 +176,17 @@ fn makeCallback(
             const offset: usize = if (meta.static) 0 else 1;
             inline for (info.param_types[offset..], 0..) |maybe_param, index| {
                 const Param = maybe_param.?;
-                args[offset + index] = readArgument(Param, p_args[index]);
+                args[offset + index] = conversion.decodePtr(Param, p_args[index]);
             }
 
             const result = @call(.auto, declaredFn, args);
 
             const Return = info.return_type orelse void;
             if (comptime Return != void) {
-                writeReturn(Return, result, r_ret);
+                conversion.encodePtr(Return, result, r_ret);
             }
         }
     }.call;
-}
-
-fn readArgument(comptime Param: type, ptr: interface.ConstTypePtr) Param {
-    if (comptime reflect.isRefCountedPointer(Param)) {
-        const ref: interface.ConstRefPtr = @ptrCast(@alignCast(ptr));
-        const object = runtime.dispatch(.ref_get_object, .{ref});
-
-        if (comptime reflect.isOptionalPointer(Param)) {
-            return if (object) |value| @ptrCast(value) else null;
-        }
-        return @ptrCast(object orelse @panic("Godot passed a null RefCounted object for a non-optional virtual argument"));
-    }
-
-    return abi.readArgument(Param, @ptrCast(ptr));
-}
-
-fn writeReturn(comptime Return: type, value: Return, ptr: interface.TypePtr) void {
-    if (comptime reflect.isRefCountedPointer(Return)) {
-        const object: interface.ObjectPtr = if (comptime reflect.isOptionalPointer(Return))
-            if (value) |item| @ptrCast(item) else null
-        else
-            @ptrCast(value);
-
-        runtime.dispatch(.ref_set_object, .{
-            @as(interface.RefPtr, @ptrCast(@alignCast(ptr))),
-            object,
-        });
-        return;
-    }
-
-    abi.writeReturn(Return, @ptrCast(ptr), value);
 }
 
 const std = @import("std");
@@ -206,8 +194,6 @@ const std = @import("std");
 const bindings = @import("bindings");
 const interface = bindings.interface;
 
-const abi = @import("../abi.zig");
 const override = @import("../annotations/override.zig");
 const builtins = @import("../builtins/builtins.zig");
-const reflect = @import("../reflect/reflect.zig");
-const runtime = @import("../runtime.zig");
+const conversion = @import("../conversion.zig");

@@ -5,6 +5,8 @@ pub fn Override(comptime virtual_method: [:0]const u8, comptime with: anytype) t
     return struct {
         pub const godot_virtual_method = virtual_method;
         pub const override_with = with;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.override;
     };
 }
 
@@ -35,6 +37,7 @@ pub fn findOverrideDecls(comptime T: type) std.StaticStringMap([:0]const u8) {
 }
 
 fn isOverride(comptime T: type) bool {
+    if (!marker_kind.is(T, .override)) return false;
     if (!@hasDecl(T, "godot_virtual_method") or
         !@hasDecl(T, "override_with")) return false;
     return T == Override(T.godot_virtual_method, T.override_with);
@@ -43,3 +46,4 @@ fn isOverride(comptime T: type) bool {
 const std = @import("std");
 
 const reflect = @import("../reflect/reflect.zig");
+const marker_kind = @import("marker.zig");

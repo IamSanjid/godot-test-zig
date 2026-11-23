@@ -16,6 +16,8 @@ pub const LiveNode = struct {
     }) = .init(100),
     label: godot.annotations.Property(godot.builtins.String, .{
         .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
     }).Init(.fromLatin1, .{"live"}),
     mode: godot.annotations.Property(ConstantsDecl.decls.Mode, .{
         .usage = .exported,

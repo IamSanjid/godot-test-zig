@@ -2,8 +2,56 @@
 
 /// Declares one engine signal. `engine_name` is the engine-facing name; the Zig
 /// declaration is only a handle. The second argument is a tuple of
-/// `.{ "engine_arg_name", Type }` pairs in engine order.
+/// `.{ "engine_arg_name", Type }` pairs in engine order, where `Type` is the
+/// declared Zig argument type: registration and emit derive its engine type
+/// through `godot.conversion`.
 pub fn Signal(comptime engine_name: [:0]const u8, comptime p_args: anytype) type {
+    validateArgs(engine_name, p_args);
+    inline for (p_args) |pair| {
+        const context = comptime std.fmt.comptimePrint(
+            "Signal '{s}' argument '{s}'",
+            .{ engine_name, pair[0] },
+        );
+        conversion.checkSupported(pair[1], .variant, context);
+    }
+
+    return struct {
+        pub const name = engine_name;
+        /// Argument declarations (`{ name, type }` pairs), in engine order.
+        pub const args = p_args;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.signal;
+
+        /// Emits this signal on `owner`. `values` is a positional tuple of
+        /// declared Zig values in declaration order; each one is converted to
+        /// its derived engine Variant through `godot.conversion`; null optional
+        /// values emit as nil.
+        pub fn emit(owner: anytype, values: anytype) enums.Error {
+            const OwnerT = OwnerType(@TypeOf(owner));
+            const ValuesT = @TypeOf(values);
+            if (comptime !reflect.isTuple(ValuesT)) @compileError(std.fmt.comptimePrint(
+                "Signal '{s}' expects a positional tuple of arguments, e.g. .{{ value, self }}; found: {s}",
+                .{ name, @typeName(ValuesT) },
+            ));
+            if (comptime values.len != args.len) @compileError(std.fmt.comptimePrint(
+                "Signal '{s}' expects {d} argument(s), found {d}.",
+                .{ name, args.len, values.len },
+            ));
+
+            // Owning Variants: the engine reads them during the call only.
+            var vargs: [args.len]builtins.Variant = undefined;
+            defer for (vargs[0..]) |*variant| variant.deinit();
+            inline for (args, 0..) |pair, index| {
+                conversion.encodeVariant(pair[1], values[index], &vargs[index]);
+            }
+
+            const object = ownerObject(OwnerT, owner);
+            return object.emitSignal(builtins.StringName.fromComptimeLatin1(name), vargs);
+        }
+    };
+}
+
+fn validateArgs(comptime engine_name: [:0]const u8, comptime p_args: anytype) void {
     if (engine_name.len == 0) @compileError("Signal name must not be empty");
 
     if (!reflect.isTuple(@TypeOf(p_args))) @compileError(std.fmt.comptimePrint(
@@ -28,38 +76,6 @@ pub fn Signal(comptime engine_name: [:0]const u8, comptime p_args: anytype) type
             .{ engine_name, index },
         ));
     }
-
-    return struct {
-        pub const name = engine_name;
-        /// Argument declarations (`{ name, type }` pairs), in engine order.
-        pub const args = p_args;
-
-        /// Emits this signal on `owner`, converting each argument to its
-        /// declared engine type. `values` is a positional tuple in declaration
-        /// order; null optional values emit as nil.
-        pub fn emit(owner: anytype, values: anytype) enums.Error {
-            const OwnerT = OwnerType(@TypeOf(owner));
-            const ValuesT = @TypeOf(values);
-            if (comptime !reflect.isTuple(ValuesT)) @compileError(std.fmt.comptimePrint(
-                "Signal '{s}' expects a positional tuple of arguments, e.g. .{{ value, self }}; found: {s}",
-                .{ name, @typeName(ValuesT) },
-            ));
-            if (comptime values.len != args.len) @compileError(std.fmt.comptimePrint(
-                "Signal '{s}' expects {d} argument(s), found {d}.",
-                .{ name, args.len, values.len },
-            ));
-
-            // Owning Variants: the engine reads them during the call only.
-            var vargs: [args.len]builtins.Variant = undefined;
-            defer for (vargs[0..]) |*variant| variant.deinit();
-            inline for (args, 0..) |pair, index| {
-                vargs[index] = builtins.Variant.initDeclared(pair[1], values[index]);
-            }
-
-            const object = ownerObject(OwnerT, owner);
-            return object.emitSignal(builtins.StringName.fromComptimeLatin1(name), vargs);
-        }
-    };
 }
 
 /// The `Signal` markers declared directly on `T`, in declaration order.
@@ -85,10 +101,10 @@ pub fn findSignals(comptime T: type) []const type {
 
 /// True when `OtherT` is a type produced by `Signal`.
 fn isSignal(comptime OtherT: type) bool {
+    if (!marker_kind.is(OtherT, .signal)) return false;
     if (@typeInfo(OtherT) != .@"struct") return false;
     if (!@hasDecl(OtherT, "name") or !@hasDecl(OtherT, "args")) return false;
-    const info = @typeInfo(@TypeOf(OtherT.args));
-    if (info != .@"struct" or !info.@"struct".is_tuple) return false;
+    validateArgs(OtherT.name, OtherT.args);
     return OtherT == Signal(OtherT.name, OtherT.args);
 }
 
@@ -137,5 +153,7 @@ const std = @import("std");
 
 const builtins = @import("../builtins/builtins.zig");
 const classes = @import("../classes/classes.zig");
+const conversion = @import("../conversion.zig");
 const enums = @import("../enums.zig");
 const reflect = @import("../reflect/reflect.zig");
+const marker_kind = @import("marker.zig");

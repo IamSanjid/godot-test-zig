@@ -234,13 +234,20 @@ property cleanup do not run, even when `auto_property_cleanup` is enabled, and
 values already assigned by `Property` `.init` initializers are not cleaned
 either. Init code must release anything it created before returning the error.
 
+The lifecycle callbacks are declaration markers. `InitCallback`,
+`DeinitCallback`, and `NotificationCallback` declare `marker.Kind.init_callback`,
+`deinit_callback`, and `notification_callback`; discovery checks that kind and
+still validates the callback signature. Identity rule:
+[annotations.md](annotations.md#marker-identity).
+
 Freeing:
 
 1. Call the optional `DeinitCallback`.
 2. When `FreeInstance` is built with `auto_property_cleanup = true`, call
-   `annotations.deinitPropertyFields(T, instance)`: best-effort per-field cleanup
-   (custom `.deinit` hook, then a value type's `deinit`, then a `RefCounted`
-   reference release).
+   `annotations.deinitPropertyFields(T, instance)`: each field runs its declared
+   `.deinit` mode (a function, or `.best_effort` for value `deinit`/`RefCounted`
+   release); a field with no `.deinit` mode is skipped. See
+   [properties.md](properties.md#explicit-cleanup).
 3. Destroy the user instance with `instance_allocator`.
 
 `reflect.initFieldsDefault` only initializes fields that declare defaults.
@@ -334,7 +341,9 @@ When a class declares `Property` fields, registration installs the dynamic
 `ClassCreationInfo6` property callbacks: `set_func`/`get_func` always, and
 `get_property_list_func`/`free_property_list_func` only when at least one
 property has non-zero usage. The property list is a lazy per-class static table
-with process lifetime; it is never freed.
+with process lifetime; it is never freed. Set/get values are decoded and
+encoded with `godot.conversion` (`decodeVariant`/`encodeVariant`); see
+[conversion.md](conversion.md).
 
 Property options, backend dispatch, and cleanup rules are in
 [properties.md](properties.md); registration only decides which callbacks are
@@ -349,7 +358,9 @@ runs it immediately after `classdb_register_extension_class6`, for the same
 class and the same initialization level:
 
 - a class's `annotations.Signal` declarations register through
-  `classdb_register_extension_class_signal`;
+  `classdb_register_extension_class_signal`; each argument's Variant type and
+  engine class name are derived through `godot.conversion` (`Variant` registers
+  as untyped `.nil`; see [conversion.md](conversion.md));
 - a class's `annotations.Constants` markers register integer constants, enums,
   and bitpack flags through `classdb_register_extension_class_integer_constant`;
 - a class with neither stores a null callback and does no extra work.

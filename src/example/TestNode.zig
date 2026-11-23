@@ -15,12 +15,18 @@ the_child: godot.annotations.Property(?*godot.classes.core.Node, .{
 }) = .init(null),
 the_resource: godot.annotations.Property(?*godot.classes.core.Resource, .{
     .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
 }) = .init(null),
 the_texture: godot.annotations.Property(?*godot.classes.core.Texture, .{
     .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
 }) = .init(null),
 the_name: godot.annotations.Property(godot.builtins.String, .{
     .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
 }).Init(.fromLatin1, .{"TheName2!"}),
 /// Value types come from `ClassConstants`, so enum/bitfield hints auto-wire.
 state: godot.annotations.Property(ClassConstants.decls.State, .{

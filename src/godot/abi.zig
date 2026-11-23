@@ -1,6 +1,6 @@
 //! Canonical ptrcall marshalling: ints/enums/bitfields -> `i64` (`u64` for
 //! unsigned 64-bit), floats -> `f64`, bool -> `u8`; other types keep their
-//! layout. `RefCounted` values travel as `Ref<T>`.
+//! layout. Callers map `RefCounted` pointers to `Ref<T>` slots.
 
 /// Canonical slot conversion for `T`: `Raw`, `canonical`, `widen`, `narrow`.
 pub fn Box(comptime T: type) type {

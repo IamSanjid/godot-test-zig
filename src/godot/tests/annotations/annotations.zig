@@ -46,9 +46,39 @@ fn checkPropertyApiOwner() void {
     if (!godot.annotations.property.hasCustomInitializer(@FieldType(PropertyApiOwner, "seeded"))) @compileError("annotations.property.hasCustomInitializer must detect .init");
 }
 
+/// Marker identity covers every annotation family, and the deferred `Init`
+/// invocation helper stays outside discovery.
+fn checkMarkerKinds() void {
+    const Kind = godot.annotations.marker.Kind;
+    const expected = [_][]const u8{
+        "base",
+        "on_ready",
+        "property",
+        "init_callback",
+        "deinit_callback",
+        "notification_callback",
+        "signal",
+        "constants",
+        "property_groups",
+        "conversion",
+        "override",
+    };
+    if (comptime @typeInfo(Kind).@"enum".field_names.len != expected.len)
+        @compileError("marker.Kind must declare exactly the annotation families");
+    inline for (expected) |name| {
+        if (comptime std.meta.stringToEnum(Kind, name) == null)
+            @compileError("marker.Kind is missing the ." ++ name ++ " variant");
+    }
+    if (godot.annotations.marker.kindOf(godot.annotations.Init(u32, five, .{})) != null)
+        @compileError("Init is a deferred invocation helper and must not declare a marker kind");
+}
+
 comptime {
     checkMixedFieldOwner();
     checkPropertyApiOwner();
+    checkMarkerKinds();
 }
+
+const std = @import("std");
 
 const godot = @import("godot");

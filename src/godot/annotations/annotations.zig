@@ -1,5 +1,6 @@
-//! Opt-in markers: field annotations (Base, OnReady, Property, callbacks),
-//! class-level `Signal`/`Constants`/`PropertyGroups` metadata, and the `Init` shared initializer.
+//! Opt-in markers: field wrappers (Base, OnReady, Property), callback and
+//! override markers, class-level `Signal`/`Constants`/`PropertyGroups`
+//! metadata, the `Conversion` value-type marker, and the `Init` initializer.
 
 const base = @import("base.zig");
 pub const Base = base.Base;
@@ -41,6 +42,11 @@ pub const findConstants = constants.findConstants;
 const override = @import("override.zig");
 pub const Override = override.Override;
 
+/// `Conversion` marker for custom value-type conversion; `conversion.zig`
+/// validates its functions against the owner type.
+const conversion = @import("conversion.zig");
+pub const Conversion = conversion.Conversion;
+
 /// `Property`/`PropertyGroups` markers, field initialization/cleanup, and the
 /// property-introspection helpers used by registration and tests.
 pub const property = @import("property.zig");
@@ -50,7 +56,7 @@ pub const initPropertyFields = property.initPropertyFields;
 pub const deinitPropertyFields = property.deinitPropertyFields;
 
 /// Shared annotation marker identity (`Kind`, `kindOf`, and `is`). Registration
-/// and discovery use it to tell annotation wrappers apart.
+/// and discovery use it to tell annotation types apart.
 pub const marker = @import("marker.zig");
 
 pub fn initAnnotFieldsDefault(comptime T: type, comptime B: type, child: *T, b: *B) void {

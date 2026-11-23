@@ -86,7 +86,12 @@ fn registerSignal(
 
         inline for (marker.args, 0..) |pair, index| {
             argument_names[index] = builtins.StringName.fromLatin1(pair[0], true);
-            class_names[index] = builtins.StringName.fromLatin1(reflect.classNameOf(pair[1]), true);
+            // The engine class name follows the converter's engine type, so a
+            // custom type wrapping an object pointer exposes that class.
+            class_names[index] = builtins.StringName.fromLatin1(
+                conversion.engineClassName(pair[1]),
+                true,
+            );
             infos[index] = .{
                 .type = signalArgumentType(marker.name, pair[0], pair[1]),
                 .name = @as(interface.StringNamePtr, @ptrCast(&argument_names[index])),
@@ -108,16 +113,17 @@ fn registerSignal(
 }
 
 /// A `Variant` argument is `VariantType.nil` (an untyped value), not an error.
+/// Every other declared Zig type must have a Variant conversion; its Variant
+/// type is derived through `godot.conversion`.
 fn signalArgumentType(
     comptime signal_name: [:0]const u8,
     comptime arg_name: [:0]const u8,
     comptime Value: type,
 ) interface.VariantType {
     if (comptime Value == builtins.Variant) return .nil;
-    return comptime builtins.Variant.typeFor(Value) orelse @compileError(std.fmt.comptimePrint(
-        "Signal '{s}' argument '{s}' has no Variant type for declared type '{s}'. " ++
-            "Supported types are scalars, enums, packed bitfields, codegen builtins, " ++
-            "and engine/extension object class pointers.",
+    return comptime conversion.variantType(Value) orelse @compileError(std.fmt.comptimePrint(
+        "Signal '{s}' argument '{s}': the Conversion marker reports Variant support for '{s}' but no Variant type; " ++
+            "declare a custom Conversion marker for the type.",
         .{ signal_name, arg_name, @typeName(Value) },
     ));
 }
@@ -129,5 +135,5 @@ const interface = bindings.interface;
 
 const annotations = @import("../annotations/annotations.zig");
 const builtins = @import("../builtins/builtins.zig");
-const reflect = @import("../reflect/reflect.zig");
+const conversion = @import("../conversion.zig");
 const runtime = @import("../runtime.zig");

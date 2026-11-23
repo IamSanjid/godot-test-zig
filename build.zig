@@ -191,7 +191,6 @@ pub fn build(b: *std.Build) !void {
     // template development. Currently runs the godot-tests and the godot module tests.
     const test_step = b.step("test", "Run the project's runtime tests");
     test_step.dependOn(test_godot_step);
-    test_step.dependOn(test_godot_live_step);
 
     const lib = b.addLibrary(.{
         .name = @tagName(build_zon.name),

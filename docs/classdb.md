@@ -12,8 +12,9 @@ Status: the callback-table surfaces and the first class-metadata slice are
 implemented - signals, integer constants, the `is_virtual` flag, and the
 per-class post-registration hook. Property groups and type-derived property
 hints (enum, bitfield, and Node/Resource object pointers) are implemented on
-the dynamic property list. Methods and `is_abstract` are designed here but not
-implemented yet.
+the dynamic property list. Signal argument metadata and property metadata/value
+conversion use the shared `godot.conversion` layer. Methods and `is_abstract` are
+designed here but not implemented yet.
 
 ## Two families
 
@@ -151,6 +152,10 @@ pub const Groups = godot.annotations.PropertyGroups(.{
   `type = NIL`, `hint = NONE`, and the depth rides in `hint_string` (for
   example `",1"`), leaving the prefix slot empty. No field is added and set/get
   never sees a section.
+- Field entries take their `type` from `.type` or
+  `godot.conversion.variantType(value_type)` and their class name from the
+  declared-type hint or `godot.conversion.engineClassName(value_type)`; groups
+  themselves add no conversion. See [properties.md](properties.md#property-groups).
 - Names are verbatim engine strings and need not be unique. The engine labels
   sections by name, and duplicate names are legal.
 - Field order inside a section is the listed order, and a section emits its
@@ -170,12 +175,19 @@ Signal registration is therefore part of making an extension class usable, not
 a documentation nicety. It costs no callback and no allocation policy: the
 annotation carries a name and an argument list, and the engine copies it.
 
-Signals also get a typed emit helper, because `Object.emit_signal` takes a
-`StringName` plus a tuple of owning Variants. The declaration naming, the
-argument conversion rules, and the exact-class receive contract are locked in
-[signals.md](signals.md).
+The argument list is declared in Zig types. The shared conversion layer
+validates `.variant` support when the `Signal` marker is declared and derives
+each argument's Variant type and engine class name for registration; `Variant`
+is the one untyped argument and registers as `.nil`. Emit uses the same layer to
+encode the declared values into owning Variants, which are released after
+dispatch. There is no separate signal conversion rule, and the declaration is
+the only support gate. The naming, exact-class receive contract, and unsupported
+cases are in [signals.md](signals.md).
 
 ### D4. Methods are declared in a namespace, implemented as normal methods
+
+Status: planned. No `Method` annotation or method registration is implemented
+yet; the conversion layer it will use already exists.
 
 Zig has no declaration attributes, so a method needs a companion declaration.
 A flat companion declaration collides with the implementation's own name
@@ -209,12 +221,18 @@ pub fn total_health() i32 { ... }
 
 Both call paths are mandatory and land together:
 
-1. `ptrcall_func` reuses `abi.readArgument`/`writeReturn` and the RefCounted
-   `Ref<T>` rules already proven by the virtual callback; the shapes are
-   identical apart from the leading `method_userdata`.
-2. `call_func` converts borrowed argument Variants with `Variant.asDeclared`,
-   writes an owning `Variant.initDeclared` return, and reports
+1. `ptrcall_func` uses `godot.conversion.decodePtr`/`encodePtr` and the
+   RefCounted `Ref<T>` rules already proven by the virtual callback; the shapes
+   are identical apart from the leading `method_userdata`.
+2. `call_func` converts borrowed argument Variants with
+   `godot.conversion.decodeVariant`, writes an owning return with
+   `godot.conversion.encodeVariant`, and reports
    `CALL_ERROR_INVALID_ARGUMENT` instead of panicking.
+
+Registration will validate each parameter and the return against both paths
+with `conversion.checkSupported`/`checkBoth`; a signature that cannot support
+both is a compile error. Custom types with a `Conversion` marker are accepted wherever
+both paths are supported.
 
 `call_func` is what `Object.call`/`callv`, `Callable`, signals, and dynamic
 GDScript dispatch use. `ptrcall_func` is what a validated GDScript call uses,
@@ -259,9 +277,11 @@ pub const ClassConstants = godot.annotations.Constants(struct {
   all, gets the hint string only - no `class_name` and no added usage bit.
 - An explicit `.hint` or `.hint_string` wins and leaves the property without
   the automatic hint and enrichment; a hidden property gets no automatic hint.
-- The hint registers nothing. `Constants` already owns the enum/bitfield
-  values; the hint only marks the int property as that type for the inspector
-  and docs. Contract: [properties.md](properties.md#enum-and-bitfield-hints).
+- The hint registers nothing and adds no conversion rule. `Constants` already
+  owns the enum/bitfield values; the property's `PropertyInfo.type` is still
+  `.type` or `godot.conversion.variantType(value_type)`, and storage stays the
+  declared int/enum/bitfield type. The hint only marks it for the inspector and
+  docs. Contract: [properties.md](properties.md#enum-and-bitfield-hints).
 
 ### D6. `is_virtual` is a tooling flag; only `is_abstract` removes instances
 
@@ -349,19 +369,24 @@ New files:
 | `src/godot/annotations/signal.zig` | `Signal` marker, argument validation, discovery, typed `emit` | implemented |
 | `src/godot/annotations/constants.zig` | `Constants` marker, constant/enum/bitfield discovery, and enum/bitfield hint metadata | implemented |
 | `src/godot/registration/classdb.zig` | family gate, registration calls, copied argument metadata | implemented |
+| `src/godot/conversion.zig` | declared-type support/metadata queries, Variant/ptrcall primitives | implemented |
 | `src/godot/annotations/method.zig` | `Method` marker, signature checks | planned |
 
-The type queries these calls need are not in this table: a declared type's
-`Variant` type comes from `builtins.Variant.typeFor` (registration raises the
-declaration-named compile error itself), an object type's engine class name from
-`reflect.classNameOf`, and value conversion from
-`Variant.initDeclared`/`asDeclared`.
+The type queries these calls need come from `godot.conversion`:
+`variantType(T)` is a declared type's engine Variant type (registration raises
+the declaration-named compile error itself), `engineClassName(T)` is an object
+representation's engine class name, and `decodeVariant`/`encodeVariant` plus
+`decodePtr`/`encodePtr` are the value primitives. Do not compose a class-name
+lookup at a call site; `engineClassName` is the public query.
 
 Discovery follows the established shape: a `find*` function that scans the
-class's type declarations, filters by marker identity, and returns a comptime slice
-in declaration order. Declaration markers do not use `marker.Kind`; that enum
-stays reserved for field wrappers, and identity comes from re-derivation as in
-`annotations/override.zig`.
+class's type declarations, filters on `marker.Kind` first, re-derives the family
+type and validates its shape, and returns a comptime slice in declaration order.
+Every declaration marker uses that identity: `signal`, `constants`,
+`property_groups`, and `override` for class-level declarations, plus the
+callback kinds; `Conversion` is the type-attached `conversion` marker. `Init` is
+not a marker. Identity and the 11-kind table are in
+[annotations.md](annotations.md#marker-identity).
 
 ## Registration pipeline
 
@@ -402,7 +427,10 @@ Order inside the per-class function:
 
 The implemented slice runs constants then signals; methods will be prepended
 when they land. Constants and signals have no dependency on each other - only
-static properties will need methods to run first.
+static properties will need methods to run first. Signal argument names,
+`variantType`, and `engineClassName` are expanded at comptime through
+`godot.conversion`; the engine copies the resulting metadata, so no per-value
+conversion happens during registration.
 
 Groups and dynamic properties are part of `ClassCreationInfo6` and are not
 registered here. `classdb_unregister_extension_class` drops the class and its
@@ -416,8 +444,10 @@ per-class static.
 
 ## Verification
 
-Discovery and metadata expansion are covered by compile-only checks and unit
-tests under `zig build test-godot`. The optional
+Discovery, metadata expansion, and the conversion contract are covered by
+compile-only checks and unit tests under `zig build test-godot`
+(`tests/conversion.zig` pins support/metadata and the encode/decode primitives;
+the annotation tests pin discovery and declaration errors). The optional
 [`test-godot-live`](build.md#live-godot-tests) step verifies registration
 metadata for one extension class in a headless Godot process; other class-level
 surfaces and editor-only behavior remain compile-only or manual.

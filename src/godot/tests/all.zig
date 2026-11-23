@@ -5,8 +5,11 @@ test "hand-written runtime tests are linked" {
     _ = @import("abi.zig");
     _ = @import("annotations/annotations.zig");
     _ = @import("annotations/base.zig");
+    _ = @import("annotations/callbacks.zig");
     _ = @import("annotations/constants.zig");
+    _ = @import("annotations/conversion.zig");
     _ = @import("annotations/on_ready.zig");
+    _ = @import("annotations/override.zig");
     _ = @import("annotations/property.zig");
     _ = @import("annotations/property_hint.zig");
     _ = @import("annotations/signal.zig");
@@ -26,6 +29,7 @@ test "hand-written runtime tests are linked" {
     _ = @import("builtins/variant.zig");
     _ = @import("builtins/vector.zig");
     _ = @import("classes.zig");
+    _ = @import("conversion.zig");
     _ = @import("ownership.zig");
     _ = @import("reflect/base.zig");
     _ = @import("reflect/extension.zig");

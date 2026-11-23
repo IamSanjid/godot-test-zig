@@ -1,7 +1,10 @@
 # Variant conversion
 
 The hand-written `Variant` layer is the bridge between Zig values and Godot's
-`Variant`. It is separate from generated bindings and from ptrcall marshalling.
+`Variant`. It is separate from generated bindings and from ptrcall slot mapping.
+It owns the payload, the declared-type `initDeclared`/`asDeclared` operations, and
+their ownership rules; [conversion.md](conversion.md) owns the declared-type
+support and metadata layer that properties, signals, and virtuals use.
 
 ## API
 
@@ -25,6 +28,30 @@ the declared-type form described below.
 
 `fromPtr` is removed. `wrap` is the replacement, because the old name implied a
 construction/ownership that never happened.
+
+## Conversion layer
+
+`godot.conversion` is the declared-type layer over these operations. It answers
+support and metadata questions before any Variant is constructed:
+
+- `support(T)` reports `.variant`/`.ptr`. Scalar, enum, builtin, and object
+  pointer types support both; a raw single-item pointer (`*T`, `?*T`) is
+  ptrcall-only and has no Variant representation.
+- `engineType(T)` returns `T` for a directly supported type and the marker's
+  `.Engine` for a type with a `Conversion` marker. `variantType(T)` is the
+  Variant type of that representation, and `engineClassName(T)` the engine class
+  name of an object representation (empty otherwise).
+- A converter is type-attached, uses a directly supported engine type, and has
+  no chains. A marker on a type that already has direct support is ignored.
+- The four primitives compose the operations on this page. For a converter,
+  `decodeVariant` uses `asDeclared` then `fromEngine`, and `encodeVariant` uses
+  `toEngine` then `initDeclared`; `decodePtr`/`encodePtr` use `abi` plus the
+  RefCounted and extension-pointer rules.
+
+`Variant.typeFor(T)` reports only a direct representation. A declared surface
+should use `conversion.variantType(T)`/`support(T)` so a `Conversion` marker
+is followed; use the Variant methods below when working with a Variant directly.
+Full rules are in [conversion.md](conversion.md).
 
 ## Declared-type conversions
 
@@ -226,6 +253,12 @@ use a `u64` canonical ptrcall slot (`abi.Box(u64).Raw`), unlike narrower
 unsigned integers which widen to `i64`; Variant payloads still store both as the
 bit-preserving `i64` payload.
 
+Conversion does not add a narrower float path. Both `f32` and `f64` are
+canonical float types, so the ptrcall slot and the Variant `float` payload are
+`f64` and narrow back with `@floatCast`. A converter's engine float type follows
+the same rule; `real_t`/builtin layout configuration does not change the
+payload width.
+
 ## Variant layout
 
 A Variant is **24 bytes** when `real_t` is `f32` and **40 bytes** when `real_t`
@@ -257,11 +290,24 @@ Variant size from `Data.float`.
 
 Canonical scalars wider than 64 bits return `null`; they cannot fit the engine's
 `i64`/`f64` payload and are rejected rather than mis-reported. It only reports
-the Variant type; it does not carry per-class object metadata.
-The dynamic property backend derives `PropertyInfo` type from `Variant.typeFor`,
-object class names from `reflect.classNameOf`, and enum/bitfield hints from the
-declared Zig type; `Constants` adds the registered class name and typed-doc usage
-bits. See [properties.md](properties.md).
+the Variant type; it does not carry per-class object metadata. A declared type
+with a `Conversion` marker has no direct `Variant.typeFor` representation: the
+declared surface must ask `conversion.variantType(T)`, which follows the
+marker's engine type.
+
+The engine-facing metadata queries are on `godot.conversion`:
+
+- `variantType(T)` is the `PropertyInfo`/signal-argument Variant type of a
+  declared type, following a converter's engine type. The dynamic property
+  backend uses it unless `.type` is set.
+- `engineClassName(T)` is the engine class name of the engine representation,
+  empty for non-object types. The property backend uses it for `class_name` when
+  the descriptor's declared-type hint did not supply one, and signal
+  registration uses it for every argument.
+
+Enum/bitfield hints still come from the declared Zig type, not from the engine
+representation; `Constants` adds the registered `<Class>.<Name>` class name and
+typed-doc usage bits. See [properties.md](properties.md).
 
 Codegen builtins bridge through `toBinding` / `fromBinding`. Generated bindings
 are not used as public property/user types.

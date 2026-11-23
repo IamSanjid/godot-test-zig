@@ -16,8 +16,16 @@ const HintOwner = struct {
     scalar: godot.annotations.Property(u32, .{ .usage = .exported }) = .init(0),
     plain_object: godot.annotations.Property(?*godot.classes.core.Object, .{ .usage = .exported }) = .init(null),
     node: godot.annotations.Property(?*godot.classes.core.Node, .{ .usage = .exported }) = .init(null),
-    resource: godot.annotations.Property(?*godot.classes.core.Resource, .{ .usage = .exported }) = .init(null),
-    ref_counted: godot.annotations.Property(?*godot.classes.core.RefCounted, .{ .usage = .exported }) = .init(null),
+    resource: godot.annotations.Property(?*godot.classes.core.Resource, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
+    ref_counted: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(null),
 };
 
 comptime {

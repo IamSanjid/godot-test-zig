@@ -12,7 +12,7 @@ pub const Callbacks = struct {
 
 /// True when `T` declares at least one `Property` field.
 pub fn hasPropertyFields(comptime T: type) bool {
-    return property.descriptors(T).len != 0;
+    return comptime property.findPropertyFieldNames(T).len != 0;
 }
 
 /// Number of entries emitted by `get_property_list`: one per section header
@@ -24,6 +24,11 @@ pub fn propertyEntryCount(comptime T: type) usize {
 /// Forces Variant-type validation for every descriptor, including hidden ones.
 fn validateDescriptors(comptime T: type) void {
     inline for (property.descriptors(T)) |desc| {
+        conversion.checkSupported(
+            desc.value_type,
+            .variant,
+            std.fmt.comptimePrint("Property '{s}.{s}'", .{ @typeName(T), desc.field_name }),
+        );
         _ = requiredVariantType(T, desc);
     }
 }
@@ -135,7 +140,7 @@ fn setProperty(
 ) bool {
     const Value = comptime property.PropertyValueType(@FieldType(T, field_name));
     const set = comptime property.setterFn(T, field_name) orelse return false; // .read_only
-    const value = variant.asDeclared(Value) orelse return false;
+    const value = conversion.decodeVariant(Value, variant) orelse return false;
     set(instance, value);
     return true;
 }
@@ -149,7 +154,7 @@ fn getProperty(
     const Value = comptime property.PropertyValueType(@FieldType(T, field_name));
     const getter = comptime property.getterFn(T, field_name);
     const result: *builtins.Variant = @ptrCast(@alignCast(r_ret orelse return false));
-    result.* = builtins.Variant.initDeclared(Value, getter(instance));
+    conversion.encodeVariant(Value, getter(instance), result);
     return true;
 }
 
@@ -188,7 +193,7 @@ fn initList(comptime T: type) void {
             },
             .field => |desc_index| {
                 const desc = comptime descs[desc_index];
-                const class_name = desc.class_name orelse comptime reflect.classNameOf(desc.value_type);
+                const class_name = comptime propertyClassName(desc);
                 Storage.names[slot] = builtins.StringName.fromComptimeLatin1(desc.godot_name);
                 Storage.class_names[slot] = builtins.StringName.fromComptimeLatin1(class_name);
                 Storage.hint_strings[slot] = builtins.String.fromComptimeLatin1(desc.hint_string);
@@ -224,13 +229,24 @@ fn requiredVariantType(
     comptime desc: property.PropertyDescriptor,
 ) interface.VariantType {
     if (desc.type) |variant_type| return variant_type;
-    return comptime builtins.Variant.typeFor(desc.value_type) orelse @compileError(std.fmt.comptimePrint(
-        "Property '{s}.{s}' has no Variant type for declared type '{s}'. " ++
-            "Supported types are scalars, enums, packed bitfields, codegen builtins, " ++
-            "and engine/extension object class pointers. " ++
-            "Use '.type' to provide an explicit Variant type override.",
-        .{ @typeName(T), desc.field_name, @typeName(desc.value_type) },
-    ));
+    return comptime conversion.variantType(desc.value_type) orelse {
+        if (desc.value_type == builtins.Variant) @compileError(std.fmt.comptimePrint(
+            "Property '{s}.{s}' stores Variant transparently; add an explicit '.type = ...'.",
+            .{ @typeName(T), desc.field_name },
+        ));
+        @compileError(std.fmt.comptimePrint(
+            "Property '{s}.{s}' has no Variant type for declared type '{s}'. " ++
+                "Declare a custom Conversion marker for the type.",
+            .{ @typeName(T), desc.field_name, @typeName(desc.value_type) },
+        ));
+    };
+}
+
+/// Engine class name for a property-list entry: an explicit descriptor override
+/// wins, otherwise use the class behind the converter's engine type.
+fn propertyClassName(comptime desc: property.PropertyDescriptor) [:0]const u8 {
+    if (desc.class_name) |class_name| return class_name;
+    return comptime conversion.engineClassName(desc.value_type);
 }
 
 const std = @import("std");
@@ -240,5 +256,5 @@ const interface = bindings.interface;
 
 const property = @import("../annotations/property.zig");
 const builtins = @import("../builtins/builtins.zig");
+const conversion = @import("../conversion.zig");
 const enums = @import("../enums.zig");
-const reflect = @import("../reflect/reflect.zig");

@@ -39,6 +39,8 @@ pub fn NotificationCallback(comptime T: type, comptime method: anytype) type {
         pub const NotificationFor = T;
         pub const TExtends = Extends;
         pub const notification_method = method;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.notification_callback;
 
         pub fn makeArgs(self: *T, p_what: i32, p_reversed: bool) Args {
             return .{ self, p_what, p_reversed };
@@ -89,6 +91,7 @@ fn findNotificationCallback(comptime T: type) ?type {
 /// True if `Decl` is a type produced by `NotificationCallback(...)`.
 fn isNotificationCallbackMarker(comptime Decl: anytype) bool {
     if (@TypeOf(Decl) != type) return false;
+    if (!marker_kind.is(Decl, .notification_callback)) return false;
     if (@typeInfo(Decl) != .@"struct") return false;
     if (!@hasDecl(Decl, "NotificationFor") or !@hasDecl(Decl, "notification_method")) return false;
     return Decl == NotificationCallback(Decl.NotificationFor, Decl.notification_method);
@@ -97,3 +100,4 @@ fn isNotificationCallbackMarker(comptime Decl: anytype) bool {
 const std = @import("std");
 
 const reflect = @import("../reflect/reflect.zig");
+const marker_kind = @import("marker.zig");

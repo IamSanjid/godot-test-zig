@@ -5,17 +5,41 @@ adds behavior only when present. A class with no annotations still registers.
 
 ## Markers
 
-`OnReady` and `Property` field wrappers declare
-`pub const marker: marker.Kind` (`on_ready` / `property`). Their field discovery
-filters on that exact kind; lookalike structs without the marker are never
-discovered. `Base` declares `marker.Kind.base` for consistency, but Base
-discovery is structural and annotation-free (`reflect/base.zig`) and does not use
-marker identity.
+Every annotation family declares `pub const marker = marker.Kind.<family>`.
+`kindOf`/`is` report that identity. Discovery checks the kind first, then applies
+the family's own payload validation, so a lookalike struct cannot register
+behavior by writing a marker value alone. `Init` is a deferred call descriptor
+and declares no marker. `Base` declares kind `base`, but Base discovery itself
+stays structural and annotation-free in `reflect/base.zig` so `Variant` and
+registration can run without annotations.
 
-Declaration markers (`Override`, `Signal`, `Constants`, `PropertyGroups`) carry no `marker.Kind`.
-They describe the class rather than a field: `Override` names a virtual
-implementation, `Signal` declarations are collected by marker type, and
-`Constants` by its wrapped declarations. See [classdb.md](classdb.md).
+### Marker identity
+
+| Kind | Declared by | Role |
+|---|---|---|
+| `base` | `Base(Extends)` | Field wrapper: stores the engine base pointer |
+| `on_ready` | `OnReady(T)` | Field wrapper: deferred initialization |
+| `property` | `Property(T, options)` | Field wrapper: dynamic engine property |
+| `init_callback` | `InitCallback(T, f)` | Class declaration: creation/reload callback |
+| `deinit_callback` | `DeinitCallback(T, f)` | Class declaration: free-instance callback |
+| `notification_callback` | `NotificationCallback(T, f)` | Class declaration: notification hook |
+| `signal` | `Signal(name, args)` | Class declaration: signal metadata and typed emit |
+| `constants` | `Constants(decls)` | Class declaration: integer constants, enums, bitfields |
+| `property_groups` | `PropertyGroups(groups)` | Class declaration: inspector section tree |
+| `conversion` | `Conversion(spec)` | Type-attached value conversion |
+| `override` | `Override(engine_name, f)` | Class declaration: alternate Zig name for a virtual |
+
+The kind is family identity, not payload validity. It records what the
+declaration claims; each family still validates its parameters with its
+constructor and discovery code, and a hand-written marker that only carries the
+kind is rejected or fails its own checks. A marker with a valid kind but an
+invalid signal name, constant declaration, callback signature, `Property` option,
+or conversion spec is still a compile error. `Init` is not a marker and is never
+discovered.
+
+Kind identity is the first filter for field and declaration discovery; the
+family-specific rules in the sections below remain the contract. See
+[classdb.md](classdb.md) for how class-level declarations are registered.
 
 ### `Base(Extends)`
 
@@ -90,14 +114,26 @@ health: Property(i32, .{
   `.exported` / `.none`, or an anonymous struct of flags. Zero-usage properties
   are hidden from `get_property_list` but stay reachable through engine
   set/get.
+- The engine-facing `PropertyInfo.type` is `.type` when present, otherwise
+  `godot.conversion.variantType(T)`; its engine class name comes from the
+  descriptor or `godot.conversion.engineClassName(T)`. Inspector hints are
+  derived from the declared Zig type, not the engine type. See
+  [conversion.md](conversion.md#consumers).
+- Ownership is explicit per field. `.set` and `.deinit` accept `.best_effort`
+  or a function. A trivial value type may omit both; a non-trivial one (managed
+  builtin, `Variant`, `RefCounted` pointer, or a struct declaring `deinit`) must
+  declare both, or just `.deinit` when `.read_only`. `.deinit` is cleanup only
+  and is never called by a setter. The preset helpers are
+  `godot.annotations.property.setBestEffort`, `deinitBestEffort`, and
+  `requiresExplicitOwnership`; the rules are in
+  [properties.md](properties.md#ownership-modes).
 - `Property(T, options).Init(func, args)` appends `.init = Init(T, func, args)`;
   chain it only once.
 - Registration installs the dynamic `ClassCreationInfo6` property callbacks;
   static ClassDB property registration is deliberately not used. See
   [classdb.md](classdb.md#d1-the-dynamic-property-backend-stays-the-only-property-backend).
-- Backend behavior, `.init`/`OnReady` timing, `.read_only` details,
-  `.type` overrides, managed-builtin defaults, and lifetime cleanup are in
-  [properties.md](properties.md).
+- Backend behavior, `.init`/`OnReady` timing, `.read_only` details, `.type`
+  overrides, and lifetime cleanup are in [properties.md](properties.md).
 
 ### `InitCallback(T, f)`
 
@@ -154,6 +190,48 @@ fn cursorShape(self: *const @This(), at_position: godot.builtins.Vector2) i32 {
   virtual name, or when the virtual name is generated with a conversion you do
   not want to depend on.
 
+### `Conversion(spec)`
+
+Declares how a custom value type converts to an engine type. Attach it to the
+type itself under any declaration name:
+
+```zig
+const Duration = struct {
+    millis: i32,
+
+    pub const ToInt = godot.annotations.Conversion(.{
+        .engine = i32,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: Duration) i32 {
+        return self.millis;
+    }
+
+    fn fromEngine(millis: i32) Duration {
+        return .{ .millis = millis };
+    }
+};
+```
+
+- The declaration name is free; discovery scans the type's declarations for the
+  `conversion` marker identity. A type may declare at most one marker, and
+  lookalike declarations without that identity are ignored.
+- The spec has exactly three snake_case keys: `.engine` (a type with direct
+  conversion support), `.to_engine` (`fn (T) Engine`), and `.from_engine`
+  (`fn (Engine) T`). The marker exports `.Engine`, `.toEngine`, `.fromEngine`,
+  and declares `marker.Kind.conversion`.
+- Function signatures are validated when `godot.conversion` first uses the
+  marker; the marker constructor validates the spec shape and field names.
+- The engine type cannot be `Variant` and cannot itself be a converter: there
+  are no conversion chains. A marker on a type that already has direct support
+  is ignored: direct support wins.
+- Properties, signals, and virtuals consume the marker through the shared
+  `godot.conversion` queries and primitives; see [conversion.md](conversion.md)
+  for support rules, ownership, and examples. There is no per-class or
+  per-surface conversion override.
+
 ### `Signal(engine_name, args)`
 
 Declares one engine signal as a flat class declaration, next to `Extends`:
@@ -167,15 +245,22 @@ pub const HealthChanged = godot.annotations.Signal("health_changed", .{
 
 - The first argument is the engine-facing name; the declaration name is only a
   Zig handle, so no case conversion is applied.
-- `args` is a tuple of `.{ "engine_arg_name", Type }` pairs in engine order. Names are used
-  verbatim and must be unique inside one signal. Types use the property Variant
-  mapping, with one exception: `Variant` is a valid untyped signal argument while
-  a property needs an explicit `.type` for it.
+- `args` is a tuple of `.{ "engine_arg_name", Type }` pairs in engine order.
+  Names are used verbatim and must be unique inside one signal. `Type` is the
+  declared Zig type; `Signal` validates `.variant` support at declaration and
+  names the signal and argument in the error. `Variant` is the one untyped
+  argument (it registers as `.nil`), while a property storing `Variant` needs an
+  explicit `.type`.
+- Registration derives each argument's `variantType` and `engineClassName`
+  through `godot.conversion`; emit encodes the declared values with
+  `encodeVariant`. A custom converter argument must be an exact `T` value. See
+  [signals.md](signals.md#registration).
 - Signal registration is what makes `connect`/`emit_signal` work: the engine
   resolves signals from the class signal map.
 - A class with no signal declarations registers no signals.
 
-Emit through the marker, which converts each argument:
+Emit through the marker, which encodes each declared argument into an owning
+Variant and releases it after dispatch:
 
 ```zig
 _ = TestNode.HealthChanged.emit(self, .{ self.health.get(), self });
@@ -255,7 +340,7 @@ The flat `godot.annotations` exports remain the declaration and lifecycle API
 that user classes call:
 
 - markers: `Base`, `OnReady`, `Property`, `PropertyGroups`, `Signal`,
-  `Constants`, `Init`, `Override`, and the callback markers;
+  `Constants`, `Conversion`, `Init`, `Override`, and the callback markers;
 - lifecycle helpers: `initBase`, `initAnnotFieldsDefault`,
   `initPropertyFields`, `deinitPropertyFields`, `initOnReadyFields`;
 - discovery: `findSignals`, `findConstants`, and `callComptimeArg1`.
@@ -266,15 +351,18 @@ exports. They are not part of the declaration API:
 - `godot.annotations.property` - the `Property`/`PropertyGroups`
   implementation plus descriptor/layout tables (`descriptors`, `layout`,
   `PropertyDescriptor`, `PropertyValueType`), getter/setter/deinit
-  introspection, field discovery, and the cleanup internals.
+  introspection, the explicit ownership helpers (`requiresExplicitOwnership`,
+  `setBestEffort`, `deinitBestEffort`), field discovery, and the cleanup
+  internals.
 - `godot.annotations.constants` - the `Constants` internals, constant
   discovery, and the type-hint helpers (`typeHint`, `findEnumName`) that derive
   inspector hints from a Zig value type.
 
 Tooling and tests import the submodules directly; user classes stay on the flat
 exports. The facade also exports the `marker` submodule (`marker.Kind`,
-`kindOf`, `is`) because discovery compares marker identity. The same split is
-summarized in [CONTEXT.md](../CONTEXT.md#layout).
+`kindOf`, `is`) because discovery compares marker identity, and the
+`property`/`constants` submodules above. The same split is summarized in
+[CONTEXT.md](../CONTEXT.md#layout).
 
 ## Annotation initialization
 

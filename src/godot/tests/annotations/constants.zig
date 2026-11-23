@@ -48,9 +48,30 @@ fn checkConstantDiscovery() void {
     if (entries[6].value != 5) @compileError("a second marker's values must be preserved");
 
     if (godot.annotations.findConstants(NoConstants).len != 0) @compileError("classes without a Constants marker must report none");
+
+    if (ConstantsFixture.ClassConstants.marker != godot.annotations.marker.Kind.constants)
+        @compileError("Constants markers must declare marker.Kind.constants");
+    if (ConstantsFixture.More.marker != godot.annotations.marker.Kind.constants)
+        @compileError("every Constants marker must declare marker.Kind.constants");
+    if (godot.annotations.findConstants(ConstantsLookalikeOwner).len != 0)
+        @compileError("a Constants lookalike without the marker kind is not discovered");
+    if (godot.annotations.marker.kindOf(ConstantsLookalikeOwner.Lookalike) != null)
+        @compileError("a Constants lookalike must not declare an annotation marker");
 }
 
 const NoConstants = struct {};
+
+/// Same `decls`/`entries` payload shape as a real marker, but no marker kind.
+const ConstantsLookalikeOwner = struct {
+    pub const Lookalike = struct {
+        pub const decls = struct {
+            pub const MAX_HEALTH = 100;
+        };
+        pub const entries = [_]godot.annotations.ConstantEntry{
+            .{ .enum_name = "", .name = "MAX_HEALTH", .value = 100, .is_bitfield = false },
+        };
+    };
+};
 
 const HintMode = enum(i32) { idle, running = 3 };
 const HintFlags = bitpack struct(u32) {

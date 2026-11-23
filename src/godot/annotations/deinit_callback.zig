@@ -41,6 +41,8 @@ pub fn DeinitCallback(comptime T: type, comptime method: anytype) type {
         pub const DeinitFor = T;
         pub const TExtends = Extends;
         pub const deinit_method = method;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.deinit_callback;
 
         pub fn makeArgs(self: *T, allocator: Allocator) Args {
             var args: Args = undefined;
@@ -99,6 +101,7 @@ fn findDeinitCallback(comptime T: type) ?type {
 /// True if `Decl` is a type produced by `DeinitCallback(...)`.
 fn isDeinitCallbackMarker(comptime Decl: anytype) bool {
     if (@TypeOf(Decl) != type) return false;
+    if (!marker_kind.is(Decl, .deinit_callback)) return false;
     if (@typeInfo(Decl) != .@"struct") return false;
     if (!@hasDecl(Decl, "DeinitFor") or !@hasDecl(Decl, "deinit_method")) return false;
     return Decl == DeinitCallback(Decl.DeinitFor, Decl.deinit_method);
@@ -107,3 +110,4 @@ fn isDeinitCallbackMarker(comptime Decl: anytype) bool {
 const std = @import("std");
 
 const reflect = @import("../reflect/reflect.zig");
+const marker_kind = @import("marker.zig");

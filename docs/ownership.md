@@ -46,6 +46,10 @@ Non-`RefCounted` object arguments are passed as `Object**`; returns are `Object*
 - argument: `p_args[i]` points to `Ref<T>`; use `ref_get_object`
 - return: `r_ret` points to `Ref<T>`; use `ref_set_object`
 
+Virtual callbacks reach these through `godot.conversion.decodePtr` /
+`encodePtr`; the reference rules below are unchanged. See
+[conversion.md](conversion.md).
+
 The object pointer returned by `ref_get_object` is borrowed for the call.
 If the user retains it, they must take their own reference.
 
@@ -91,10 +95,14 @@ The engine-object helpers live in `src/godot/ownership.zig` and are exported as
 - `releaseConstructedBase(Base, base)` - release a base constructed by
   `classdb_construct_object3`, per [Construction](#construction).
 
-These are the runtime's only retain/release primitives. The `Property` default
-setter and `deinitPropertyFields` call them instead of carrying their own
-reference-count policy, and `Variant` uses `retainObjectReference`. The module
-imports `reflect` and codegen `classes`, never annotations or registration.
+These are the runtime's only retain/release primitives. The `Property`
+`.best_effort` modes (`godot.annotations.property.setBestEffort` /
+`deinitBestEffort`, used through the `.set`/`.deinit` options) call them, and so
+does the `.best_effort` branch of `deinitPropertyFields`; neither carries its
+own reference-count policy. `Variant` uses `retainObjectReference`. Property
+ownership modes are in [properties.md](properties.md#ownership-modes). The
+module imports `reflect` and codegen `classes`, never annotations or
+registration.
 
 ## `Variant`
 
@@ -132,8 +140,8 @@ public `f64` because the engine utility implementation is C++ `double`.
 
 Virtual callbacks use the codegen type directly for builtins and object shapes.
 This is valid only while the ABI-compatibility invariant holds. If a codegen
-builtin ever diverges from its binding layout, virtual marshalling must gain a
-conversion step.
+builtin ever diverges from its binding layout, its conversion representation must
+change rather than the callback.
 
 ## Binding returns
 

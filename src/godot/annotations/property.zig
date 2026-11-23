@@ -1,6 +1,12 @@
 //! `Property` field annotation, `PropertyGroups` layout, option normalization,
 //! accessors, discovery, and lifetime helpers. See docs/properties.md.
 
+/// How a writable property replaces its stored value.
+const SetMode = enum { plain, best_effort, custom };
+
+/// How `deinitPropertyFields` releases a stored value.
+const DeinitMode = enum { none, best_effort, custom };
+
 /// A direct field type that stores a Zig value and declares an engine property.
 /// Options and lifetime rules: docs/properties.md.
 pub fn Property(comptime T: type, comptime p_options: anytype) type {
@@ -17,9 +23,11 @@ pub fn Property(comptime T: type, comptime p_options: anytype) type {
         pub const variant_type: ?interface.VariantType = normalized.variant_type;
         pub const read_only = normalized.read_only;
         pub const has_custom_get = @hasField(@TypeOf(p_options), "get");
-        pub const has_custom_set = @hasField(@TypeOf(p_options), "set");
+        pub const has_custom_set = normalized.set_mode == .custom;
         pub const has_custom_init = @hasField(@TypeOf(p_options), "init");
-        pub const has_custom_deinit = @hasField(@TypeOf(p_options), "deinit");
+        pub const has_custom_deinit = normalized.deinit_mode == .custom;
+        const set_mode = normalized.set_mode;
+        const deinit_mode = normalized.deinit_mode;
         pub const marker = marker_kind.Kind.property;
 
         value: T,
@@ -68,6 +76,37 @@ pub fn Property(comptime T: type, comptime p_options: anytype) type {
     };
 }
 
+/// True when `T` needs explicit `.set`/`.deinit` modes. See docs/properties.md.
+pub fn requiresExplicitOwnership(comptime T: type) bool {
+    return builtins.isManaged(T) or T == builtins.Variant or
+        reflect.isRefCountedPointer(T) or hasValueDeinit(T);
+}
+
+/// Replaces a stored value: deinitialize an owned managed builtin or `Variant`,
+/// retain/release `RefCounted` pointers, otherwise assign. The new value is
+/// stored even when it is the current value.
+pub fn setBestEffort(comptime T: type, field: *T, value: T) void {
+    if (comptime builtins.isManaged(T) or T == builtins.Variant) {
+        field.deinit();
+    } else if (comptime reflect.isRefCountedPointer(T)) {
+        // Take the new reference first: assigning the current object back must
+        // not release the last reference before retaining it.
+        ownership.retainRefCounted(T, value);
+        ownership.releaseRefCounted(T, field.*);
+    }
+    field.* = value;
+}
+
+/// Releases a stored value: call a user struct's `deinit` or release a
+/// `RefCounted` reference; other value types need no cleanup.
+pub fn deinitBestEffort(comptime T: type, field: *T) void {
+    if (comptime hasValueDeinit(T)) {
+        field.deinit();
+    } else if (comptime reflect.isRefCountedPointer(T)) {
+        ownership.releaseRefCounted(T, field.*);
+    }
+}
+
 /// Declares the inspector section tree for a class's visible `Property` fields.
 /// Every visible field must be listed exactly once; nesting gives the section
 /// depth. The marker declaration name is free.
@@ -76,6 +115,8 @@ pub fn PropertyGroups(comptime p_groups: anytype) type {
     validateGroupDecls(p_groups);
     return struct {
         pub const groups = p_groups;
+        /// Annotation marker identity; see annotations/marker.zig.
+        pub const marker = marker_kind.Kind.property_groups;
     };
 }
 
@@ -102,13 +143,23 @@ pub const PropertyDescriptor = struct {
     hint_string: [:0]const u8,
     /// `<Class>.<Name>` for a same-class `Constants` enum/bitfield, the object
     /// class name for a visible object pointer, null otherwise. Registration
-    /// falls back to `reflect.classNameOf` when null.
+    /// falls back to `conversion.engineClassName(value_type)` when null.
     class_name: ?[:0]const u8,
     type: ?interface.VariantType,
 };
 
 /// Finds `Property` fields declared directly on `T`, in declaration order.
 pub fn findPropertyFieldNames(comptime T: type) []const [:0]const u8 {
+    return PropertyFieldNamesCache(T).value;
+}
+
+fn PropertyFieldNamesCache(comptime T: type) type {
+    return struct {
+        const value = computePropertyFieldNames(T);
+    };
+}
+
+fn computePropertyFieldNames(comptime T: type) []const [:0]const u8 {
     comptime {
         const type_info = @typeInfo(T);
         if (type_info != .@"struct") @compileError("Expected struct type, found: " ++ @typeName(T));
@@ -117,7 +168,6 @@ pub fn findPropertyFieldNames(comptime T: type) []const [:0]const u8 {
         var n: usize = 0;
         for (info.field_names, info.field_types) |name, F| {
             if (!reflect.isNormalStruct(F)) continue;
-            if (!marker_kind.is(F, .property)) continue;
             if (!isPropertyField(F)) continue;
             names[n] = name;
             n += 1;
@@ -130,6 +180,16 @@ pub fn findPropertyFieldNames(comptime T: type) []const [:0]const u8 {
 /// Descriptor table for `T`, in declaration order; duplicate engine names are a
 /// compile error.
 pub fn descriptors(comptime T: type) [findPropertyFieldNames(T).len]PropertyDescriptor {
+    return DescriptorTable(T).value;
+}
+
+fn DescriptorTable(comptime T: type) type {
+    return struct {
+        const value = computeDescriptors(T);
+    };
+}
+
+fn computeDescriptors(comptime T: type) [findPropertyFieldNames(T).len]PropertyDescriptor {
     const names = findPropertyFieldNames(T);
     var out: [names.len]PropertyDescriptor = undefined;
     inline for (names, 0..) |field_name, i| {
@@ -160,6 +220,16 @@ pub fn isPropertyField(comptime F: type) bool {
 
 /// Returns `T`'s `PropertyGroups` marker, or an empty slice.
 pub fn findPropertyGroups(comptime T: type) []const type {
+    return PropertyGroupsCache(T).value;
+}
+
+fn PropertyGroupsCache(comptime T: type) type {
+    return struct {
+        const value = computePropertyGroups(T);
+    };
+}
+
+fn computePropertyGroups(comptime T: type) []const type {
     comptime {
         if (@typeInfo(T) != .@"struct") @compileError("Expected a class struct, found: " ++ @typeName(T));
 
@@ -186,6 +256,16 @@ pub fn findPropertyGroups(comptime T: type) []const type {
 /// order. With a marker it is the declared section tree; every visible field
 /// must be listed exactly once.
 pub fn layout(comptime T: type) []const LayoutEntry {
+    return LayoutCache(T).value;
+}
+
+fn LayoutCache(comptime T: type) type {
+    return struct {
+        const value = computeLayout(T);
+    };
+}
+
+fn computeLayout(comptime T: type) []const LayoutEntry {
     comptime {
         const descs = descriptors(T);
         const descs_slice = descs[0..];
@@ -216,6 +296,7 @@ pub fn layout(comptime T: type) []const LayoutEntry {
 }
 
 fn isPropertyGroups(comptime OtherT: type) bool {
+    if (!marker_kind.is(OtherT, .property_groups)) return false;
     if (@typeInfo(OtherT) != .@"struct") return false;
     if (!@hasDecl(OtherT, "groups")) return false;
     return OtherT == PropertyGroups(OtherT.groups);
@@ -428,36 +509,30 @@ pub fn getterFn(comptime Owner: type, comptime field_name: [:0]const u8) fn (*Ow
     }.getValue;
 }
 
-/// Setter thunk, or null when `.read_only`. The default setter owns managed
-/// builtin replacement and `RefCounted` retain/release.
+/// Setter thunk, or null when `.read_only`. `.best_effort` reproduces the
+/// built-in ownership policy; a missing `.set` on a trivial value type is plain
+/// assignment.
 pub fn setterFn(comptime Owner: type, comptime field_name: [:0]const u8) ?fn (*Owner, PropertyValueType(@FieldType(Owner, field_name))) void {
     const F = RequirePropertyField(Owner, field_name);
     const Value = F.PropertyFor;
     if (comptime F.read_only) return null;
-    if (comptime hasCustomSetter(F)) {
-        validateSetterOwner(Owner, field_name);
-        const set = @field(F.options, "set");
-        return set;
-    }
-    return struct {
-        fn setValue(owner: *Owner, value: Value) void {
-            const field = &@field(owner, field_name).value;
-
-            // The default setter is the one place that replaces a managed
-            // value. Keep its ownership policy here so every caller gets the
-            // same behavior as engine dispatch.
-            if (comptime builtins.isManaged(Value) or Value == builtins.Variant) {
-                field.deinit();
-            } else if (comptime reflect.isRefCountedPointer(Value)) {
-                // Take the new reference first: assigning the current object
-                // back must not release the last reference before retaining it.
-                ownership.retainRefCounted(Value, value);
-                ownership.releaseRefCounted(Value, field.*);
+    switch (comptime F.set_mode) {
+        .custom => {
+            validateSetterOwner(Owner, field_name);
+            const set = @field(F.options, "set");
+            return set;
+        },
+        .best_effort => return struct {
+            fn setValue(owner: *Owner, value: Value) void {
+                setBestEffort(Value, &@field(owner, field_name).value, value);
             }
-
-            field.* = value;
-        }
-    }.setValue;
+        }.setValue,
+        .plain => return struct {
+            fn setValue(owner: *Owner, value: Value) void {
+                @field(owner, field_name).value = value;
+            }
+        }.setValue,
+    }
 }
 
 /// True when engine `set` dispatch can write a `Property` field.
@@ -507,7 +582,8 @@ pub fn hasCustomDeinit(comptime F: type) bool {
     return F.has_custom_deinit;
 }
 
-/// Custom `.deinit` thunk, or null.
+/// Custom `.deinit` thunk, or null. `.best_effort` is not a custom hook;
+/// `deinitPropertyFields` branches on the declared mode instead.
 pub fn deinitFn(comptime Owner: type, comptime field_name: [:0]const u8) ?fn (*Owner) void {
     const F = RequirePropertyField(Owner, field_name);
     if (comptime !hasCustomDeinit(F)) return null;
@@ -516,9 +592,8 @@ pub fn deinitFn(comptime Owner: type, comptime field_name: [:0]const u8) ?fn (*O
     return deinit_hook;
 }
 
-/// Best-effort cleanup of every `Property` field: custom `.deinit`, value
-/// `deinit`, or `RefCounted` release. Fields must be valid; does not free the
-/// instance.
+/// Runs every field's declared cleanup policy: custom `.deinit`, `.best_effort`,
+/// or nothing. Fields must be valid; does not free the instance.
 pub fn deinitPropertyFields(comptime T: type, instance: *T) void {
     comptime if (@typeInfo(T) != .@"struct") @compileError(
         "deinitPropertyFields expects an extension class struct type, found: " ++ @typeName(T),
@@ -531,17 +606,10 @@ pub fn deinitPropertyFields(comptime T: type, instance: *T) void {
 fn deinitPropertyField(comptime T: type, comptime field_name: [:0]const u8, instance: *T) void {
     const F = @FieldType(T, field_name);
     const Value = F.PropertyFor;
-    if (comptime hasCustomDeinit(F)) {
-        deinitFn(T, field_name).?(instance);
-        return;
-    }
-    const field = &@field(instance, field_name).value;
-    if (comptime hasValueDeinit(Value)) {
-        field.deinit();
-        return;
-    }
-    if (comptime reflect.isRefCountedPointer(Value)) {
-        ownership.releaseRefCounted(Value, field.*);
+    switch (comptime F.deinit_mode) {
+        .custom => deinitFn(T, field_name).?(instance),
+        .best_effort => deinitBestEffort(Value, &@field(instance, field_name).value),
+        .none => {},
     }
 }
 
@@ -560,6 +628,8 @@ const NormalizedOptions = struct {
     hint_string: [:0]const u8,
     variant_type: ?interface.VariantType,
     read_only: bool,
+    set_mode: SetMode,
+    deinit_mode: DeinitMode,
 };
 
 const option_keys = [_][]const u8{ "usage", "name", "hint", "hint_string", "type", "get", "set", "read_only", "init", "deinit" };
@@ -606,8 +676,6 @@ fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptio
         if (explicit_name.len == 0) @compileError("Property<" ++ @typeName(T) ++ "> .name must not be empty");
     }
     if (@hasField(OptionsT, "get")) validateGetterShape(T, options.get);
-    if (@hasField(OptionsT, "set")) validateSetterShape(T, options.set);
-    if (@hasField(OptionsT, "deinit")) validateDeinitShape(T, options.deinit);
     const read_only: bool = if (@hasField(OptionsT, "read_only")) blk: {
         if (@TypeOf(options.read_only) != bool) @compileError(
             "Property<" ++ @typeName(T) ++ "> .read_only must be a bool, found: " ++ @typeName(@TypeOf(options.read_only)),
@@ -615,8 +683,24 @@ fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptio
         break :blk options.read_only;
     } else false;
     if (@hasField(OptionsT, "set") and read_only) {
-        @compileError("Property<" ++ @typeName(T) ++ "> cannot combine '.read_only = true' with a custom '.set'; " ++
+        @compileError("Property<" ++ @typeName(T) ++ "> cannot combine '.read_only = true' with a '.set' option; " ++
             "a read-only property has no engine setter. Remove one of them.");
+    }
+    const set_mode: SetMode = if (@hasField(OptionsT, "set"))
+        normalizeSetMode(T, options.set)
+    else
+        .plain;
+    const deinit_mode: DeinitMode = if (@hasField(OptionsT, "deinit"))
+        normalizeDeinitMode(T, options.deinit)
+    else
+        .none;
+    if (comptime requiresExplicitOwnership(T)) {
+        if (comptime !read_only and set_mode == .plain) @compileError(
+            "Property<" ++ @typeName(T) ++ "> stores a managed/heap value; declare '.set = .best_effort' or a setter function, or mark it '.read_only = true'",
+        );
+        if (comptime deinit_mode == .none) @compileError(
+            "Property<" ++ @typeName(T) ++ "> stores a managed/heap value; declare '.deinit = .best_effort' or a cleanup function",
+        );
     }
     if (@hasField(OptionsT, "init")) validateInitializerShape(T, options.init);
     const variant_type: ?interface.VariantType = if (@hasField(OptionsT, "type"))
@@ -635,6 +719,8 @@ fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptio
         .hint_string = hint_string,
         .variant_type = variant_type,
         .read_only = read_only,
+        .set_mode = set_mode,
+        .deinit_mode = deinit_mode,
     };
 }
 
@@ -695,6 +781,28 @@ fn normalizeHint(comptime T: type, comptime hint: anytype) enums.PropertyHint {
             @compileError("Property<" ++ @typeName(T) ++ "> has unknown .hint literal '." ++ tag ++ "'");
     }
     @compileError("Property<" ++ @typeName(T) ++ "> .hint must be a PropertyHint value or an enum literal such as .range; found: " ++ @typeName(HintT));
+}
+
+fn normalizeSetMode(comptime T: type, comptime set: anytype) SetMode {
+    if (@TypeOf(set) == @TypeOf(.enum_literal)) {
+        const tag = @tagName(set);
+        if (comptime std.mem.eql(u8, tag, "best_effort")) return .best_effort;
+        @compileError("Property<" ++ @typeName(T) ++ "> has unknown .set literal '." ++ tag ++
+            "'; expected '.best_effort' or a setter function");
+    }
+    validateSetterShape(T, set);
+    return .custom;
+}
+
+fn normalizeDeinitMode(comptime T: type, comptime deinit_hook: anytype) DeinitMode {
+    if (@TypeOf(deinit_hook) == @TypeOf(.enum_literal)) {
+        const tag = @tagName(deinit_hook);
+        if (comptime std.mem.eql(u8, tag, "best_effort")) return .best_effort;
+        @compileError("Property<" ++ @typeName(T) ++ "> has unknown .deinit literal '." ++ tag ++
+            "'; expected '.best_effort' or a cleanup function");
+    }
+    validateDeinitShape(T, deinit_hook);
+    return .custom;
 }
 
 fn isSingleItemPointer(comptime P: type) bool {

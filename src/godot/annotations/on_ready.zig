@@ -8,7 +8,7 @@ pub fn OnReady(comptime T: type) type {
             return struct {
                 pub const ForT = T;
                 pub const InitCall = init_mod.Init(?ValueT, func, args);
-                pub const marker = marker_mod.Kind.on_ready;
+                pub const marker = marker_kind.Kind.on_ready;
 
                 value: ?ValueT = null,
 
@@ -66,7 +66,7 @@ pub fn findOnReadyFieldNames(comptime T: type) []const [:0]const u8 {
         var n: usize = 0;
         for (info.field_names, info.field_types) |name, F| {
             if (!reflect.isNormalStruct(F)) continue;
-            if (!marker_mod.is(F, .on_ready)) continue;
+            if (!marker_kind.is(F, .on_ready)) continue;
             if (!isOnReady(F)) continue;
             names[n] = name;
             n += 1;
@@ -80,7 +80,7 @@ pub fn isOnReady(OtherT: type) bool {
     if (@typeInfo(OtherT) != .@"struct") return false;
     if (!@hasDecl(OtherT, "ForT") or
         !@hasDecl(OtherT, "InitCall")) return false;
-    if (@TypeOf(OtherT.marker) != marker_mod.Kind) return false;
+    if (@TypeOf(OtherT.marker) != marker_kind.Kind) return false;
     return OtherT.marker == .on_ready;
 }
 
@@ -89,4 +89,4 @@ const is_runtime_safety = @import("builtin").mode.runtimeSafety();
 const classes = @import("../classes/classes.zig");
 const reflect = @import("../reflect/reflect.zig");
 const init_mod = @import("init.zig");
-const marker_mod = @import("marker.zig");
+const marker_kind = @import("marker.zig");

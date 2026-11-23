@@ -7,6 +7,7 @@
 | `bindings/` | `godot_interface` only | Raw ABI wrappers; no runtime or facade dependency. |
 | codegen output | `bindings`, `runtime.zig`, `reflect` | Generated dispatcher wrappers, typed classes, virtual metadata. Never imports `godot.zig`, annotations, or registration. |
 | `runtime.zig` | `bindings`, codegen builtins/utility, `registration`, `reflect` | Process-wide dispatcher/registry state and engine lifecycle. |
+| `conversion.zig` | `runtime.zig`, `bindings`, codegen builtins, `reflect`, `abi.zig`, `annotations/conversion.zig` | Declared-type support and metadata queries plus Variant/ptrcall primitives; shared by properties, signals, virtuals, and registration. |
 | hand-written support | `runtime.zig`, `bindings`, `reflect` | `abi.zig`, `heap.zig`, annotations, registration helpers. |
 | `ownership.zig` | codegen `classes`, `reflect` | Engine-object retain/release and constructed-base destruction; no runtime, annotations, or registration dependency. |
 | `godot.zig` | `runtime.zig` and codegen modules | Facade only; nothing else imports it. |
@@ -100,15 +101,29 @@ registration.
   `retainObjectReference`) and destruction of a base constructed by
   `classdb_construct_object3` (`releaseConstructedBase`). It depends on codegen
   `classes` plus `reflect`, never on `runtime.zig`, annotations, or registration.
+- `conversion.zig` - the shared declared-type conversion layer:
+  `support`/`engineType`/`variantType`/`engineClassName`, the compile-time
+  support gates, and the four Variant/ptrcall encode/decode primitives. It owns
+  the `Conversion` marker support policy (direct support only, no chains, no
+  ambiguity) and the `RefCounted`/extension pointer rules. It imports `reflect`,
+  `abi.zig`, codegen builtins, `runtime`, and the `Conversion` marker; it does
+  not own property, signal, or virtual policy.
 - `tests/` - hand-written tests and compile-only checks that mirror the module
   layout; `all.zig` is the root used by `zig build test-godot`, and `live/` is
   a separate dynamic-library source tree used by `test-godot-live`.
+  `tests/conversion.zig` pins support/metadata and the encode/decode primitives;
+  annotation tests pin the declaration-time gates.
 - `reflect/` - type/object predicates, inheritance traversal, Base-marker
   discovery, function-shape helpers, generic field-default initialization, and
-  the engine class name of an object pointer type (`classNameOf`).
+  the engine class name of an object pointer type (`classNameOf`). Reflection is
+  query-only; `conversion.engineClassName` is the declared-type query built on
+  it.
 - `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
   `InitCallback`, `DeinitCallback`, `NotificationCallback`, plus the
-  class-level `Signal`, `Constants`, and `PropertyGroups` markers.
+  class-level `Signal`, `Constants`, and `PropertyGroups` markers and the
+  type-attached `Conversion` marker. Every family declares
+  `pub const marker = marker.Kind.<family>`; discovery checks the kind and then
+  the family's shape. `Init` is not a marker.
 - `registration/` - optional `Registry`, class creation, recreation, and free,
   notification, virtual-method registration, dynamic property callbacks, and
   class-level ClassDB metadata.
@@ -119,13 +134,16 @@ The layer root holds only files that two layers must share, that the build pins
 there, or that are process-wide: the facade and lifecycle (`godot.zig`,
 `runtime.zig`), the engine boundary primitives (`abi.zig` for ptrcall slots,
 `ownership.zig` for engine-object retain/release and constructed-base
-destruction), allocation (`heap.zig`), and naming (`naming.zig`). A helper owned
-by a single layer, or a composition of one layer's primitives, lives in that
-layer's directory: property hints and object class names are resolved from the
-declared type in `annotations/property_hint.zig`, while `registration/` builds
-the `PropertyInfo` table from those descriptors plus `builtins.Variant.typeFor`,
-and the declared value conversions are Variant operations
-(`Variant.initDeclared` / `Variant.asDeclared`) rather than a standalone module.
+destruction), allocation (`heap.zig`), naming (`naming.zig`), and the shared
+declared-type conversion layer (`conversion.zig`). `conversion.zig` is at the
+root because properties, signals, virtuals, and registration all import it; it
+composes the Variant declared-type operations and the reflection object-name
+lookup for its queries and primitives, and owns the support and marker policy
+rather than re-deriving it in each surface. A helper owned by a single layer, or
+a composition of one layer's primitives, stays in that layer's directory:
+property hints are resolved from the declared type in
+`annotations/property_hint.zig`, while `registration/` builds the `PropertyInfo`
+table from those descriptors plus the `conversion` queries.
 
 ## Naming decisions
 
@@ -168,6 +186,9 @@ facade.
   and policy.
 - Avoid duplicate source-of-truth declarations. Hand-written builtins remain the
   type declaration; generated builtin files are function namespaces.
+- Engine-facing surfaces share one conversion layer. Support, engine/Variant
+  type, engine class name, and encode/decode rules live in `conversion.zig`;
+  a surface asks it instead of reimplementing a declared-type rule.
 - Avoid per-virtual user wrappers. User classes declare normal Zig methods with
   generated virtual signatures; registration supplies the C callback.
 
