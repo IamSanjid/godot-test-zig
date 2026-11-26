@@ -37,7 +37,7 @@ pub fn Conversion(comptime spec: anytype) type {
         }
     }
 
-    const engine_value = @field(spec, "engine");
+    const engine_value = spec.engine;
     if (comptime @TypeOf(engine_value) != type) {
         @compileError(std.fmt.comptimePrint(
             "Conversion spec field '.engine' must be a type; found '{s}'.",
@@ -45,7 +45,7 @@ pub fn Conversion(comptime spec: anytype) type {
         ));
     }
 
-    const to_engine_value = @field(spec, "to_engine");
+    const to_engine_value = spec.to_engine;
     if (comptime @typeInfo(@TypeOf(to_engine_value)) != .@"fn") {
         @compileError(std.fmt.comptimePrint(
             "Conversion spec field '.to_engine' must be a function; found '{s}'.",
@@ -53,7 +53,7 @@ pub fn Conversion(comptime spec: anytype) type {
         ));
     }
 
-    const from_engine_value = @field(spec, "from_engine");
+    const from_engine_value = spec.from_engine;
     if (comptime @typeInfo(@TypeOf(from_engine_value)) != .@"fn") {
         @compileError(std.fmt.comptimePrint(
             "Conversion spec field '.from_engine' must be a function; found '{s}'.",
@@ -84,7 +84,7 @@ pub fn MarkerEngine(comptime Marker: type) type {
         .{@typeName(Marker)},
     ));
 
-    const Engine = @field(Marker, "Engine");
+    const Engine = Marker.Engine;
     if (comptime @TypeOf(Engine) != type) @compileError(std.fmt.comptimePrint(
         "Conversion marker '{s}' field '.Engine' must be a type; found '{s}'.",
         .{ @typeName(Marker), @typeName(@TypeOf(Engine)) },

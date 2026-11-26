@@ -29,13 +29,22 @@ pub const Pinged = godot.annotations.Signal("pinged", .{});
   signal. `Type` is the **declared Zig type**: a directly supported type or one
   with a `Conversion` marker, provided it has `.variant` support. `Signal`
   validates that support at declaration and names the signal and argument in a
-  compile error.
+  compile error. A `godot.collections` typed container wrapper is such a
+  converter: it registers as the engine container Variant type and emits through
+  the Variant path, so wrapper arguments need no ptrcall ownership handling.
 - `Variant` is the one untyped argument: it registers as `VariantType.nil`, and
   emit stores its transparent storage. Every other argument derives a concrete
   Variant type; a property storing `Variant` instead needs an explicit `.type`.
 - A signal argument is declared and emitted as its declared Zig type.
   Registration never converts a value; it only derives metadata. Emit applies
   the conversion layer described below.
+- `godot.ownership.Ref(T)` is a declared converter: it registers as `.object` and
+  emits through the Variant path as a borrowed, call-scoped Variant view (the
+  caller keeps its own reference alive through the dispatch).
+  `godot.ownership.Owned(T)` is manual ownership, not a declared type, so it
+  cannot be a signal argument; declare a raw borrowed `?*T` instead or pass
+  `.get()` to the managed object. See
+  [ownership.md](ownership.md#the-model).
 - Signals are declared flat on the class, like `Override` markers and the
   generated signal structs. Discovery collects the type declarations that
   identify as `Signal` markers, in declaration order.
@@ -60,14 +69,18 @@ standalone registration must call
 [registration.md](registration.md#class-level-metadata) and the ordering
 contract in [classdb.md](classdb.md#registration-pipeline).
 
-For every argument, registration derives the engine metadata through
-`godot.conversion`:
+For every argument, registration derives the engine metadata through the
+internal conversion layer:
 
-- `variantType(Declared)` for the `PropertyInfo` type; `Variant` registers as
-  `.nil`.
-- `engineClassName(Declared)` for the `class_name` string, so a converter whose
-  engine type is `?*Node` registers `"Node"`. The name is empty for non-object
-  arguments.
+- the declared type's engine Variant type for the `PropertyInfo` type;
+  `Variant` registers as `.nil`.
+- the declared type's engine class name for the `class_name` string, so a
+  converter whose engine type is `?*Node` registers `"Node"`. The name is empty
+  for non-object arguments, including a typed container wrapper.
+- A typed container wrapper argument registers as `.array`/`.dictionary`; the
+  wrapper's `Element`/`Key`/`Value` declarations are property-hint metadata and
+  do not appear in the signal `PropertyInfo`. The engine container handle in the
+  emitted Variant keeps its own element typing.
 - The argument name is the declared engine name, verbatim; no naming conversion
   runs.
 
@@ -101,57 +114,63 @@ _ = TestNode.Pinged.emit(self, .{});
   with a `self` pointer, including `_ready(self: *const T)`.
 - `values` is a positional tuple in declaration order; the arity is
   compile-checked, and so is every argument type.
-- Each declared argument is encoded with
-  `godot.conversion.encodeVariant(Declared, value, &temp)` into an owning
-  `Variant`. All argument Variants are deinitialized after `emit_signal`
-  returns. The engine borrows them during dispatch; deferred connections copy
-  their arguments into the message queue.
+- Each declared argument is passed to `emit_signal` as a Variant view:
+  canonical scalars/enums/bitfields, plain and managed inline builtins,
+  `Variant`, and object pointers use a borrowed view
+  ([variants.md](variants.md#ownership)) that needs no cleanup.
+  Among object pointers this includes `RefCounted` pointers, `godot.ownership.Ref(T)`,
+  and converters whose engine representation is an object pointer. Heap-backed
+  builtins (`Transform2D`, `AABB`, `Basis`, `Transform3D`, `Projection`), packed
+  arrays, and converters whose engine representation is a managed builtin or
+  otherwise owns storage (for example a typed container wrapper) are encoded
+  into an owning Variant that is deinitialized after `emit_signal` returns.
+- A borrowed `RefCounted` view pins no reference: it aliases the object pointer
+  for the synchronous call, so the Zig caller must keep its own reference alive
+  through `emit`. Passing a stored `Ref` field's `.get()`, or the `Ref` value
+  itself, does that; a raw pointer whose owner is released or moved before the
+  call does not. This covers a direct `RefCounted` pointer, a
+  `godot.ownership.Ref(T)`, and a converter whose engine representation is a
+  `RefCounted` pointer. Owning Variants exist for engine-owned storage, not to
+  pin object arguments. A deferred connection copies its arguments into the
+  message queue, so deferred delivery is unaffected by the caller's lifetime.
+- Borrowed views are call-scoped: they alias the Zig value and must never be
+  deinitialized or stored. The engine reads them synchronously; a deferred
+  connection copies its arguments into the message queue.
 - The declaration already validated `.variant` support, so emit adds no separate
-  support check. `encodeVariant` still applies the compile-time gate and the
-  conversion rules once per declared type.
+  support check. The conversion layer applies its compile-time gate and the
+  declared-type rules once per declared type.
 - A custom converter argument must be an exact `T` value. `to_engine` runs
-  inside `encodeVariant`, and the engine-side intermediate is released after the
-  Variant is created; `from_engine` is not used on emit.
-- Optional object values may be `null`; `encodeVariant` stores `Variant.nil`.
-  Engine class pointers may be subclass pointers, and extension instances reduce
-  to their engine base; extension-declared arguments accept only that exact
-  instance. These are the [declared-type rules](variants.md#declared-type-conversions).
+  inside the conversion; a converter with a borrowable engine representation
+  (canonical scalar, plain builtin, object pointer) borrows, while converters
+  with owned engine storage (a typed container wrapper) are encoded into an
+  owning Variant. Optional object values may be `null` (emits as `Variant.nil`);
+  object/extension declared-type rules are in
+  [variants.md](variants.md#declared-type-conversions).
 - A signal containing a converter argument is analyzed entirely at comptime:
   the declared Zig type selects the engine type for both registration and emit,
   so metadata and values cannot disagree.
 
-## Argument conversion
+## Argument rules
 
-Emit converts each declared argument through the same `godot.conversion`
-primitives properties and virtuals use. The accepted forms and type mapping are
-the declared-type rules in [variants.md](variants.md#declared-type-conversions)
-and [conversion.md](conversion.md); emit adds no separate coercion, nil rule, or
-object reduction.
-
-Consequences:
-
-- A signal argument declared as an engine class accepts a pointer to that class
-  or a subclass, or an extension instance whose engine base extends it.
-- An argument declared as an extension class accepts only that exact registered
-  instance. Declare the engine class when a signal should accept a subclass or a
-  plain engine pointer.
-- A converter argument carries the declared Zig type, not its engine type. Emit
-  and registration both derive the engine representation from the marker; a
-  caller cannot pass the engine value directly.
-
-The temporary Variants own their payload. For direct builtins and converters to
-builtins, `initDeclared` copies or takes an owning reference and `deinit`
-releases it. Object arguments are borrowed from the Variant for the duration of
-the call; a `RefCounted` gains one Variant-owned reference that is released
-again. The Zig values passed to `emit` keep their own ownership. See
-[conversion.md](conversion.md#ownership) and [ownership.md](ownership.md).
+Emit converts each declared argument through the same internal conversion layer
+properties and virtuals use; the accepted forms and type mapping are the
+declared-type rules in [variants.md](variants.md#declared-type-conversions) and
+[conversion.md](conversion.md#variant-path). Emit adds no separate coercion, nil
+rule, or object reduction. A converter argument carries the declared Zig type;
+the engine representation is derived from the marker both for metadata and for
+emit. A typed container wrapper argument stays an ordinary `.array`/
+`.dictionary` Variant whose handle carries its own element typing; signal
+arguments use only the Variant path, so no decoded wrapper reference exists to
+release.
 
 ## Receiving: no chain conversion back
 
 Typed `connect` is not implemented, so a Zig receiver gets the engine argument
-`Variant` and extracts it explicitly with `Variant.asDeclared(T)` or
-`godot.conversion.decodeVariant(T, ...)`. Both use the same declared-type rules
-as emit, but no automatic reverse registration exists.
+`Variant` and extracts it explicitly with `Variant.asDeclared(T)`. That uses the
+same declared-type rules as emit, but no automatic reverse registration exists.
+For a converter argument, decode the engine representation with
+`Variant.asDeclared(Engine)` and call the marker's `fromEngine`; the layer's
+conversion functions are internal and not a user API.
 
 - `Variant.asDeclared(*X)` resolves an engine object back to the extension
   instance through `EngineBaseType(X).asInstance(X)`, which looks the binding up
@@ -164,13 +183,13 @@ as emit, but no automatic reverse registration exists.
   is accepted for an engine-declared argument; the declared runtime class is
   checked. "Convert the engine `Node` back to `X`" is only meaningful while the
   object *is* an X instance, which requires X to be registered.
-- Because there is no chain cast, `Variant.typeFor(*X)` /
-  `conversion.variantType(*X)` report only `.object`; they do not carry
-  per-class metadata or imply a cast path.
-- `decodeVariant` additionally runs a converter's `from_engine` and releases the
-  engine intermediate when it owns storage, exactly as described in
-  [conversion.md](conversion.md#decodevariant). A receiver that stores the
-  result owns it according to its declared type.
+- Because there is no chain cast, `Variant.typeFor(*X)` reports only `.object`;
+  a declared surface derives the same Variant type from the engine
+  representation and carries no per-class metadata or cast path.
+- The Variant path additionally runs a converter's `from_engine` and releases
+  the engine intermediate when it owns storage, following the ownership
+  direction in [conversion.md](conversion.md#ownership-direction). A receiver
+  that stores the result owns it according to its declared type.
 
 ## Not in this version
 
@@ -179,8 +198,8 @@ as emit, but no automatic reverse registration exists.
   [callables.md](callables.md). Engine-class signals already get codegen
   namespaces with those wrappers (`Node.Ready`), so `Object.connect` is the
   fallback for now.
-- Callables have not migrated to `godot.conversion`, so a signal argument with a
-  custom converter has no closure-side receive equivalent yet.
+- Callables have not migrated to the internal conversion layer, so a signal
+  argument with a custom converter has no closure-side receive equivalent yet.
 - No named/struct argument form; `emit` takes a positional tuple.
 - Engine classes' own signals remain codegen structs (`Node.Ready`) and are
   emitted through `Object.emitSignal` with a `StringName`. Codegen drops
@@ -191,9 +210,14 @@ as emit, but no automatic reverse registration exists.
 ## Verification
 
 Discovery, declaration-time support validation, registration metadata
-derivation, and emit conversion are covered by compile-only checks and unit
-tests under `zig build test-godot` (`tests/annotations/signal.zig` and
-`tests/conversion.zig`). The optional
+derivation, emit conversion, and the borrowed/owned borrow classification are
+covered by compile-only checks and unit tests under `zig build test-godot`
+(`tests/annotations/signal.zig` and `tests/conversion.zig`), including the
+borrowed-`RefCounted` policy, a typed container wrapper argument (its `.array`
+Variant metadata and Variant-path emit analysis), and a runtime check of a
+borrowed scalar Variant view. The optional
 [`test-godot-live`](build.md#live-godot-tests) step reads the registered signal
-list back from a headless Godot process; emission and connection behavior still
-need an engine or editor run.
+list back from a headless Godot process and emits a signal with borrowed
+`String`/`Array`/`Variant` arguments plus an owned heap-builtin argument into a
+connected GDScript receiver, so delivery and script-side copying are exercised
+against a real engine. `RefCounted` argument borrowing itself is compile-only.

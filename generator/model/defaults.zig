@@ -158,7 +158,7 @@ pub fn writeVariantLiteral(writer: *Io.Writer, prefix: []const u8, value: []cons
         return true;
     }
     if (!isInteger(value)) return false;
-    try writer.print("blk: {{ var value: i64 = {s}; break :blk {s}Variant.wrap({s}, i64, &value); }}", .{ value, prefix, dispatcher });
+    try writer.print("blk: {{ var value: i64 = {s}; break :blk {s}Variant.borrow({s}, i64, &value); }}", .{ value, prefix, dispatcher });
     return true;
 }
 

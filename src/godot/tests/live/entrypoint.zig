@@ -17,7 +17,12 @@ export fn test_extension_init(
     }
 
     godot.registry().addClasses(
-        .{live_node.LiveNode},
+        .{
+            live_node.LiveNode,
+            live_owned_node.LiveOwnedNode,
+            live_resource.LiveResource,
+            live_typed_node.LiveTypedNode,
+        },
         .{},
         .{ .instance_allocator = godot.engine_allocator },
     ) catch |err| {
@@ -34,3 +39,6 @@ const godot = @import("godot");
 const gdi = godot.bindings.interface;
 
 const live_node = @import("live_node.zig");
+const live_owned_node = @import("live_owned_node.zig");
+const live_resource = @import("live_resource.zig");
+const live_typed_node = @import("live_typed_node.zig");

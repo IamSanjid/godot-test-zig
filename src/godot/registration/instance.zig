@@ -27,33 +27,34 @@ pub fn CreateInstance(
             const p_registration: *ClassRegistration = @ptrCast(@alignCast(userdata orelse return null));
             const allocator: Allocator = p_registration.instance_allocator;
             const gpa: Allocator = p_registration.gpa orelse allocator;
-            const base = Base.construct() orelse return null;
+            var base = Base.construct();
+            const base_ptr = base.get() orelse return null;
 
             const child = allocator.create(T) catch {
-                ownership.releaseConstructedBase(Base, base);
+                base.deinit();
                 return null;
             };
 
-            initializeInstance(T, Base, child, base, gpa) catch |e| {
+            initializeInstance(T, Base, child, base_ptr, gpa) catch |e| {
                 std.log.err("Failed to create {s}: {}", .{ @typeName(T), e });
-                base.detachInstance(T);
+                base_ptr.detachInstance(T);
                 allocator.destroy(child);
-                ownership.releaseConstructedBase(Base, base);
+                base.deinit();
                 return null;
             };
 
             if (p_notify_postinitialize) {
-                base.notification(classes.core.Object.notification_postinitialize, .{});
+                base_ptr.notification(classes.core.Object.notification_postinitialize, .{});
             }
-            return base;
+            // From here the engine owns the base; free-instance is its destructor.
+            return base.take();
         }
     }.f;
 }
 
-/// Builds the `recreate_instance_func` callback for `T`, used when the engine
-/// hot reloads the extension library. Reuses the create sequence without
-/// `Base.construct` and the post-initialize notification, rebuilding the
-/// Zig-side instance of an engine object that survived the reload.
+/// Builds the `recreate_instance_func` callback for `T`, used on engine hot
+/// reload: reuses the create sequence without `Base.construct` and the
+/// post-initialize notification, for an engine object that survived the reload.
 pub fn RecreateInstance(
     comptime T: type,
     comptime Base: type,
@@ -116,6 +117,8 @@ fn initializeInstance(
     annotations.initBase(T, Base, child, base);
     base.attachInstance(T, child);
     annotations.initPropertyFields(T, Base, child, base);
+    // Releases initializer values; the `InitCallback` owns cleanup for anything else.
+    errdefer annotations.property.deinitPropertyInitializerValues(T, child);
     try annotations.callInitCallback(T, Base, child, base, gpa);
 }
 
@@ -127,6 +130,5 @@ const interface = bindings.interface;
 
 const annotations = @import("../annotations/annotations.zig");
 const classes = @import("../classes/classes.zig");
-const ownership = @import("../ownership.zig");
 const reflect = @import("../reflect/reflect.zig");
 const ClassRegistration = @import("ClassRegistration.zig");

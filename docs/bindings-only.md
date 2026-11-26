@@ -14,7 +14,8 @@ its own lifecycle and dispatch policy.
 - The `bindgen` wiring in `build.zig`.
 
 You can remove the codegen output, `godot.zig`, `runtime.zig`, `abi.zig`,
-`heap.zig`, `reflect/`, `annotations/`, `registration/`, `src/example*`, and the
+`ptrcall.zig`, `conversion.zig`, `ownership.zig`, `collections.zig`, `heap.zig`,
+`reflect/`, `annotations/`, `registration/`, `src/example*`, and the
 class-file scanner/`zlob` dependency if you do not use them. Regenerate with
 `zig build bindgen`, not `zig build gen`.
 
@@ -82,7 +83,10 @@ export fn my_game_init(
 Every generated raw wrapper takes a `dispatcher` parameter and calls
 `dispatcher.dispatch(...)`. Pass `&dispatcher` to those functions. This layer
 does not provide `godot.engine_allocator`, class registration, annotations, or
-`Variant` helpers; those are all part of the optional runtime layer.
+the hand-written `Variant` layer; those are all part of the optional runtime
+layer. It does include the raw binding Variant and its
+`bindings.builtins.Variant.borrow` helper, which is separate from the runtime
+`Variant.Borrowed` view.
 
 ## Caveats
 
@@ -95,3 +99,9 @@ does not provide `godot.engine_allocator`, class registration, annotations, or
   generated interface module at build time.
 - Keep a hand-written `bindings.zig` if the layer root changes; it is the module
   entry point, not generated output.
+- Method results of `RefCounted` classes carry an owning reference but are raw
+  pointers here; there is no `godot.ownership.Ref` or `Owned` in this mode, and
+  `construct()`/`constructLegacy()` return the raw creation pointer. Manage
+  results with the generated `RefCounted.reference`/`unreference` and
+  `Object.destroy`, or use the runtime layer, which wraps results and
+  constructors in the typed handles ([ownership.md](ownership.md)).

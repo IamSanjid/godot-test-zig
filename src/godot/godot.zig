@@ -35,7 +35,13 @@ pub const ownership = @import("ownership.zig");
 
 pub const abi = @import("abi.zig");
 
-pub const conversion = @import("conversion.zig");
+/// Test-only access to internal modules; empty outside test builds.
+pub const internal = if (builtin.is_test) struct {
+    pub const conversion = @import("conversion.zig");
+    pub const ptrcall = @import("ptrcall.zig");
+} else struct {};
+
+pub const collections = @import("collections.zig");
 
 pub const registration = @import("registration/registration.zig");
 pub const Registry = registration.Registry;
@@ -54,3 +60,5 @@ pub const native = @import("native.zig");
 pub const singletons = @import("singletons.zig");
 
 pub const utility = @import("utility/utility.zig");
+
+const builtin = @import("builtin");

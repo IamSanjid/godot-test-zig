@@ -42,6 +42,11 @@ hand-written runtime `runtime.zig` or the public facade `godot.zig`.
   - classes: `../../builtins/builtins.zig`
   - utility: `../builtins/builtins.zig`
   - generated builtins: `../builtins.zig`
+- generated class files import the hand-written `ownership.zig` only when a
+  signature references `ownership.Ref` (typed `construct`/`constructLegacy` or a
+  `RefCounted` engine-method result):
+  - classes with an api type: `../../ownership.zig`
+  - classes without: `../ownership.zig`
 - shared naming policy is available through the `naming` module; generated
   classes/builtins expose `GodotClassName`, used by `StringName.fromType`
 
@@ -51,10 +56,20 @@ Each class is a codegen-owned `opaque` type with:
 
 - `Extends` pointing at the codegen base class or `void`
 - class constants and enums as binding aliases
-- `construct()` for instantiable non-singletons
+- `construct()`/`constructLegacy()` for instantiable non-singletons, returning
+  the class's typed handle: `ownership.Ref(Class)` for a `RefCounted` class,
+  `ownership.Owned(Class)` otherwise. The raw binding constructor result is moved
+  into the handle with the generated struct literal
+  `.{ .ptr = if (value) |ptr| @ptrCast(ptr) else null }`, which takes over the
+  creation pointer/reference instead of retaining again. `constructLegacy()` is
+  omitted under `--strip-deprecation`.
 - `Virtual.Required` / `Virtual.Optional` codegen-typed callbacks, including
-  inherited virtuals
-- required virtuals metadata only; optional wrappers forward to bindings
+  inherited virtuals. Argument and return types stay raw borrowed pointers,
+  including `RefCounted` returns (`?*Class`); a virtual return slot is engine
+  `Ref` storage written through the ptrcall rule, never an `ownership.Ref`.
+- required virtuals metadata only; optional wrapper methods forward to the
+  binding virtual wrappers and follow the engine-method return rule
+  (`ownership.Ref` for a `RefCounted` result)
 - codegen-typed signals with `connect` / `disconnect` / `isConnected`
 - a `Properties` namespace with codegen `Type`, getter, setter and index
 - methods and options structs
@@ -62,6 +77,9 @@ Each class is a codegen-owned `opaque` type with:
 Methods:
 
 - implicit `runtime.dispatcher()`
+- a `RefCounted` class return type becomes `ownership.Ref(Class)`; the wrapper
+  moves the binding's raw owning pointer into a `Ref` struct literal, so no extra
+  retain happens. Non-`RefCounted` object returns stay raw pointers.
 - class self is `@ptrCast(self)` at the binding boundary
 - class pointer args use `@ptrCast`
 - builtins use `toBinding` / `fromBinding`

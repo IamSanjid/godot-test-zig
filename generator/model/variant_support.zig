@@ -1,7 +1,7 @@
 //! Raw-bindgen Variant fixed-argument support checks.
 //!
 //! Generated vararg wrappers wrap fixed arguments with the raw
-//! `Variant.wrap(dispatcher, T, &arg)` helper. Zig analyzes generated function
+//! `Variant.borrow(dispatcher, T, &arg)` helper. Zig analyzes generated function
 //! bodies lazily, so an unsupported future API type would otherwise fail only
 //! when a user first calls the method. Validate the resolved type while
 //! generating so an API bump fails at bindgen time instead.
@@ -9,7 +9,7 @@
 const std = @import("std");
 const class_resolver = @import("resolver.zig");
 
-/// True when the raw bindgen Variant.wrap helper supports this fixed argument
+/// True when the raw bindgen Variant.borrow helper supports this fixed argument
 /// type. Variant arguments are passed through directly; class pointers,
 /// primitives, enums and bitfields have dedicated raw paths.
 pub fn supportsFixedArgument(resolved: class_resolver.ResolvedType) bool {
@@ -20,7 +20,7 @@ pub fn supportsFixedArgument(resolved: class_resolver.ResolvedType) bool {
     };
 }
 
-/// Inline builtins handled by the raw Variant.wrap pointer switch. Heap-backed
+/// Inline builtins handled by the raw Variant.borrow pointer switch. Heap-backed
 /// builtins and packed arrays are deliberately absent; they require the owning
 /// Variant constructor path.
 fn isSupportedInlineBuiltin(name: []const u8) bool {

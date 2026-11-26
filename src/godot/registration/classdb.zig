@@ -114,7 +114,7 @@ fn registerSignal(
 
 /// A `Variant` argument is `VariantType.nil` (an untyped value), not an error.
 /// Every other declared Zig type must have a Variant conversion; its Variant
-/// type is derived through `godot.conversion`.
+/// type is derived through the conversion layer.
 fn signalArgumentType(
     comptime signal_name: [:0]const u8,
     comptime arg_name: [:0]const u8,

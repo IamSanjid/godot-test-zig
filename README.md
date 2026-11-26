@@ -11,7 +11,7 @@ You keep control of the layers:
 |---|---|---|
 | generated raw bindings | `src/godot/bindings/` except `bindings.zig` | ABI wrappers only |
 | codegen | `src/godot/classes/`, `src/godot/builtins/generated/`, `src/godot/utility/`, and the generated root modules | automatic dispatch and typed classes |
-| hand-written runtime | `src/godot/` files outside the generated subtrees | `Registry`, annotations, lifecycle, ownership, `Variant` helpers |
+| hand-written runtime | `src/godot/` files outside the generated subtrees | `Registry`, annotations, lifecycle, ownership, typed container wrappers, and the internal conversion layer behind the declared-type surfaces |
 | generator | `generator/`, `build/generator.zig`, `gd_interface/` | regenerating for another Godot version |
 
 A project can keep the full stack, use the runtime without `Registry`, or use
@@ -110,7 +110,8 @@ src/example.gen.zig       generated example class namespace (ignored)
 src/godot/                hand-written runtime plus generated subtrees
   godot.zig               public facade imported as `godot`
   runtime.zig             process-wide dispatcher/registry state and lifecycle
-  ownership.zig           engine-object retain/release and constructed-base destruction
+  ownership.zig           Ref/Owned handles for engine objects, retain/release primitives, typed-construct ownership
+  collections.zig         typed owning Array/Dictionary views over the builtins
   bindings/               bindgen output + hand-written bindings.zig entry
   classes/                codegen class output
   builtins/               hand-written builtins + generated builtins
@@ -120,7 +121,10 @@ src/godot/                hand-written runtime plus generated subtrees
   tests/                  hand-written tests; all.zig is the test root
     live/                 separate dynamic-library tree for test-godot-live; not in all.zig
       entrypoint.zig      entry symbol; registers fixture classes
-      live_node.zig       current fixture class
+      live_node.zig       registration/annotation fixture class
+      live_owned_node.zig Owned-handle construction fixture class
+      live_typed_node.zig typed-container and Ref-property fixture class
+      live_resource.zig   object element fixture class
 build/                    build helpers and optional class-file scanner
 build/godot.zig           reusable Godot run helper
 build/generator.zig       bindgen/codegen build wiring
@@ -228,17 +232,36 @@ modules are build artifacts; they are ignored and must not be edited.
   tests; `src/godot/tests/live/` is a separate dynamic-library tree, not a unit
   test. `zig build test` does not run the extension in a Godot engine. The
   optional `test-godot-live` step loads it headlessly and checks registration
-  metadata; inspector rendering, hot reload, and other editor-only behavior
-  still need an editor run.
+  metadata, wrapper-typed container properties with their hint metadata and
+  engine-side typing, signal emit delivery, and the `Owned` deinit/take paths;
+  inspector rendering, hot reload, and other editor-only behavior still need an
+  editor run.
 - Zig methods and static ClassDB properties are not registered for GDScript
-  yet.
+  yet. Methods are the next surface ([docs/classdb.md](docs/classdb.md)),
+  followed by abstract classes and callables. Typed container wrappers already
+  convert on both the Variant and ptrcall paths; method argument-release
+  handling for decoded wrappers comes with methods. Virtual signatures use
+  engine-defined types, so a converter cannot appear there.
 - Extension-to-extension class inheritance is rejected for registered classes.
+- A failed `InitCallback` releases only framework-initialized values: fields
+  with a custom `.init` initializer and `.deinit = .best_effort` get best-effort
+  cleanup, while custom `.deinit` hooks, fields without a custom initializer,
+  and values init code created itself are not touched. The framework never walks
+  undefined fields; init code owns its failure cleanup, and `.init` values on
+  custom-hook fields remain a known leak. See
+  [docs/registration.md](docs/registration.md#instance-lifecycle).
 - Generated output is configuration-specific. Keep one generated tree per
   target pointer width/precision or regenerate when switching.
 
 ## Documentation
 
 Full index: [docs/README.md](docs/README.md). Project map and decisions:
-[CONTEXT.md](CONTEXT.md). Declared-type conversion, including custom types with
-`Conversion` markers, is in [docs/conversion.md](docs/conversion.md).
-Generator internals: [generator/CONTEXT.md](generator/CONTEXT.md).
+[CONTEXT.md](CONTEXT.md). The declared-type conversion model, including custom
+types with `Conversion` markers, is in [docs/conversion.md](docs/conversion.md);
+that conversion layer is internal, not user API. Variant borrowed views, ownership,
+and conversion are in [docs/variants.md](docs/variants.md). Engine object ownership
+(`Ref` shares a reference, `Owned` exclusively destroys an unparented object, raw
+pointers are borrowed) is in [docs/ownership.md](docs/ownership.md); typed
+container wrappers and wrapper-typed properties are in
+[docs/collections.md](docs/collections.md). Generator internals:
+[generator/CONTEXT.md](generator/CONTEXT.md).

@@ -1,4 +1,4 @@
-//! Contract checks and compile-only coverage for `godot.conversion`.
+//! Contract checks and compile-only coverage for `godot.internal.conversion`.
 //!
 //! Compile-only analysis instantiates every encode/decode primitive; the runtime
 //! tests only touch scalar Variant and ptrcall slots, which need no engine
@@ -82,6 +82,35 @@ const ResourceRef = struct {
     }
 };
 
+/// Converter whose engine representation is a managed builtin: `toEngine`
+/// returns an owned `Array` handle, so a Variant view of it is not borrowable.
+const Numbers = struct {
+    count: i32,
+
+    pub const GodotConversion = Conversion(.{
+        .engine = godot.builtins.Array,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: Numbers) godot.builtins.Array {
+        _ = self;
+        return godot.builtins.Array.init();
+    }
+
+    fn fromEngine(_: godot.builtins.Array) Numbers {
+        return .{ .count = 0 };
+    }
+};
+
+/// Canonical scalar classifications for borrowed-Variant coverage.
+const Mode = enum(i32) { idle, running = 3 };
+
+const Flags = bitpack struct(u32) {
+    first: bool = false,
+    padding0: u31 = 0,
+};
+
 /// Extension class used to analyze engine-base resolution in ptrcall paths.
 const ExtensionNode = struct {
     pub const Extends = godot.classes.core.Node;
@@ -110,6 +139,19 @@ const PacketPeer = struct {
 
     pub fn _putPacket(_: *@This(), _: *u8, _: i32) godot.enums.Error {
         return .ok;
+    }
+};
+
+/// Compile-only virtual fixture with a `RefCounted` return: the generated
+/// virtual signature is a raw borrowed pointer (`?*Class`), matching the
+/// outgoing ABI, and arguments stay raw borrowed pointers.
+const EffectFixture = struct {
+    pub const Extends = godot.classes.core.AudioEffect;
+
+    base: godot.annotations.Base(Extends) = .{},
+
+    pub fn _instantiate(_: *@This()) ?*godot.classes.core.AudioEffectInstance {
+        return null;
     }
 };
 
@@ -147,11 +189,84 @@ fn analyzePropertyBackend() void {
 
 fn analyzeVirtuals() void {
     _ = comptime godot.registration.virtuals.collect(PacketPeer, PacketPeer.Extends);
+    // A RefCounted-returning override validates against the generated raw
+    // borrowed-pointer virtual signature and analyzes the callback's
+    // encode-only return path. Never executed.
+    _ = comptime godot.registration.virtuals.collect(EffectFixture, EffectFixture.Extends);
 }
 
-fn expectSupport(comptime T: type, comptime variant: bool, comptime ptr: bool) void {
+/// Return type of a generated engine method.
+fn engineMethodReturnType(comptime Method: anytype) type {
+    return godot.reflect.FunctionReturnType(Method);
+}
+
+/// Return and parameter types of a generated virtual function-pointer type.
+fn virtualFnReturnType(comptime FnPtr: type) type {
+    return switch (@typeInfo(FnPtr)) {
+        .pointer => |pointer| switch (@typeInfo(pointer.child)) {
+            .@"fn" => |info| info.return_type orelse @compileError(
+                "generated virtual must not return void here",
+            ),
+            else => @compileError("generated virtual metadata must be a function pointer"),
+        },
+        else => @compileError("generated virtual metadata must be a pointer type"),
+    };
+}
+
+fn virtualFnParamType(comptime FnPtr: type, comptime index: usize) type {
+    return switch (@typeInfo(FnPtr)) {
+        .pointer => |pointer| switch (@typeInfo(pointer.child)) {
+            .@"fn" => |info| info.param_types[index].?,
+            else => @compileError("generated virtual metadata must be a function pointer"),
+        },
+        else => @compileError("generated virtual metadata must be a pointer type"),
+    };
+}
+
+/// Compile-only return-shape contract: `RefCounted` engine-method results are
+/// owning `ownership.Ref(Class)` values, virtual returns and other object
+/// results stay raw borrowed pointers, and constructors return the class's typed
+/// ownership handle; virtual arguments are unchanged.
+fn checkGeneratedReturnShapes() void {
+    if (comptime engineMethodReturnType(godot.classes.core.Resource.construct) !=
+        godot.ownership.Ref(godot.classes.core.Resource))
+    {
+        @compileError("Resource.construct must return ownership.Ref(Resource)");
+    }
+    if (comptime engineMethodReturnType(godot.classes.core.Node.construct) !=
+        godot.ownership.Owned(godot.classes.core.Node))
+    {
+        @compileError("Node.construct must return ownership.Owned(Node)");
+    }
+    if (comptime engineMethodReturnType(godot.classes.core.ResourceLoader.MemberFunctions.load) !=
+        godot.ownership.Ref(godot.classes.core.Resource))
+    {
+        @compileError("ResourceLoader.load must return ownership.Ref(Resource)");
+    }
+    if (comptime engineMethodReturnType(godot.classes.core.Resource.MemberFunctions.duplicate) !=
+        godot.ownership.Ref(godot.classes.core.Resource))
+    {
+        @compileError("Resource.duplicate must return ownership.Ref(Resource)");
+    }
+    if (comptime engineMethodReturnType(godot.classes.core.Node.MemberFunctions.getParent) !=
+        ?*godot.classes.core.Node)
+    {
+        @compileError("Node.getParent must stay a raw borrowed ?*Node");
+    }
+
+    const Instantiate = godot.classes.core.AudioEffect.Virtual.Required._instantiate;
+    if (comptime virtualFnReturnType(Instantiate) != ?*godot.classes.core.AudioEffectInstance) {
+        @compileError("AudioEffect._instantiate virtual must stay a raw borrowed ?*AudioEffectInstance");
+    }
+    const Input = godot.classes.core.Node.Virtual.Optional._input;
+    if (comptime virtualFnParamType(Input, 1) != *godot.classes.core.InputEvent) {
+        @compileError("Node._input virtual arguments must stay raw borrowed pointers");
+    }
+}
+
+fn expectSupport(comptime T: type, comptime variant: bool, comptime ptrcall: bool) void {
     const actual = comptime conversion.support(T);
-    if (actual.variant != variant or actual.ptr != ptr) {
+    if (actual.variant != variant or actual.ptrcall != ptrcall) {
         @compileError("Unexpected conversion support for " ++ @typeName(T));
     }
 }
@@ -171,6 +286,18 @@ fn expectNoEngineType(comptime T: type) void {
 fn expectVariantType(comptime T: type, comptime Expected: ?interface.VariantType) void {
     if (comptime conversion.variantType(T) != Expected) {
         @compileError("Unexpected Variant type for " ++ @typeName(T));
+    }
+}
+
+fn expectBorrowable(comptime T: type, comptime expected: bool) void {
+    if (comptime conversion.canBorrowVariant(T) != expected) {
+        @compileError("Unexpected Variant borrowability for " ++ @typeName(T));
+    }
+}
+
+fn expectCanBorrow(comptime T: type, comptime expected: bool) void {
+    if (comptime godot.builtins.Variant.canBorrow(T) != expected) {
+        @compileError("Unexpected Variant wrap capability for " ++ @typeName(T));
     }
 }
 
@@ -207,6 +334,7 @@ fn checkContract() void {
     expectSupport([*]u8, false, false);
     expectSupport(godot.classes.core.Node, false, false);
     expectSupport(godot.classes.core.RefCounted, false, false);
+    expectSupport(godot.ownership.Owned(godot.classes.core.Node), false, false);
 
     expectEngineType(i32, i32);
     expectEngineType(godot.builtins.String, godot.builtins.String);
@@ -248,10 +376,10 @@ fn checkContract() void {
 
     // Valid types must pass the contextual gates without errors.
     conversion.checkSupported(i32, .variant, "test scalar variant");
-    conversion.checkSupported(i32, .ptr, "test scalar ptr");
-    conversion.checkSupported(*i32, .ptr, "test raw pointer ptr");
-    conversion.checkSupported(?*anyopaque, .ptr, "test opaque pointer ptr");
-    conversion.checkSupported(?*ExtensionNode, .ptr, "test extension pointer ptr");
+    conversion.checkSupported(i32, .ptrcall, "test scalar ptrcall");
+    conversion.checkSupported(*i32, .ptrcall, "test raw pointer ptrcall");
+    conversion.checkSupported(?*anyopaque, .ptrcall, "test opaque pointer ptrcall");
+    conversion.checkSupported(?*ExtensionNode, .ptrcall, "test extension pointer ptrcall");
     conversion.checkBoth(godot.builtins.Variant, "test Variant");
     conversion.checkBoth(Duration, "test Duration");
     conversion.checkBoth(Label, "test Label");
@@ -264,15 +392,81 @@ fn checkContract() void {
     }
 }
 
+/// Borrowed-Variant classification: `borrowVariant` accepts only a direct type
+/// with an inline or pointer Variant representation, or a converter whose engine
+/// representation has no owned storage.
+fn checkBorrowContract() void {
+    @setEvalBranchQuota(1_000_000);
+
+    // Direct borrowable types: canonical scalars, builtins, and object
+    // pointers. A `RefCounted` pointer borrows too: the view pins no reference,
+    // so the caller keeps its own alive for the call.
+    expectBorrowable(i32, true);
+    expectBorrowable(Mode, true);
+    expectBorrowable(Flags, true);
+    expectBorrowable(godot.builtins.Vector2, true);
+    expectBorrowable(godot.builtins.String, true);
+    expectBorrowable(godot.builtins.Array, true);
+    expectBorrowable(godot.builtins.Dictionary, true);
+    expectBorrowable(godot.builtins.Variant, true);
+    expectBorrowable(*godot.classes.core.Node, true);
+    expectBorrowable(?*godot.classes.core.Node, true);
+    expectBorrowable(?*godot.classes.core.RefCounted, true);
+    expectBorrowable(?*godot.classes.core.Resource, true);
+    expectBorrowable(?*ExtensionNode, true);
+
+    // Converters borrow without owned engine storage: scalar and object-engine
+    // converters qualify (`Ref` included); a managed-builtin engine does not.
+    expectBorrowable(Duration, true);
+    expectBorrowable(NodeRef, true);
+    expectBorrowable(ResourceRef, true);
+    expectBorrowable(godot.ownership.Ref(godot.classes.core.Resource), true);
+    expectBorrowable(Label, false);
+    expectBorrowable(collections.Array(i32), false);
+    expectBorrowable(Numbers, false);
+
+    // Heap-backed builtins and packed arrays stay owned.
+    expectBorrowable(godot.builtins.Transform3D, false);
+    expectBorrowable(godot.builtins.AABB, false);
+    expectBorrowable(godot.builtins.PackedByteArray, false);
+
+    // `canBorrow` classifies the direct types the same way.
+    expectCanBorrow(godot.builtins.Variant, true);
+    expectCanBorrow(godot.builtins.String, true);
+    expectCanBorrow(godot.builtins.Vector3, true);
+    expectCanBorrow(?*godot.classes.core.Node, true);
+    expectCanBorrow(godot.builtins.Transform3D, false);
+    expectCanBorrow(godot.builtins.Basis, false);
+    expectCanBorrow(godot.builtins.PackedByteArray, false);
+    expectCanBorrow(*i32, false);
+    expectCanBorrow(?*anyopaque, false);
+}
+
 fn analyzeVariantPrimitives(comptime T: type) void {
     var variant: godot.builtins.Variant = undefined;
     _ = conversion.decodeVariant(T, &variant);
     conversion.encodeVariant(T, @as(T, undefined), &variant);
 }
 
-fn analyzePtrPrimitives(comptime T: type) void {
-    _ = conversion.decodePtr(T, null);
-    conversion.encodePtr(T, undefined, null);
+/// Compile-only coverage of the borrowed-Variant primitive; signal emit
+/// instantiates it for every borrowable argument type.
+fn analyzeBorrowPrimitives(comptime T: type) void {
+    var variant: godot.builtins.Variant = undefined;
+    conversion.borrowVariant(T, @as(T, undefined), &variant);
+}
+
+fn analyzePtrcallPrimitives(comptime T: type) void {
+    _ = conversion.decodePtrcallSlot(T, null);
+    conversion.encodePtrcallSlot(T, undefined, null);
+}
+
+/// Typed collection wrappers convert through their marker's engine builtin;
+/// analyzed on every build and never executed.
+fn analyzeContainerPrimitives() void {
+    analyzeVariantPrimitives(collections.Array(i32));
+    analyzePtrcallPrimitives(collections.Array(i32));
+    analyzeVariantPrimitives(collections.Dictionary(godot.builtins.String, i32));
+    analyzePtrcallPrimitives(collections.Dictionary(godot.builtins.String, i32));
 }
 
 // Compile-only coverage; analyzed on every build.
@@ -287,23 +481,41 @@ fn analyzeCoverage() void {
     analyzeVariantPrimitives(NodeRef);
     analyzeVariantPrimitives(ResourceRef);
 
-    analyzePtrPrimitives(i32);
-    analyzePtrPrimitives(godot.builtins.String);
-    analyzePtrPrimitives(godot.builtins.Variant);
-    analyzePtrPrimitives(*godot.classes.core.Node);
-    analyzePtrPrimitives(?*godot.classes.core.RefCounted);
-    analyzePtrPrimitives(*i32);
-    analyzePtrPrimitives(?*anyopaque);
-    analyzePtrPrimitives(*u8);
-    analyzePtrPrimitives(?*ExtensionNode);
-    analyzePtrPrimitives(Duration);
-    analyzePtrPrimitives(Label);
-    analyzePtrPrimitives(NodeRef);
-    analyzePtrPrimitives(ResourceRef);
+    analyzePtrcallPrimitives(i32);
+    analyzePtrcallPrimitives(godot.builtins.String);
+    analyzePtrcallPrimitives(godot.builtins.Variant);
+    analyzePtrcallPrimitives(*godot.classes.core.Node);
+    analyzePtrcallPrimitives(?*godot.classes.core.RefCounted);
+    analyzePtrcallPrimitives(*i32);
+    analyzePtrcallPrimitives(?*anyopaque);
+    analyzePtrcallPrimitives(*u8);
+    analyzePtrcallPrimitives(?*ExtensionNode);
+    analyzePtrcallPrimitives(Duration);
+    analyzePtrcallPrimitives(Label);
+    analyzePtrcallPrimitives(NodeRef);
+    analyzePtrcallPrimitives(ResourceRef);
+
+    analyzeBorrowPrimitives(i32);
+    analyzeBorrowPrimitives(Mode);
+    analyzeBorrowPrimitives(Flags);
+    analyzeBorrowPrimitives(godot.builtins.Vector2);
+    analyzeBorrowPrimitives(godot.builtins.String);
+    analyzeBorrowPrimitives(godot.builtins.Array);
+    analyzeBorrowPrimitives(godot.builtins.Dictionary);
+    analyzeBorrowPrimitives(godot.builtins.Variant);
+    analyzeBorrowPrimitives(*godot.classes.core.Node);
+    analyzeBorrowPrimitives(?*godot.classes.core.Node);
+    analyzeBorrowPrimitives(?*ExtensionNode);
+    analyzeBorrowPrimitives(Duration);
+    analyzeBorrowPrimitives(NodeRef);
+
+    analyzeContainerPrimitives();
 }
 
 comptime {
     checkContract();
+    checkBorrowContract();
+    checkGeneratedReturnShapes();
     _ = &analyzeCoverage;
     _ = &analyzePropertyBackend;
     _ = &analyzeVirtuals;
@@ -322,16 +534,39 @@ test "scalars and Duration round-trip through Variant and ptr slots" {
     try std.testing.expectEqual(@as(i32, 42), duration.millis);
 
     var slot: i64 = 0;
-    conversion.encodePtr(i32, -3, @ptrCast(&slot));
-    try std.testing.expectEqual(@as(i32, -3), conversion.decodePtr(i32, @ptrCast(&slot)));
+    conversion.encodePtrcallSlot(i32, -3, @ptrCast(&slot));
+    try std.testing.expectEqual(@as(i32, -3), conversion.decodePtrcallSlot(i32, @ptrCast(&slot)));
 
-    conversion.encodePtr(Duration, .{ .millis = 9 }, @ptrCast(&slot));
-    try std.testing.expectEqual(@as(i32, 9), conversion.decodePtr(Duration, @ptrCast(&slot)).millis);
+    conversion.encodePtrcallSlot(Duration, .{ .millis = 9 }, @ptrCast(&slot));
+    try std.testing.expectEqual(@as(i32, 9), conversion.decodePtrcallSlot(Duration, @ptrCast(&slot)).millis);
+}
+
+test "borrowVariant borrows scalar and nil Variant views" {
+    // Borrowed views need no engine and must never be deinitialized.
+    var borrowed: godot.builtins.Variant = undefined;
+
+    conversion.borrowVariant(i32, 7, &borrowed);
+    try std.testing.expectEqual(interface.VariantType.int, borrowed.tag);
+    try std.testing.expectEqual(@as(?i32, 7), borrowed.as(i32));
+
+    conversion.borrowVariant(Duration, Duration{ .millis = 42 }, &borrowed);
+    try std.testing.expectEqual(interface.VariantType.int, borrowed.tag);
+    try std.testing.expectEqual(@as(?i32, 42), borrowed.as(i32));
+
+    conversion.borrowVariant(?*godot.classes.core.Node, null, &borrowed);
+    try std.testing.expectEqual(interface.VariantType.nil, borrowed.tag);
+
+    // A nullable value that is null becomes nil even for a non-optional
+    // declared object type, matching `encodeVariant`.
+    const no_node: ?*godot.classes.core.Node = null;
+    conversion.borrowVariant(*godot.classes.core.Node, no_node, &borrowed);
+    try std.testing.expectEqual(interface.VariantType.nil, borrowed.tag);
 }
 
 const std = @import("std");
 
 const godot = @import("godot");
 const Conversion = godot.annotations.Conversion;
-const conversion = godot.conversion;
+const collections = godot.collections;
+const conversion = godot.internal.conversion;
 const interface = godot.bindings.interface;

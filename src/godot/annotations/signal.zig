@@ -1,10 +1,9 @@
 //! `Signal` declaration marker and typed emit helper. See docs/signals.md.
 
 /// Declares one engine signal. `engine_name` is the engine-facing name; the Zig
-/// declaration is only a handle. The second argument is a tuple of
-/// `.{ "engine_arg_name", Type }` pairs in engine order, where `Type` is the
-/// declared Zig argument type: registration and emit derive its engine type
-/// through `godot.conversion`.
+/// declaration is only a handle. `p_args` is a tuple of `.{ "engine_arg_name",
+/// Type }` pairs in engine order; registration and emit derive the engine types
+/// through the conversion layer.
 pub fn Signal(comptime engine_name: [:0]const u8, comptime p_args: anytype) type {
     validateArgs(engine_name, p_args);
     inline for (p_args) |pair| {
@@ -23,9 +22,8 @@ pub fn Signal(comptime engine_name: [:0]const u8, comptime p_args: anytype) type
         pub const marker = marker_kind.Kind.signal;
 
         /// Emits this signal on `owner`. `values` is a positional tuple of
-        /// declared Zig values in declaration order; each one is converted to
-        /// its derived engine Variant through `godot.conversion`; null optional
-        /// values emit as nil.
+        /// declared Zig values in declaration order, converted to their engine
+        /// Variants through the conversion layer; null optionals emit as nil.
         pub fn emit(owner: anytype, values: anytype) enums.Error {
             const OwnerT = OwnerType(@TypeOf(owner));
             const ValuesT = @TypeOf(values);
@@ -38,12 +36,20 @@ pub fn Signal(comptime engine_name: [:0]const u8, comptime p_args: anytype) type
                 .{ name, args.len, values.len },
             ));
 
-            // Owning Variants: the engine reads them during the call only.
+            // Borrowed views for the synchronous emit; the caller must keep any
+            // `RefCounted` references alive. Engine-owned storage gets an owning
+            // Variant, deinitialized after dispatch.
             var vargs: [args.len]builtins.Variant = undefined;
-            defer for (vargs[0..]) |*variant| variant.deinit();
             inline for (args, 0..) |pair, index| {
-                conversion.encodeVariant(pair[1], values[index], &vargs[index]);
+                if (comptime conversion.canBorrowVariant(pair[1])) {
+                    conversion.borrowVariant(pair[1], values[index], &vargs[index]);
+                } else {
+                    conversion.encodeVariant(pair[1], values[index], &vargs[index]);
+                }
             }
+            defer inline for (args, 0..) |pair, index| {
+                if (comptime !conversion.canBorrowVariant(pair[1])) vargs[index].deinit();
+            };
 
             const object = ownerObject(OwnerT, owner);
             return object.emitSignal(builtins.StringName.fromComptimeLatin1(name), vargs);

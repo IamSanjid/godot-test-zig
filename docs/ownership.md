@@ -1,170 +1,226 @@
 # Ownership and lifetime
 
-This documents the intended ownership contract for hand-written runtime code and
-virtual callbacks. It does not replace the generated ABI documentation in
-`generator/docs/abi.md`.
+Engine objects have two typed ownership handles and borrowed views. This page
+states the rule once; pages that use it link here instead of restating it.
 
-## Virtual arguments
+## The model
 
-Virtual arguments are **borrowed**.
+| Type | Semantics | Use |
+|---|---|---|
+| `godot.ownership.Ref(T)` | Shared, reference-counted: owns exactly one engine reference to `T`, a `RefCounted` class or a subclass. `deinit` releases it; the last release destroys the object. | Engine-method results, `Property` storage, any owned `RefCounted` value. |
+| `godot.ownership.Owned(T)` | Exclusive manual ownership: owns one non-`RefCounted` object and `deinit` destroys it through `Object.destroy`. There is no reference count. | Only unparented objects that nothing else owns. Never for tree-owned nodes or any object already handed to the engine. |
+| `?*T` / `*T` | Borrowed for the current call; this code owns nothing. | Arguments, virtual returns, container element views, `get()` reads. |
+| `godot.annotations.Base(T)` | Borrowed parent view installed on the extension instance by registration. | Reaching the engine base from an extension class. Never deinitialize it. |
 
-- The engine owns the argument storage.
-- The virtual callback must not deinitialize arguments.
-- For `Variant`, `String`, `Array`, `Dictionary`, `Callable`, `Signal`, packed
-  arrays, and other non-trivial builtins, a value copy is a borrowed view.
-- If the user stores an argument or returns it, they must obtain an owned
-  copy/reference first.
-
-`toBinding` / `fromBinding` are bitcasts. They do not increment reference counts
-and do not turn a borrowed value into an owned one.
-
-## Virtual returns
-
-Virtual return values are **transferred to the engine**.
-
-- Write the returned value into `r_ret`.
-- Do not deinitialize the returned value afterwards.
-- Return an owned value. Do not return a borrowed argument directly unless the
-  type has value semantics and no internal references.
-- For `Variant` and non-trivial builtins, returning a borrowed argument can
-  double-own internal references.
-
-## Object pointers
-
-### Ordinary `Object` subclasses
-
-Non-`RefCounted` object arguments are passed as `Object**`; returns are `Object*`.
-
-- Direct pointer casting is correct.
-- The engine owns object lifetime; the callback must not destroy the object.
-- The user must not free an object they did not own.
-
-### `RefCounted`
-
-`RefCounted` virtual arguments and returns use `Ref<T>` storage:
-
-- argument: `p_args[i]` points to `Ref<T>`; use `ref_get_object`
-- return: `r_ret` points to `Ref<T>`; use `ref_set_object`
-
-Virtual callbacks reach these through `godot.conversion.decodePtr` /
-`encodePtr`; the reference rules below are unchanged. See
-[conversion.md](conversion.md).
-
-The object pointer returned by `ref_get_object` is borrowed for the call.
-If the user retains it, they must take their own reference.
-
-`ref_set_object` writes the returned object into the engine-owned `Ref<T>`
-storage and **adds a new owning reference** there. That reference belongs to the
-engine storage; it is not a borrow. If the user owns another reference to the
-object, they must release their own reference separately; do not assume the
-callback consumes it.
-
-Do not assign a raw pointer into `Ref<T>` storage.
+- Both handles are pointer-sized and pointer-aligned. `Ref(T)` requires `T` to be
+  `RefCounted` or inherit it; `Owned(T)` requires a class that is not
+  `RefCounted` (compile error otherwise).
+- `Ref(T)` is the only ownership handle with a declared conversion: engine type
+  `?*T`, both paths, `from_engine` retains. That is what makes it valid as a
+  `Property` value or a `Signal` argument. `Owned(T)` deliberately has no
+  `Conversion` marker and cannot be property or signal storage; pass `.get()` as
+  a raw borrowed pointer or `.take()` to hand the object on.
+- Storage says its policy in the type: a `Property` field that keeps a
+  `RefCounted` value declares `Ref(T)`; a raw `RefCounted` pointer is a compile
+  error. Non-`RefCounted` object pointers stay raw and borrowed because the
+  engine owns those objects. See
+  [properties.md](properties.md#ownership-modes).
+- Generated engine-method results hand you an owning `Ref(T)` for a `RefCounted`
+  result; their arguments stay raw and borrowed. An engine method that returns a
+  non-`RefCounted` object returns a borrowed raw pointer.
+- Virtual callbacks take and return raw borrowed pointers, including
+  `RefCounted` returns: the engine's return slot takes the object itself
+  (engine-owned reference storage), so no wrapper is handed over or released.
+  See [virtuals.md](virtuals.md#refcounted-arguments-and-returns).
+- Copies of a `Ref` alias the same reference. Keep one wrapper per reference:
+  use `clone()` (or `init(borrowed)`) to take another reference instead of
+  copying a wrapper you will also deinit. `Owned` has no copy step: move it with
+  `take()` or keep it in a single wrapper.
+- Both handles expose `empty` (the null handle) and `isNull()`. Construct an
+  empty wrapper with `Ref(T).empty`/`Owned(T).empty`; there is no implicit
+  default for a `Property` field, so declare `= .init(Ref(T).empty)` (or another
+  owned value) as the field default. `deinit` on an empty wrapper is a no-op.
 
 ## Construction
 
-`construct()` creates an engine object that the caller owns until it is handed
-to the engine:
+`Class.construct()` and `Class.constructLegacy()` on a generated class return the
+class's typed handle: `Ref(Class)` when the class inherits `RefCounted`,
+`Owned(Class)` otherwise. The raw bindings still return `?*Class`; the generated
+wrapper moves that pointer into the handle with a struct literal, taking over the
+creation pointer (and its creation reference for `RefCounted`). The same struct
+literal is used by generated `Ref`-returning engine-method adapters, which take
+over the reference the binding returns. This literal is internal to codegen; user
+code uses the typed result.
 
-- a `RefCounted` result carries one creation reference; call `unreference()` and
-  destroy it with `object_destroy` when that call reports the object must be
-  freed (`Object.destroy` on the generated class);
-- a non-`RefCounted` result carries no reference; destroy it with
-  `object_destroy` (`Object.destroy` on the generated class).
+```zig
+var resource = godot.classes.core.Resource.construct(); // Ref(Resource)
+defer resource.deinit();
 
-Use `godot.ownership.releaseConstructedBase(Base, base)` for that release: it
-applies the `RefCounted` creation-reference rule to a base constructed by
-`classdb_construct_object3` and destroys a non-`RefCounted` base directly. Do not
-open-code the unref-vs-destroy choice.
+var node = godot.classes.core.Node.construct(); // Owned(Node)
+defer node.deinit();
+```
 
-The create-instance failure path applies this rule; see
-[registration.md](registration.md#instance-lifecycle).
+- `construct()` uses `classdb_construct_object3`: no implicit
+  `NOTIFICATION_POSTINITIALIZE`, and a `RefCounted` result already has refcount 1.
+  Registration uses this form and sends the notification itself when the engine
+  asks for it.
+- `constructLegacy()` uses the deprecated interface, which sends
+  `NOTIFICATION_POSTINITIALIZE` internally; the binding also calls `init_ref`
+  for a `RefCounted` class. Its typed handle still owns exactly one creation
+  reference.
+- Dispose with `deinit()`: `Ref.deinit` releases the reference and destroys the
+  object when it was the last one; `Owned.deinit` destroys the object
+  immediately.
+- Move a newly constructed handle into the field or slot that should own it; do
+  not deinit the moved-from local (see
+  [Moving and borrowing](#moving-and-borrowing)).
 
-## Ownership helpers
+### Create-instance factory
 
-The engine-object helpers live in `src/godot/ownership.zig` and are exported as
-`godot.ownership`:
+For a registered extension class the runtime builds the engine base with
+`Base.construct()` and receives its typed handle. The engine's
+`create_instance3` contract expects a `RefCounted` base with refcount 1, which is
+what `classdb_construct_object3` returns, so the factory hands the raw base to
+the engine with `.take()` on success. On every failure path it releases the
+handle with `.deinit()` instead: that drops the creation reference for a
+`RefCounted` base and destroys a non-`RefCounted` one. When `InitCallback`
+returns an error, creation and recreation detach and destroy the Zig instance;
+creation also releases the base. The framework does not run
+`annotations.deinitPropertyFields` there, and `DeinitCallback` does not run: a
+field without a default or `.init` initializer may still be undefined, so a
+blanket cleanup is unsafe. It runs a partial best-effort cleanup instead, before
+the instance is detached: fields with a custom `.init` initializer and
+`.deinit = .best_effort` release the value the initializer stored. Custom
+`.deinit` hooks are skipped (the owner may be partially initialized), and values
+`InitCallback` created or assigned are not tracked; init code owns those.
+`.init` values on fields whose cleanup is a custom hook still leak. Known leak
+limitation on the init-failure path; revisit only with initialized-field
+tracking. See [registration.md](registration.md#instance-lifecycle).
 
-- `retainRefCounted(T, value)` / `releaseRefCounted(T, value)` - retain or
-  release a `RefCounted` object pointer value. Null optionals are a no-op and
-  non-`RefCounted` types are a compile error; `releaseRefCounted` destroys the
-  object when it releases the last reference.
-- `retainObjectReference(object)` - take an owning reference on an engine
-  `Object*` already known to be `RefCounted`. Returns `false` when the engine
-  refuses the reference because the object's reference count is zero.
-- `releaseConstructedBase(Base, base)` - release a base constructed by
-  `classdb_construct_object3`, per [Construction](#construction).
+After `create_instance` returns, the engine owns the base and its lifetime is the
+engine's. `free_instance` is the base object's destructor hook - the engine calls
+it from `Object::_predelete` during normal destruction and from the reload path -
+so it only deinits the Zig instance and cleans its properties; it must never free
+or unreference the base. The `Base` marker is a borrowed view; never deinit it.
+See [registration.md](registration.md#instance-lifecycle).
 
-These are the runtime's only retain/release primitives. The `Property`
-`.best_effort` modes (`godot.annotations.property.setBestEffort` /
-`deinitBestEffort`, used through the `.set`/`.deinit` options) call them, and so
-does the `.best_effort` branch of `deinitPropertyFields`; neither carries its
-own reference-count policy. `Variant` uses `retainObjectReference`. Property
-ownership modes are in [properties.md](properties.md#ownership-modes). The
-module imports `reflect` and codegen `classes`, never annotations or
-registration.
+## Moving and borrowing
 
-## `Variant`
+`take()` and `get()` are the two directions:
 
-Variant arguments are borrowed Variant views. If the user keeps or returns one,
-the Variant must be copied with the appropriate engine copy/duplicate operation.
+- `get()` returns the raw pointer without changing ownership. Use it for a
+  borrowed value: a call argument, a read of a stored handle, or a virtual return
+  of an object you keep alive elsewhere.
+- `take()` moves the owned pointer out and empties the wrapper. Use it when
+  ownership leaves the Zig side: the create-instance factory handing the base to
+  the engine, a constructed node handed to the tree with `addChild`, or a
+  constructed virtual return. The receiver owns the pointer afterwards.
+- `clone()` takes another reference on the same `RefCounted` object;
+  `init(borrowed)` turns a borrowed pointer into an owner. `Owned` has neither:
+  its only sources are `Class.construct()` and a `take()` from another `Owned`.
+- `get()`/`take()` on an empty wrapper are safe and return `null`; `isNull()`
+  reports the state.
 
-Variant returns are moved into `r_ret`. The user must construct an owned
-Variant. Returning an argument Variant directly is unsafe without cloning.
+Passing a wrapper by value is an alias, not a transfer. Do not deinit a wrapper
+after moving it into a field, returning its `.get()`, or calling `.take()` on it.
+Do not build a wrapper with a struct literal (`.{ .ptr = ... }`): it looks like a
+borrow but claims ownership; only codegen's `construct` adapter uses it, to take
+over a creation reference.
 
-Variant ownership and conversion are documented in
-[variants.md](variants.md). In short: `wrap` is borrowed, `init` is owning,
-`as` has typed extraction ownership rules, and `clone`/`deinit` manage owning
-Variants.
+```zig
+// The field takes over the created resource's reference.
+self.resource.value = godot.classes.core.Resource.construct();
 
-## Builtins and codegen types
+// Borrow the stored object for an engine call; the wrapper keeps its reference.
+some_api(node.get());
+```
 
-Codegen builtin types are ABI-compatible wrappers:
+### Virtual returns
 
-- `toBinding` / `fromBinding` are bitcasts
-- sizes, alignments, and offsets are checked by generated code where applicable
-- hand-written builtins are explicitly ABI-compatible
+A virtual return is a raw borrowed pointer for every object type. Return a stored
+handle with `.get()`; the engine slot takes the returned object itself, so your
+reference is untouched. Return a newly constructed object by moving its handle
+out through a local wrapper - `take()` needs a mutable wrapper, so an rvalue
+`construct().take()` does not compile:
 
-Scalar ptrcall slots are canonical and independent of builtin precision:
+```zig
+pub fn _instantiate(self: *@This()) ?*AudioEffectInstance {
+    _ = self;
+    var value = godot.classes.core.AudioEffectInstance.construct();
+    return value.take();
+}
+```
 
-- API `float` / `real_t` -> `f64` slot
-- integers, enums and packed flag structs -> canonical `i64` slot (`u64` only for plain u64 integers)
-- `bool` -> `u8` slot
+The engine return slot is `RefCounted` reference storage: writing the returned
+pointer gives the slot its reference (a fresh object's creation reference moves
+into that storage through `init_ref`), and nothing is released after the
+callback. A `Base` field is never returned or deinitialized. More in
+[virtuals.md](virtuals.md#refcounted-arguments-and-returns).
 
-Public signatures may still use `real_t` for class/builtin API floats (for
-example `f32`), and API `int` metadata selects the public integer width
-(`int8`, `uint32`, `uint64`, `char32`, ...). The generator owns that
-API-metadata-to-public-type mapping; `godot.abi` only classifies the resulting
-Zig types and converts at the ptrcall boundary. Utility `float` signatures are
-public `f64` because the engine utility implementation is C++ `double`.
+## `Owned` caveats
 
-Virtual callbacks use the codegen type directly for builtins and object shapes.
-This is valid only while the ABI-compatibility invariant holds. If a codegen
-builtin ever diverges from its binding layout, its conversion representation must
-change rather than the callback.
+`Owned(T)` is for objects that nothing else owns. It is not a general
+non-`RefCounted` wrapper:
 
-## Binding returns
+- Never put a scene-tree node, or any object the engine stores or owns, in an
+  `Owned(T)` handle. The tree/engine would destroy it while `Owned.deinit` also
+  destroys it.
+- Hand the object to its new owner with `take()`: `addChild` takes tree ownership,
+  create-instance returns the base to the engine, and a constructed virtual
+  return goes to the engine slot. After `take()` the wrapper is empty and must
+  not be deinitialized.
+- `deinit()` destroys immediately; there is no shared ownership and no way to
+  take another reference.
+- `Owned` is not a conversion type and has no engine representation of its own.
+  Store a `Ref` for `RefCounted` values; for borrowed object pointers keep the
+  raw `?*T`.
+- The class picks the handle: `Node.construct()` yields `Owned(Node)` while
+  `Resource.construct()` yields `Ref(Resource)`. There is no conversion between
+  the two.
 
-Class-pointer returns from generated bindings:
+## Engine boundary
 
-- Non-`RefCounted` class pointers are borrowed engine pointers.
-- `RefCounted` class-pointer returns are written by the engine into an
-  initialized empty `Ref<T>` slot and carry **one owning reference**. The raw
-  pointer returned by the binding represents that reference. Release it with
-  `unreference` when done, and destroy it with `object_destroy` when that call
-  reports the last reference, unless you transfer it to another owner.
-  `godot.ownership.releaseRefCounted(T, value)` is that release-and-destroy step
-  for a typed pointer value; do not duplicate the unref-vs-destroy choice.
-- The binding initializes the return storage to `null` first. Do not remove that
-  initialization: Godot's ptrcall encode assigns into a real `Ref<T>`, and an
-  undefined slot would unref garbage.
+Consumer code only sees the handles and the raw/borrowed split above; the ABI
+details stay internal:
 
-## Return storage
+- An **owning** Variant payload owns its object references. A pointer taken out
+  of an owning Variant is borrowed while that Variant is alive; copy the Variant
+  or take a `Ref` to keep the object. A borrowed object Variant (from
+  `Variant.borrow` or a borrowed function argument) owns nothing and must never be
+  deinitialized. See [variants.md](variants.md).
+- RefCounted ptrcall slots are engine-owned reference storage. An argument slot
+  is borrowed for the call, and a return slot takes its own reference when
+  written. Virtual callbacks and converters use that rule and never write raw
+  object pointers into a reference slot; the rules are stated in
+  [conversion.md](conversion.md#ptrcall-path) and
+  [virtuals.md](virtuals.md#refcounted-arguments-and-returns).
+- A generated engine-method `Ref(T)` result, a successful `construct()`, and a
+  decoded `Ref` converter all arrive owning one reference. Anything a converter
+  retains in `from_engine` follows the same rule; see [conversion.md](conversion.md).
 
-`r_ret` points to the return temp created by Godot's virtual thunk. That temp is
-default-constructed immediately before the extension callback, so it does not
-contain a previous non-empty value; the callback writes the new value directly.
-Do not deinitialize `r_ret` contents after writing.
+## Helpers
 
-This matches Godot's virtual callback convention: return storage is
-default-constructed before the extension is called.
+`godot.ownership` also exposes the low-level primitives `Ref` is built on:
+
+| Helper | Use |
+|---|---|
+| `retainRefCounted(T, value)` / `releaseRefCounted(T, value)` | Retain or release a raw `RefCounted` pointer value. Null optionals are no-ops and non-`RefCounted` types are compile errors; `releaseRefCounted` destroys the object when it was the last reference. |
+| `retainObjectReference(object: *RefCounted)` | Take an owning reference when a raw `RefCounted` pointer is known (the `RefCounted` base class, not a generic object). Non-`RefCounted` arguments are a compile-time error. Returns false when the engine refuses an object whose reference count is zero. |
+
+Prefer `Ref`/`Owned` in user code. These helpers are for runtime internals
+(Variant conversion, typed-container adapters) and for code that deliberately
+stays on a raw pointer. There is no constructed-base helper: the typed handle
+from `Base.construct()` owns that decision.
+
+## Related
+
+- [conversion.md](conversion.md) - the declared-type conversion model, its
+  ownership direction, and the Variant/ptrcall consequences.
+- [properties.md](properties.md#ownership-modes) - `Property` `.set`/`.deinit`
+  modes and the `Ref` storage requirement.
+- [variants.md](variants.md) - Variant payload ownership.
+- [virtuals.md](virtuals.md#refcounted-arguments-and-returns) - callback argument
+  and return rules.
+- [collections.md](collections.md#ownership) - owning container wrappers.
+- [registration.md](registration.md#instance-lifecycle) - create-instance and
+  free-instance lifecycle.

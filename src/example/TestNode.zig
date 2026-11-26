@@ -9,20 +9,21 @@ health: godot.annotations.Property(i32, .{
     .hint = .range,
     .hint_string = "0,100",
 }) = .init(100),
-/// Node and Resource pointers derive their picker hint from the declared type.
+/// Node pointers derive their picker hint from the declared type; `Ref` values
+/// derive it from their conversion engine representation.
 the_child: godot.annotations.Property(?*godot.classes.core.Node, .{
     .usage = .exported,
 }) = .init(null),
-the_resource: godot.annotations.Property(?*godot.classes.core.Resource, .{
+the_resource: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.Resource), .{
     .usage = .exported,
     .set = .best_effort,
     .deinit = .best_effort,
-}) = .init(null),
-the_texture: godot.annotations.Property(?*godot.classes.core.Texture, .{
+}) = .init(.init(null)),
+the_texture: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.Texture), .{
     .usage = .exported,
     .set = .best_effort,
     .deinit = .best_effort,
-}) = .init(null),
+}) = .init(.init(null)),
 the_name: godot.annotations.Property(godot.builtins.String, .{
     .usage = .exported,
     .set = .best_effort,
@@ -43,6 +44,11 @@ answer: godot.annotations.OnReady(u32).Call(struct {
         return 69;
     }
 }.f, .{}),
+test_node2: godot.annotations.Property(godot.collections.Array(*@import("test_node2.zig").TestResource), .{
+    .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
+}).Init(.init, .{}),
 
 const TestNode = @This();
 
@@ -80,13 +86,17 @@ pub const Groups = godot.annotations.PropertyGroups(.{
         .name = "Assets",
         .fields = .{ "the_resource", "the_texture" },
     },
+    .{
+        .name = "Containers",
+        .fields = .{"test_node2"},
+    },
 });
 
 pub const OnInit = godot.annotations.InitCallback(@This(), onInit);
 pub const OnDeinit = godot.annotations.DeinitCallback(@This(), onDeinit);
 
 pub fn onInit(self: *@This(), allocator: std.mem.Allocator, base: *Extends) void {
-    const variant = godot.builtins.Variant.wrap(TestNode, self);
+    const variant = godot.builtins.Variant.borrow(TestNode, self).get();
     std.log.debug(
         "onInit: self {*}, allocator {}, base {*}, p_base {*}, unannotated {}, object id {}",
         .{ self, allocator, base, self.base.get(), self.unannotated, variant.data.object.id },
@@ -98,7 +108,7 @@ pub fn onDeinit(self: *@This(), allocator: std.mem.Allocator) void {
     // Deinit runs from the engine base destructor: do not call engine methods on
     // the base here, only release Zig-owned values.
     if (self.label.getPtr()) |value| value.deinit();
-    self.the_name.getPtr().deinit();
+    godot.annotations.deinitPropertyFields(@This(), self);
 }
 
 pub fn _ready(self: *const @This()) void {
@@ -109,11 +119,11 @@ pub fn _ready(self: *const @This()) void {
     _ = TestNode.HealthChanged.emit(self, .{ self.health.get(), self });
     _ = TestNode.Pinged.emit(self, .{});
     godot.utility.general.print(
-        godot.builtins.Variant.wrap(godot.builtins.String, self.label.getPtrConst()),
+        godot.builtins.Variant.borrow(godot.builtins.String, self.label.getPtrConst()).get(),
         .{},
     );
     godot.utility.general.print(
-        godot.builtins.Variant.wrap(godot.builtins.String, self.the_name.getPtrConst()),
+        godot.builtins.Variant.borrow(godot.builtins.String, self.the_name.getPtrConst()).get(),
         .{},
     );
     // Defensive: auto OnReady already resolved this on post-enter-tree.
@@ -124,12 +134,12 @@ pub fn _ready(self: *const @This()) void {
     );
     const fmt: godot.builtins.StringName = .fromComptimeLatin1("ChildNode: ");
     godot.utility.general.print(
-        godot.builtins.Variant.wrap(godot.builtins.StringName, &fmt),
+        godot.builtins.Variant.borrow(godot.builtins.StringName, &fmt).get(),
         .{
-            godot.builtins.Variant.wrap(
+            godot.builtins.Variant.borrow(
                 godot.classes.core.Object,
                 @as(*godot.classes.core.Object, @ptrCast(self.child_node.get())),
-            ),
+            ).get(),
         },
     );
 }

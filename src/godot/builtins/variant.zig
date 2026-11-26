@@ -11,6 +11,24 @@ pub const Variant = extern struct {
     /// binding layer; the codegen wrapper uses the same ABI-compatible type.
     pub const Data = bindings.builtins.variant.Variant.Data;
 
+    /// A borrowed Variant alias. It is valid only while the engine call that
+    /// produced it runs: never deinit or store it. The type name is the warning;
+    /// no owning operations exist. An alias copy keeps the same lifetime.
+    pub const Borrowed = struct {
+        /// The borrowed alias; copying it copies the alias, not the value.
+        inner: Variant,
+
+        /// Copies the 24-byte borrowed alias. The copy must not be deinit'ed.
+        pub fn get(self: Borrowed) Variant {
+            return self.inner;
+        }
+
+        /// Points at the borrowed alias; valid only while this view lives.
+        pub fn getPtrConst(self: *const Borrowed) *const Variant {
+            return &self.inner;
+        }
+    };
+
     pub fn toBinding(self: *const Variant) bindings.builtins.Variant {
         return @as(*const bindings.builtins.Variant, @ptrCast(self)).*;
     }
@@ -34,30 +52,49 @@ pub const Variant = extern struct {
         return null;
     }
 
+    /// True when `borrow` can create a borrowed view of `T`: canonical scalars,
+    /// `Variant`, inline (non-packed, non-heap) builtins, and object pointers.
+    /// Owned values must use `init` instead.
+    pub fn canBorrow(comptime T: type) bool {
+        if (comptime T == Variant) return true;
+        if (comptime abi.Box(T).canonical) return scalarVariantTypeFor(T) != null;
+        if (comptime builtinVariantType(T)) |_| {
+            return switch (bindings.builtins.traits.kindOf(T)) {
+                .plain, .managed => @sizeOf(T) <= @sizeOf(Variant.Data) and
+                    @alignOf(T) <= @alignOf(Variant.Data),
+                .packed_array, .heap => false,
+            };
+        }
+        return comptime reflect.objectTarget(T) != null;
+    }
+
     /// Creates a borrowed Variant view of `value`. Inline values are copied into
     /// the payload; pointers borrow. Packed arrays and heap-backed builtins are
-    /// rejected; use `init` for an owning Variant. See docs/variants.md.
-    pub fn wrap(comptime T: type, value: anytype) Variant {
+    /// rejected; use `init` for an owning Variant. The view is call-scoped: never
+    /// deinit or store it. See docs/variants.md.
+    pub fn borrow(comptime T: type, value: anytype) Borrowed {
         const VT = @TypeOf(value);
-        if (VT == T) return wrapValue(T, value);
+        if (VT == T) return .{ .inner = borrowValue(T, value) };
         if (VT == @TypeOf(null)) {
             if (comptime reflect.objectTarget(T)) |target| {
-                if (comptime target.optional) return Variant.nil;
+                if (comptime target.optional) return .{ .inner = Variant.nil };
             }
-            @compileError("Variant.wrap: null is only a valid raw value for an optional object pointer type");
+            @compileError("Variant.borrow: null is only a valid raw value for an optional object pointer type");
         }
         if (VT == comptime_int) {
-            if (comptime abi.Box(T).canonical) return wrapValue(T, @as(T, value));
+            if (comptime abi.Box(T).canonical) return .{ .inner = borrowValue(T, @as(T, value)) };
         }
         if (VT == comptime_float) {
-            if (comptime abi.Box(T).canonical and @typeInfo(T) == .float) return wrapValue(T, @as(T, value));
+            if (comptime abi.Box(T).canonical and @typeInfo(T) == .float) {
+                return .{ .inner = borrowValue(T, @as(T, value)) };
+            }
         }
         if (VT == @TypeOf(.enum_literal)) {
-            if (comptime @typeInfo(T) == .@"enum") return wrapValue(T, @as(T, value));
+            if (comptime @typeInfo(T) == .@"enum") return .{ .inner = borrowValue(T, @as(T, value)) };
         }
         if (VT != *const T and VT != *T and VT != ?*T and VT != ?*const T) {
             @compileError(std.fmt.comptimePrint(
-                "Variant.wrap expects a {s} value, a pointer to {s}, or an optional pointer; found: {s}",
+                "Variant.borrow expects a {s} value, a pointer to {s}, or an optional pointer; found: {s}",
                 .{ @typeName(T), @typeName(T), @typeName(VT) },
             ));
         }
@@ -65,67 +102,30 @@ pub const Variant = extern struct {
         validateBorrowable(T, false);
 
         const pointer: *const T = if (comptime VT == ?*T or VT == ?*const T)
-            (value orelse return Variant.nil)
+            (value orelse return .{ .inner = Variant.nil })
         else
             value;
 
         if (comptime abi.Box(T).canonical) {
-            return wrapScalar(T, pointer.*);
+            return .{ .inner = borrowScalar(T, pointer.*) };
         } else if (comptime T == Variant) {
-            return pointer.*;
+            return .{ .inner = pointer.* };
         } else if (comptime builtinVariantType(T)) |variant_type| {
-            return wrapBuiltin(T, variant_type, pointer.*);
+            return .{ .inner = borrowBuiltin(T, variant_type, pointer.*) };
         } else if (comptime reflect.isEngineObjectClass(T)) {
-            return wrapEngineObject(T, pointer);
+            return .{ .inner = borrowEngineObject(T, pointer) };
         } else if (comptime reflect.isExtensionClass(T)) {
-            return wrapExtensionObject(T, pointer);
+            return .{ .inner = borrowExtensionObject(T, pointer) };
         } else {
-            unsupportedWrap(T);
+            unsupportedBorrow(T);
         }
-    }
-
-    /// Borrows a raw value when its Variant representation is already inline or
-    /// is the borrowed object pointer itself.
-    ///
-    /// Scalars and inline plain builtins are copied into the Variant data area,
-    /// so the result has no source lifetime. Object pointers are borrowed as
-    /// usual. Owned deinit-types and heap-backed builtins must be passed to
-    /// `init` instead; copying their bytes would alias or lose ownership.
-    fn wrapValue(comptime T: type, value: T) Variant {
-        if (comptime abi.Box(T).canonical) {
-            return wrapScalar(T, value);
-        }
-        if (comptime T == Variant) {
-            @compileError("Variant.wrap cannot borrow a Variant by value; pass a pointer to borrow it, or use clone/init for an owned Variant");
-        }
-        if (comptime builtinVariantType(T)) |variant_type| {
-            validateBorrowable(T, true);
-            return wrapBuiltin(T, variant_type, value);
-        }
-        if (comptime reflect.objectTarget(T)) |target| {
-            return wrapObjectValue(T, target, value);
-        }
-        unsupportedWrap(T);
-    }
-
-    /// Borrows a raw object pointer, including an optional pointer.
-    fn wrapObjectValue(comptime T: type, comptime target: reflect.ObjectTarget, value: T) Variant {
-        const Class = target.class;
-        const pointer: *const Class = if (comptime target.optional)
-            @ptrCast(value orelse return Variant.nil)
-        else
-            @ptrCast(value);
-        return if (comptime target.kind == .engine)
-            wrapEngineObject(Class, pointer)
-        else
-            wrapExtensionObject(Class, pointer);
     }
 
     /// Creates an owning Variant from `value`. The value remains owned by the
     /// caller; release the result with `deinit`. See docs/variants.md.
     pub fn init(comptime T: type, value: T) Variant {
         if (comptime abi.Box(T).canonical) {
-            return wrapScalar(T, value);
+            return borrowScalar(T, value);
         } else if (comptime T == Variant) {
             return value.clone();
         } else if (comptime builtinVariantType(T)) |variant_type| {
@@ -212,7 +212,7 @@ pub const Variant = extern struct {
     }
 
     /// Destroys an owning Variant and leaves it nil. Never call this on a
-    /// borrowed `wrap` result.
+    /// borrowed `borrow` result.
     pub fn deinit(self: *Variant) void {
         runtime.dispatch(.variant_destroy, .{@as(interface.VariantPtr, @ptrCast(self))});
         self.* = nil;
@@ -334,14 +334,53 @@ fn canonicalToI64(raw: anytype) i64 {
     return if (comptime @TypeOf(raw) == u64) @bitCast(raw) else @intCast(raw);
 }
 
-fn wrapScalar(comptime T: type, value: T) Variant {
+// Borrow construction helpers
+
+/// Borrows a raw value when its Variant representation is already inline or
+/// is the borrowed object pointer itself.
+///
+/// Scalars and inline plain builtins are copied into the Variant data area,
+/// so the result has no source lifetime. Object pointers are borrowed as
+/// usual. Owned deinit-types and heap-backed builtins must be passed to
+/// `init` instead; copying their bytes would alias or lose ownership.
+fn borrowValue(comptime T: type, value: T) Variant {
+    if (comptime abi.Box(T).canonical) {
+        return borrowScalar(T, value);
+    }
+    if (comptime T == Variant) {
+        @compileError("Variant.borrow cannot borrow a Variant by value; pass a pointer to borrow it, or use clone/init for an owned Variant");
+    }
+    if (comptime builtinVariantType(T)) |variant_type| {
+        validateBorrowable(T, true);
+        return borrowBuiltin(T, variant_type, value);
+    }
+    if (comptime reflect.objectTarget(T)) |target| {
+        return borrowObjectValue(T, target, value);
+    }
+    unsupportedBorrow(T);
+}
+
+/// Borrows a raw object pointer, including an optional pointer.
+fn borrowObjectValue(comptime T: type, comptime target: reflect.ObjectTarget, value: T) Variant {
+    const Class = target.class;
+    const pointer: *const Class = if (comptime target.optional)
+        @ptrCast(value orelse return Variant.nil)
+    else
+        @ptrCast(value);
+    return if (comptime target.kind == .engine)
+        borrowEngineObject(Class, pointer)
+    else
+        borrowExtensionObject(Class, pointer);
+}
+
+fn borrowScalar(comptime T: type, value: T) Variant {
     return .{
         .tag = scalarVariantType(T),
         .data = scalarData(T, value),
     };
 }
 
-fn wrapBuiltin(comptime T: type, comptime variant_type: interface.VariantType, value: T) Variant {
+fn borrowBuiltin(comptime T: type, comptime variant_type: interface.VariantType, value: T) Variant {
     comptime {
         // `Variant.Data` holds the engine's inline value; its size follows the
         // precision configuration. Some builtins are larger than that and the
@@ -349,11 +388,11 @@ fn wrapBuiltin(comptime T: type, comptime variant_type: interface.VariantType, v
         // be borrowed by writing the value, and their Variant owns/destroys that
         // allocation.
         if (@sizeOf(T) > @sizeOf(Variant.Data)) {
-            @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+            @compileError("Variant.borrow cannot borrow " ++ @typeName(T) ++
                 ": the engine keeps it behind an owned heap allocation. Use Variant.init for an owned Variant.");
         }
         if (@alignOf(T) > @alignOf(Variant.Data)) {
-            @compileError("Variant.wrap cannot store " ++ @typeName(T) ++ " in Variant data storage (alignment)");
+            @compileError("Variant.borrow cannot store " ++ @typeName(T) ++ " in Variant data storage (alignment)");
         }
     }
 
@@ -362,16 +401,17 @@ fn wrapBuiltin(comptime T: type, comptime variant_type: interface.VariantType, v
     return result;
 }
 
-fn wrapEngineObject(comptime T: type, value: *const T) Variant {
+fn borrowEngineObject(comptime T: type, value: *const T) Variant {
     const object: *Object = @constCast(@as(*const Object, @ptrCast(value)));
     return borrowedObjectVariant(object);
 }
 
-fn wrapExtensionObject(comptime T: type, value: *const T) Variant {
+fn borrowExtensionObject(comptime T: type, value: *const T) Variant {
     const base = reflect.engineBasePointer(T, value);
     return borrowedObjectVariant(@ptrCast(base));
 }
 
+/// The returned Variant borrows the object and must never be deinit'ed.
 fn borrowedObjectVariant(object: *Object) Variant {
     return objectVariant(objectInstanceId(object), object);
 }
@@ -429,7 +469,8 @@ fn initEngineObject(object: *Object) Variant {
     // constructor goes through `RefCounted::init_ref()`, which is not the
     // ownership shape this path needs.
     if (instance_id & object_id_ref_counted_bit != 0) {
-        if (!ownership.retainObjectReference(object)) return Variant.nil;
+        const ref_counted: *classes.core.RefCounted = @ptrCast(object);
+        if (!ownership.retainObjectReference(ref_counted)) return Variant.nil;
     }
 
     return objectVariant(instance_id, object);
@@ -468,12 +509,12 @@ fn asObjectPointer(
     }
 }
 
-fn unsupportedWrap(comptime T: type) noreturn {
+fn unsupportedBorrow(comptime T: type) noreturn {
     if (comptime reflect.isClassType(T)) {
-        @compileError("Variant.wrap expects `*T` for class type " ++ @typeName(T) ++
+        @compileError("Variant.borrow expects `*T` for class type " ++ @typeName(T) ++
             "; pass a pointer to the class instance");
     }
-    @compileError("Variant.wrap does not support type: " ++ @typeName(T));
+    @compileError("Variant.borrow does not support type: " ++ @typeName(T));
 }
 
 fn unsupportedInit(comptime T: type) noreturn {
@@ -493,15 +534,15 @@ fn unsupportedAs(comptime T: type) noreturn {
 
 fn validateBorrowable(comptime T: type, comptime by_value: bool) void {
     if (comptime bindings.builtins.traits.isPackedArray(T)) {
-        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+        @compileError("Variant.borrow cannot borrow " ++ @typeName(T) ++
             ": packed arrays are copy-on-write engine values. Use Variant.init for an owned Variant.");
     }
     if (comptime bindings.builtins.traits.isHeapBuiltin(T)) {
-        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+        @compileError("Variant.borrow cannot borrow " ++ @typeName(T) ++
             ": the engine keeps it behind an owned heap allocation. Use Variant.init for an owned Variant.");
     }
     if (by_value and @hasDecl(T, "deinit")) {
-        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+        @compileError("Variant.borrow cannot borrow " ++ @typeName(T) ++
             " by value: it owns engine storage. Pass a pointer to borrow it, or use Variant.init for an owned Variant.");
     }
 }

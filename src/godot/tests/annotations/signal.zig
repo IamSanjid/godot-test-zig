@@ -78,7 +78,7 @@ const EmitFixture = struct {
 };
 
 /// Custom converter argument: the declared Zig type is `Duration`; the engine
-/// representation (`i32`) is derived through `godot.conversion` by both emit
+/// representation (`i32`) is derived through the conversion layer by both emit
 /// and registration.
 const Duration = struct {
     millis: i32,
@@ -129,6 +129,28 @@ const ConversionFixture = struct {
     });
 };
 
+/// RefCounted argument coverage: both the raw pointer and the `Ref` converter
+/// are emitted as borrowed Variant views; the caller keeps its reference alive
+/// for the synchronous dispatch.
+const RefCountedFixture = struct {
+    pub const Extends = godot.classes.core.Node;
+    base: godot.annotations.Base(Extends) = .{},
+    pub const ResourceChanged = godot.annotations.Signal("resource_changed", .{
+        .{ "resource", ?*godot.classes.core.Resource },
+        .{ "owned", godot.ownership.Ref(godot.classes.core.Resource) },
+    });
+};
+
+/// Typed container wrapper argument: a declared conversion type whose Variant
+/// path registers as an Array; engine calls stay analysis-only.
+const ContainerFixture = struct {
+    pub const Extends = godot.classes.core.Node;
+    base: godot.annotations.Base(Extends) = .{},
+    pub const NumbersChanged = godot.annotations.Signal("numbers_changed", .{
+        .{ "numbers", godot.collections.Array(i32) },
+    });
+};
+
 fn checkEmitPath() void {
     // The registration bodies are analyzed, never executed: `StringName`
     // construction needs an initialized engine.
@@ -148,26 +170,54 @@ fn checkConversionPath() void {
     _ = ConversionFixture.DurationChanged.emit(&fixture, .{Duration{ .millis = 42 }});
     _ = ConversionFixture.NodeChanged.emit(&fixture, .{NodeRef{ .node = null }});
 
-    if (comptime godot.conversion.engineType(Duration) != i32)
+    if (comptime godot.internal.conversion.engineType(Duration) != i32)
         @compileError("a signal argument must derive its engine type through conversion");
-    if (comptime godot.conversion.variantType(Duration) != .int)
+    if (comptime godot.internal.conversion.variantType(Duration) != .int)
         @compileError("a signal argument must derive its Variant type through conversion");
     // The same contextual gate registration and emit use.
-    godot.conversion.checkSupported(
+    godot.internal.conversion.checkSupported(
         Duration,
         .variant,
         "Signal 'duration_changed' argument 'duration'",
     );
 
     // Registration derives the class name from the converter's engine type.
-    if (comptime !std.mem.eql(u8, godot.conversion.engineClassName(NodeRef), "Node"))
+    if (comptime !std.mem.eql(u8, godot.internal.conversion.engineClassName(NodeRef), "Node"))
         @compileError("a converter signal argument must expose its engine class name");
+}
+
+fn checkContainerPath() void {
+    // Registration and emit bodies are analyzed, never executed.
+    _ = godot.registration.classdb.postRegistrationCallback(ContainerFixture);
+
+    var fixture: ContainerFixture = .{};
+    _ = ContainerFixture.NumbersChanged.emit(&fixture, .{godot.collections.Array(i32).init()});
+
+    // A wrapper argument is Variant-path only; its metadata follows the engine
+    // container the wrapper converts to.
+    const Container = godot.collections.Array(i32);
+    if (comptime godot.internal.conversion.variantType(Container) != .array)
+        @compileError("a wrapper signal argument must register as an Array Variant");
+    godot.internal.conversion.checkSupported(Container, .variant, "Signal 'numbers_changed' argument 'numbers'");
+}
+
+fn checkRefCountedArgumentPath() void {
+    // Registration and emit bodies are analyzed, never executed.
+    _ = godot.registration.classdb.postRegistrationCallback(RefCountedFixture);
+
+    var fixture: RefCountedFixture = .{};
+    _ = RefCountedFixture.ResourceChanged.emit(&fixture, .{
+        null,
+        godot.ownership.Ref(godot.classes.core.Resource).empty,
+    });
 }
 
 comptime {
     checkSignalDeclaration();
     _ = &checkEmitPath;
     _ = &checkConversionPath;
+    _ = &checkContainerPath;
+    _ = &checkRefCountedArgumentPath;
 }
 
 test "signals are discovered in declaration order" {
@@ -187,6 +237,24 @@ test "converter signal arguments keep their declared Zig type" {
     try std.testing.expectEqual(Duration, args[0][1]);
     try std.testing.expectEqualStrings("node_changed", markers[1].name);
     try std.testing.expectEqual(NodeRef, markers[1].args[0][1]);
+}
+
+test "RefCounted signal arguments are borrowed Variant views" {
+    const args = RefCountedFixture.ResourceChanged.args;
+    try std.testing.expect(godot.internal.conversion.canBorrowVariant(args[0][1]));
+    try std.testing.expect(godot.internal.conversion.canBorrowVariant(args[1][1]));
+}
+
+test "wrapper signal arguments expose Array Variant metadata" {
+    const markers = comptime godot.annotations.findSignals(ContainerFixture);
+    try std.testing.expectEqual(@as(usize, 1), markers.len);
+    try std.testing.expectEqualStrings("numbers_changed", markers[0].name);
+    try std.testing.expectEqual(godot.collections.Array(i32), markers[0].args[0][1]);
+    try std.testing.expect(godot.internal.conversion.support(godot.collections.Array(i32)).variant);
+    try std.testing.expectEqual(
+        godot.bindings.interface.VariantType.array,
+        godot.internal.conversion.variantType(godot.collections.Array(i32)).?,
+    );
 }
 
 const std = @import("std");

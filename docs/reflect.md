@@ -58,17 +58,18 @@ reflect/
   Zig type name. Registration and instance attachment use the same helper.
 - `classNameOf` returns the engine class name of an object pointer type
   (`*C`, `?*C`, `*const C`, `?*const C`) and an empty string for anything else.
-  It composes `objectClassOf` and `className`, and is the final name lookup used
-  by `godot.conversion.engineClassName`. Engine-facing surfaces (properties and
-  signal registration) ask `conversion.engineClassName(T)` so a `Conversion`
-  marker's engine type is followed; they do not call
-  `classNameOf` on the declared type. Enum/bitfield hints carry no class name
-  unless the type is declared in the class's `Constants`, which supplies its own
-  `<Class>.<Name>` qualifier.
+  It composes `objectClassOf` and `className`, and is the final name lookup the
+  internal conversion layer's engine-class-name query builds on. Engine-facing
+  surfaces (properties and signal registration) ask that layer for the declared
+  type's engine class name so a `Conversion` marker's engine type is followed;
+  they do not call `classNameOf` on the declared type. Enum/bitfield hints carry
+  no class name unless the type is declared in the class's `Constants`, which
+  supplies its own `<Class>.<Name>` qualifier.
 - Reflection is query-only: it never owns instances, never calls registration
   callbacks, and carries no conversion policy. The declared-type support,
-  metadata, and encode/decode rules live in [conversion.md](conversion.md);
-  `reflect` supplies the predicates and lookups it composes.
+  metadata, and value conversion rules live in
+  [conversion.md](conversion.md); `reflect` supplies the predicates and lookups
+  that layer composes.
 
 Annotations are separate. Use `annotations.initAnnotFieldsDefault` for
 annotation fields and `registration` for lifecycle wiring.

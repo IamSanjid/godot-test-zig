@@ -142,17 +142,17 @@ comptime {
 
             // Raw values: scalars and inline plain builtins are copied into the
             // borrowed Variant data; raw object pointers are borrowed directly.
-            _ = Variant.wrap(i32, 7);
-            _ = Variant.wrap(f32, 1.5);
-            _ = Variant.wrap(builtins.Vector2, builtins.Vector2.zero);
-            _ = Variant.wrap(*classes.core.Node, @as(*classes.core.Node, undefined));
-            _ = Variant.wrap(?*const classes.core.Node, null);
+            _ = Variant.borrow(i32, 7);
+            _ = Variant.borrow(f32, 1.5);
+            _ = Variant.borrow(builtins.Vector2, builtins.Vector2.zero);
+            _ = Variant.borrow(*classes.core.Node, @as(*classes.core.Node, undefined));
+            _ = Variant.borrow(?*const classes.core.Node, null);
             const Mode = enum(u2) { a, b };
-            _ = Variant.wrap(Mode, .b);
+            _ = Variant.borrow(Mode, .b);
 
             // Engine class pointers: existing pointer behavior.
-            _ = Variant.wrap(classes.core.Object, @as(*const classes.core.Object, undefined));
-            _ = Variant.wrap(classes.core.Node, @as(?*const classes.core.Node, null));
+            _ = Variant.borrow(classes.core.Object, @as(*const classes.core.Object, undefined));
+            _ = Variant.borrow(classes.core.Node, @as(?*const classes.core.Node, null));
             _ = Variant.init(*classes.core.Node, @as(*classes.core.Node, undefined));
             _ = Variant.init(?*classes.core.RefCounted, null);
             _ = variant.as(*classes.core.Object);
@@ -161,9 +161,9 @@ comptime {
             _ = variant.isNullObject();
 
             // Direct extension class.
-            _ = Variant.wrap(*const DirectExtension, @as(*const DirectExtension, undefined));
-            _ = Variant.wrap(DirectExtension, @as(*const DirectExtension, undefined));
-            _ = Variant.wrap(DirectExtension, @as(?*DirectExtension, null));
+            _ = Variant.borrow(*const DirectExtension, @as(*const DirectExtension, undefined));
+            _ = Variant.borrow(DirectExtension, @as(*const DirectExtension, undefined));
+            _ = Variant.borrow(DirectExtension, @as(?*DirectExtension, null));
             _ = Variant.init(*DirectExtension, @as(*DirectExtension, undefined));
             _ = Variant.init(*const DirectExtension, @as(*const DirectExtension, undefined));
             _ = Variant.init(?*const DirectExtension, null);
@@ -172,13 +172,13 @@ comptime {
             _ = variant.as(*const DirectExtension);
 
             // Extension -> extension chain.
-            _ = Variant.wrap(ChainedExtension, @as(*const ChainedExtension, undefined));
+            _ = Variant.borrow(ChainedExtension, @as(*const ChainedExtension, undefined));
             _ = Variant.init(*ChainedExtension, @as(*ChainedExtension, undefined));
             _ = Variant.init(*const ChainedExtension, @as(*const ChainedExtension, undefined));
             _ = variant.as(*ChainedExtension);
 
             if (comptime reflect.isExtensionClass(DirectExtension) == false) {
-                @compileError("Variant.wrap/init extension conversion: direct extension class was not recognized");
+                @compileError("Variant.borrow/init extension conversion: direct extension class was not recognized");
             }
             if (comptime Variant.typeFor(*DirectExtension) == null) {
                 @compileError("Variant.typeFor must map direct extension class pointers to .object");
@@ -206,22 +206,22 @@ comptime {
             _ = variant.asDeclared(builtins.Transform3D);
         }
 
-        // The raw bindgen `Variant.wrap` has a separate generic object branch.
+        // The raw bindgen `Variant.borrow` has a separate generic object branch.
         // Instantiate it here with concrete binding classes so the binding
         // layer's class-pointer cast cannot regress lazily.
-        fn rawWrapEngine(dispatcher: *const runtime.DefaultDispatcher, node: *bindings.classes.core.Node) void {
-            _ = bindings.builtins.Variant.wrap(dispatcher, bindings.classes.core.Node, node);
+        fn rawBorrowEngine(dispatcher: *const runtime.DefaultDispatcher, node: *bindings.classes.core.Node) void {
+            _ = bindings.builtins.Variant.borrow(dispatcher, bindings.classes.core.Node, node);
         }
 
-        fn rawWrapOptional(dispatcher: *const runtime.DefaultDispatcher, node: ?*bindings.classes.core.Node) void {
-            _ = bindings.builtins.Variant.wrap(dispatcher, bindings.classes.core.Node, node);
+        fn rawBorrowOptional(dispatcher: *const runtime.DefaultDispatcher, node: ?*bindings.classes.core.Node) void {
+            _ = bindings.builtins.Variant.borrow(dispatcher, bindings.classes.core.Node, node);
         }
 
-        fn rawWrapRefCounted(dispatcher: *const runtime.DefaultDispatcher, resource: *bindings.classes.core.RefCounted) void {
-            _ = bindings.builtins.Variant.wrap(dispatcher, bindings.classes.core.RefCounted, resource);
+        fn rawBorrowRefCounted(dispatcher: *const runtime.DefaultDispatcher, resource: *bindings.classes.core.RefCounted) void {
+            _ = bindings.builtins.Variant.borrow(dispatcher, bindings.classes.core.RefCounted, resource);
         }
 
-        fn rawWrapInline(dispatcher: *const runtime.DefaultDispatcher) void {
+        fn rawBorrowInline(dispatcher: *const runtime.DefaultDispatcher) void {
             inline for (.{
                 bindings.builtins.String,
                 bindings.builtins.StringName,
@@ -244,7 +244,7 @@ comptime {
                 bindings.builtins.Color,
             }) |Inline| {
                 var value: Inline = undefined;
-                _ = bindings.builtins.Variant.wrap(dispatcher, Inline, &value);
+                _ = bindings.builtins.Variant.borrow(dispatcher, Inline, &value);
             }
         }
 
@@ -272,10 +272,10 @@ comptime {
         }
     };
     _ = &Coverage.check;
-    _ = &Coverage.rawWrapEngine;
-    _ = &Coverage.rawWrapOptional;
-    _ = &Coverage.rawWrapRefCounted;
-    _ = &Coverage.rawWrapInline;
+    _ = &Coverage.rawBorrowEngine;
+    _ = &Coverage.rawBorrowOptional;
+    _ = &Coverage.rawBorrowRefCounted;
+    _ = &Coverage.rawBorrowInline;
     _ = &Coverage.scalarCoverage;
     _ = &Coverage.builtinCoverage;
 }
@@ -309,6 +309,28 @@ test "asDeclared round-trips scalars and rejects mismatches" {
     const nil_result = nil_variant.asDeclared(?*classes.core.Node);
     try std.testing.expect(nil_result != null); // matched the declared type
     try std.testing.expect(nil_result.? == null); // and holds a null object
+}
+
+test "borrow returns a Borrowed view whose accessors alias the Variant" {
+    // Borrowed views need no engine and must never be deinitialized.
+    const view = Variant.borrow(i32, @as(i32, 7));
+    try std.testing.expect(@TypeOf(view) == Variant.Borrowed);
+    try std.testing.expectEqual(interface.VariantType.int, view.inner.tag);
+
+    const copy = view.get();
+    try std.testing.expectEqual(interface.VariantType.int, copy.tag);
+    try std.testing.expectEqual(@as(?i32, 7), copy.as(i32));
+
+    const pointer = view.getPtrConst();
+    try std.testing.expect(pointer == &view.inner);
+    try std.testing.expectEqual(@as(?i32, 7), pointer.as(i32));
+}
+
+test "borrow returns a Borrowed nil view for a null optional object" {
+    const view = Variant.borrow(?*classes.core.Node, null);
+    try std.testing.expect(@TypeOf(view) == Variant.Borrowed);
+    try std.testing.expectEqual(interface.VariantType.nil, view.inner.tag);
+    try std.testing.expectEqual(interface.VariantType.nil, view.get().tag);
 }
 
 const std = @import("std");

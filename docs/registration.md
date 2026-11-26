@@ -14,6 +14,7 @@ godot.registration.ClassRegistration
 godot.registration.PostRegistrationCallback
 godot.registration.instance
 godot.registration.notification
+godot.registration.Notification
 godot.registration.property
 godot.registration.virtuals
 godot.registration.classdb
@@ -59,12 +60,14 @@ pub const ClassRegistration = struct { // runtime, heap-stored per addClasses ca
 - `gpa` is passed to `InitCallback` and `DeinitCallback`. If null,
   `instance_allocator` is used. `OnReady` initialization receives owner/base, not
   an allocator.
-- `auto_property_cleanup` is compile-time policy and off by default. `Registry`
-  passes it to `FreeInstance(T, Base, auto_property_cleanup)`. When true, the
-  free-instance callback runs `annotations.deinitPropertyFields` on the class's
-  `Property` fields after `DeinitCallback`. Property fields are user-managed
-  without it. Standalone users pass the boolean directly to `FreeInstance`, or
-  call the helper from their own free callback.
+- `auto_property_cleanup` is compile-time free-time policy and off by default.
+  `Registry` passes it to `FreeInstance(T, Base, auto_property_cleanup)`. When
+  true, the free-instance callback runs `annotations.deinitPropertyFields` on
+  the class's `Property` fields after `DeinitCallback`; property fields are
+  user-managed without it. Standalone users pass the boolean directly to
+  `FreeInstance`, or call the helper from their own free callback. The failed
+  `InitCallback` path below gets its own best-effort cleanup regardless of this
+  flag.
 - `is_exposed = false` hides the class from ClassDB/editor class listings.
 - `is_runtime = true` (default) registers a runtime class: the editor builds a
   placeholder from the native base instead of the extension instance, so
@@ -169,17 +172,21 @@ A user who wants a different registration model can use the builders directly:
 Then they can call `classdb_register_extension_class6` themselves. No pooling,
 arena, or instance-creation policy is forced by `Registry`. A standalone create
 callback must follow the same [creation order](#instance-lifecycle), including
-attaching the instance before `.init` initializers and `InitCallback`;
-`RecreateInstance` runs that same sequence when the engine reloads the library.
+attaching the instance before `.init` initializers and `InitCallback`, and the
+same [failed-`InitCallback` cleanup](#instance-lifecycle) before detaching
+(partial best-effort cleanup); `RecreateInstance` runs that
+same sequence when the engine reloads the library.
 Generated classes expose `attachInstance(T, instance)`, `asInstance(T)`, and
 `detachInstance(T)` for manual binding. All three must use the same class and
 `T` (the extension's direct engine parent, `EngineBaseType(T)`), because the
 binding token is per class and type; `typeToken(T)` returns that token. Detach
 before destroying an attached instance; the engine keeps the class's extension
 pointer, so the bundled property, notification, and free callbacks then see a
-null instance. Virtual and method dispatch cannot run on a detached instance. For property cleanup, pass
-`true` to `FreeInstance`, or call `annotations.deinitPropertyFields` from the
-free callback directly.
+null instance. Do not dispatch virtuals or methods on a detached instance: the
+virtual callback assumes a live attached instance and has no null guard (see
+[Hot reload](#hot-reload)). For free-time property
+cleanup, pass `true` to `FreeInstance`, or call
+`annotations.deinitPropertyFields` from the free callback directly.
 
 Signals and integer constants are not part of `ClassCreationInfo6`. A class
 registered without `Registry` still needs its class-level metadata written: call
@@ -204,8 +211,9 @@ constants do not exist, with no compile error.
 
 Creation order for a registered class:
 
-1. Construct the engine base with `Base.construct()` (no implicit
-   post-initialize; RefCounted already has refcount 1).
+1. Construct the engine base with `Base.construct()`, which returns the base's
+   typed ownership handle (`Ref(Base)` for a `RefCounted` base, `Owned(Base)`
+   otherwise; no implicit post-initialize).
 2. Allocate the user instance with `instance_allocator`.
 3. Initialize field defaults (`reflect.initFieldsDefault`).
 4. Reset default-initialized annotation fields
@@ -217,7 +225,8 @@ Creation order for a registered class:
    are installed here; a failed creation detaches them again.
 7. Run eager `Property` `.init` initializers
    (`annotations.initPropertyFields`), with the instance attached.
-8. Call the optional `InitCallback`.
+8. Call the optional `InitCallback`. If it returns an error, the failure path
+   below runs.
 9. Send the post-initialize notification only when `p_notify_postinitialize` is
    true.
 
@@ -226,13 +235,33 @@ made from a `.init` initializer see the extension instance. The field-order
 contract is in
 [properties.md](properties.md#creation-time-initializers).
 
-If `InitCallback` returns an error, creation fails: the engine instance is
-detached and its instance binding freed, then the Zig instance and the engine
-base are destroyed. Releasing the base depends on its kind:
-[ownership.md](ownership.md#construction) records the rule. `DeinitCallback` and
-property cleanup do not run, even when `auto_property_cleanup` is enabled, and
-values already assigned by `Property` `.init` initializers are not cleaned
-either. Init code must release anything it created before returning the error.
+If `InitCallback` returns an error, creation fails: the framework detaches the
+engine instance, frees its instance binding, and destroys the Zig instance.
+Creation additionally releases the engine base through the `Base.construct()`
+typed handle's `deinit()`: that drops the creation reference for a `RefCounted`
+base and destroys a non-`RefCounted` one.
+[ownership.md](ownership.md#construction) records the handoff rule.
+
+`DeinitCallback` does not run on this failure path, and full property cleanup is
+unsafe: a field without a default or `.init` initializer is still undefined when
+`InitCallback` returns an error, so walking every `Property` field would read
+garbage. The framework instead runs a partial best-effort cleanup while the
+instance is still attached: for each field that declares a custom `.init`
+initializer and uses `.deinit = .best_effort`, it releases the value the
+initializer stored. That is the full extent of the cleanup:
+
+- custom `.deinit` hooks (`fn (*Owner, *T) void`) are not run: the owner may be
+  partially initialized and a hook has no failed-creation contract;
+- fields without a custom `.init` initializer are not touched: their value may
+  still be `undefined`;
+- values `InitCallback` created or assigned itself are not tracked. Init code
+  owns its failure cleanup and must release everything it acquired before
+  returning the error, except the `.init` values the framework released above.
+
+Remaining leak on this rare path: `.init`-initialized values whose cleanup is a
+custom `.deinit` hook. Do not "fix" it by adding a blanket cleanup: revisit only
+together with initialized-field tracking that can prove a field holds a live
+value. Normal free-time cleanup is unchanged (see the free-time steps below).
 
 The lifecycle callbacks are declaration markers. `InitCallback`,
 `DeinitCallback`, and `NotificationCallback` declare `marker.Kind.init_callback`,
@@ -245,31 +274,36 @@ Freeing:
 1. Call the optional `DeinitCallback`.
 2. When `FreeInstance` is built with `auto_property_cleanup = true`, call
    `annotations.deinitPropertyFields(T, instance)`: each field runs its declared
-   `.deinit` mode (a function, or `.best_effort` for value `deinit`/`RefCounted`
-   release); a field with no `.deinit` mode is skipped. See
-   [properties.md](properties.md#explicit-cleanup).
+   `.deinit` mode (a custom `fn (*Owner, *T) void` hook, or `.best_effort` for
+   value `deinit`, which releases `Ref`/wrapper references); a field with no
+   `.deinit` mode is skipped.
+   See [properties.md](properties.md#explicit-cleanup).
 3. Destroy the user instance with `instance_allocator`.
 
 `reflect.initFieldsDefault` only initializes fields that declare defaults.
 Fields without defaults are the user's responsibility: provide a default,
 initialize them with a `.init` initializer or in `InitCallback`, or accept that
-they are undefined until set. The runtime does not force a zero-initialization
-policy.
+they are undefined until set. There is no implicit empty default for owning
+values: a `Property` `Ref` field declares `= .init(Ref(T).empty)` or another
+owned value. The runtime does not force a zero-initialization policy.
 
-For a class extending `RefCounted`, `construct` returns an object
-with refcount 1, which the engine create-instance contract expects. Do not call
-`initRef` or `unreference` on a live extension object manually; `free_instance`
-runs when the engine releases it. A failed creation is the exception: it
-releases the base with `godot.ownership.releaseConstructedBase`, per
-[ownership.md](ownership.md#construction).
+For a class extending `RefCounted`, `Base.construct()` returns an object with
+refcount 1, which the engine create-instance contract expects. Do not call
+`initRef` or `unreference` on a live extension object manually; the engine owns
+the base once the create-instance callback returns and `free_instance` is its
+destructor hook. A failed creation is the exception: the factory releases the
+handle with `deinit()`, per [ownership.md](ownership.md#construction).
 
 `initFieldsDefault` is a generic helper and remains public. It is not
 annotation-specific.
 
-Generated binding classes expose two constructors:
+Generated binding classes expose two raw constructors, and the codegen class
+wrappers (`godot.classes.*`) return the class's typed ownership handle built by
+moving the raw creation pointer into `Ref(Class)` or `Owned(Class)` with no extra
+retain:
 
 - `construct()` uses `classdb_construct_object3`: no implicit
-  `NOTIFICATION_POSTINITIALIZE`, and no `init_ref` for `RefCounted`.
+  `NOTIFICATION_POSTINITIALIZE`, and a `RefCounted` class already has refcount 1.
 - `constructLegacy()` uses `classdb_construct_object`: that interface sends
   `NOTIFICATION_POSTINITIALIZE` internally, and the generated helper additionally
   calls `init_ref` for `RefCounted`. It is omitted when the generator runs with
@@ -277,7 +311,8 @@ Generated binding classes expose two constructors:
   out in that mode.
 
 Registration uses `construct()` and sends post-initialize itself only when the
-engine asks for it.
+engine asks for it. The typed result is documented in
+[ownership.md](ownership.md#construction).
 
 ## OnReady
 
@@ -333,7 +368,10 @@ Consequences:
   `NotificationCallback` resolves them on that notification.
 - If recreation fails, the engine reports the error and the object keeps its
   base without an extension instance; do not dispatch virtuals or methods on it
-  afterwards.
+  afterwards. A virtual callback assumes a live instance and dereferences the
+  attached pointer, so calling one on a base with no instance is undefined
+  behavior; the runtime does not install a null-instance guard (documented risk,
+  `.notes/hot-reload.md`).
 
 ## Properties
 
@@ -341,8 +379,8 @@ When a class declares `Property` fields, registration installs the dynamic
 `ClassCreationInfo6` property callbacks: `set_func`/`get_func` always, and
 `get_property_list_func`/`free_property_list_func` only when at least one
 property has non-zero usage. The property list is a lazy per-class static table
-with process lifetime; it is never freed. Set/get values are decoded and
-encoded with `godot.conversion` (`decodeVariant`/`encodeVariant`); see
+with process lifetime; it is never freed. Set/get values are decoded and encoded
+through the internal conversion layer's Variant path; see
 [conversion.md](conversion.md).
 
 Property options, backend dispatch, and cleanup rules are in
@@ -359,8 +397,8 @@ class and the same initialization level:
 
 - a class's `annotations.Signal` declarations register through
   `classdb_register_extension_class_signal`; each argument's Variant type and
-  engine class name are derived through `godot.conversion` (`Variant` registers
-  as untyped `.nil`; see [conversion.md](conversion.md));
+  engine class name are derived through the internal conversion layer
+  (`Variant` registers as untyped `.nil`; see [conversion.md](conversion.md));
 - a class's `annotations.Constants` markers register integer constants, enums,
   and bitpack flags through `classdb_register_extension_class_integer_constant`;
 - a class with neither stores a null callback and does no extra work.

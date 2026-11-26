@@ -8,7 +8,8 @@ const SetMode = enum { plain, best_effort, custom };
 const DeinitMode = enum { none, best_effort, custom };
 
 /// A direct field type that stores a Zig value and declares an engine property.
-/// Options and lifetime rules: docs/properties.md.
+/// `RefCounted` storage is owned, so it uses `godot.ownership.Ref(Class)`; raw
+/// object pointers are borrowed. Options and lifetime rules: docs/properties.md.
 pub fn Property(comptime T: type, comptime p_options: anytype) type {
     // `stringToEnum` builds and sorts a static map; PropertyHint exceeds the default quota.
     @setEvalBranchQuota(500_000);
@@ -23,6 +24,9 @@ pub fn Property(comptime T: type, comptime p_options: anytype) type {
         pub const variant_type: ?interface.VariantType = normalized.variant_type;
         pub const read_only = normalized.read_only;
         pub const has_custom_get = @hasField(@TypeOf(p_options), "get");
+        const element_type: ?type = normalized.element_type;
+        const key_type: ?type = normalized.key_type;
+        const value_type: ?type = normalized.value_type;
         pub const has_custom_set = normalized.set_mode == .custom;
         pub const has_custom_init = @hasField(@TypeOf(p_options), "init");
         pub const has_custom_deinit = normalized.deinit_mode == .custom;
@@ -50,10 +54,27 @@ pub fn Property(comptime T: type, comptime p_options: anytype) type {
             return &self.value;
         }
 
-        /// Literal set, doesn't perform any Variant borrow/copy or refcount unreference/reference.
+        /// Literal set: stores `value` as-is, with no convert, retain, or
+        /// release; ownership of `value` transfers to the wrapper.
         pub fn set(self: *Self, value: T) void {
             self.value = value;
         }
+
+        /// Field cleanup: a custom hook takes the owner, `.best_effort` takes none,
+        /// and `.none` is `void`.
+        pub const deinit = switch (deinit_mode) {
+            .custom => struct {
+                fn f(self: *Self, owner: anytype) void {
+                    return options.deinit(owner, &self.value);
+                }
+            }.f,
+            .best_effort => struct {
+                fn f(self: *Self) void {
+                    return deinitBestEffort(T, &self.value);
+                }
+            }.f,
+            .none => void,
+        };
 
         /// Adds an eager `.init` option; equivalent to `.init = Init(T, func, args)`.
         pub fn Init(comptime func: anytype, comptime args: anytype) type {
@@ -82,9 +103,10 @@ pub fn requiresExplicitOwnership(comptime T: type) bool {
         reflect.isRefCountedPointer(T) or hasValueDeinit(T);
 }
 
-/// Replaces a stored value: deinitialize an owned managed builtin or `Variant`,
-/// retain/release `RefCounted` pointers, otherwise assign. The new value is
-/// stored even when it is the current value.
+/// Replaces a stored value: deinitializes an owned managed builtin, `Variant`,
+/// or struct with `deinit`; retain/releases a raw `RefCounted` pointer
+/// (helper-only; properties store a `Ref`); otherwise assigns. Stores the new
+/// value even when it equals the current one.
 pub fn setBestEffort(comptime T: type, field: *T, value: T) void {
     if (comptime builtins.isManaged(T) or T == builtins.Variant) {
         field.deinit();
@@ -93,6 +115,8 @@ pub fn setBestEffort(comptime T: type, field: *T, value: T) void {
         // not release the last reference before retaining it.
         ownership.retainRefCounted(T, value);
         ownership.releaseRefCounted(T, field.*);
+    } else if (comptime hasValueDeinit(T)) {
+        field.deinit();
     }
     field.* = value;
 }
@@ -545,10 +569,9 @@ pub fn isReadOnly(comptime Owner: type, comptime field_name: [:0]const u8) bool 
     return setterFn(Owner, field_name) == null;
 }
 
-// Creation-time initializers. These are explicit: `.init` is not engine
-// dispatch and not an OnReady strategy; the instance owner calls
-// `initPropertyFields` once during instance creation. Registration does so from
-// the create-instance callback.
+// Creation-time initializers. `.init` is not engine dispatch or an OnReady
+// strategy; the instance owner calls `initPropertyFields` once during creation
+// (registration does so from the create-instance callback).
 
 /// Runs every `.init` initializer once during creation; no-op for other fields.
 pub fn initPropertyFields(comptime T: type, comptime Base: type, owner: *T, base: *Base) void {
@@ -573,8 +596,8 @@ fn initPropertyField(
     @field(owner, field_name).value = initializer.call(T, Base, owner, base);
 }
 
-// Lifetime tools. These are explicit: nothing runs automatically, and the
-// caller guarantees the fields hold valid values (never `undefined`).
+// Lifetime tools. Except for the creation-failure cleanup below, nothing runs
+// automatically; callers pass fields holding valid values (never `undefined`).
 
 /// True when the field's options declare a custom `.deinit` cleanup hook.
 pub fn hasCustomDeinit(comptime F: type) bool {
@@ -582,9 +605,13 @@ pub fn hasCustomDeinit(comptime F: type) bool {
     return F.has_custom_deinit;
 }
 
-/// Custom `.deinit` thunk, or null. `.best_effort` is not a custom hook;
-/// `deinitPropertyFields` branches on the declared mode instead.
-pub fn deinitFn(comptime Owner: type, comptime field_name: [:0]const u8) ?fn (*Owner) void {
+/// Custom `.deinit` thunk taking the owner and a pointer to the stored value,
+/// or null. `.best_effort` is not a custom hook; `deinitPropertyFields` branches
+/// on the declared mode instead.
+pub fn deinitFn(
+    comptime Owner: type,
+    comptime field_name: [:0]const u8,
+) ?fn (*Owner, *PropertyValueType(@FieldType(Owner, field_name))) void {
     const F = RequirePropertyField(Owner, field_name);
     if (comptime !hasCustomDeinit(F)) return null;
     validateDeinitOwner(Owner, field_name);
@@ -607,9 +634,27 @@ fn deinitPropertyField(comptime T: type, comptime field_name: [:0]const u8, inst
     const F = @FieldType(T, field_name);
     const Value = F.PropertyFor;
     switch (comptime F.deinit_mode) {
-        .custom => deinitFn(T, field_name).?(instance),
+        .custom => deinitFn(T, field_name).?(instance, &@field(instance, field_name).value),
         .best_effort => deinitBestEffort(Value, &@field(instance, field_name).value),
         .none => {},
+    }
+}
+
+/// Deinitializes the `.best_effort` values assigned by `Property` `.init`
+/// initializers after a failed `InitCallback`; other fields may be undefined and
+/// custom `.deinit` hooks are not run on a partially initialized instance.
+pub fn deinitPropertyInitializerValues(comptime T: type, instance: *T) void {
+    comptime if (@typeInfo(T) != .@"struct") @compileError(
+        "deinitPropertyInitializerValues expects an extension class struct type, found: " ++ @typeName(T),
+    );
+    inline for (comptime findPropertyFieldNames(T)) |field_name| {
+        const F = @FieldType(T, field_name);
+        if (comptime !hasCustomInitializer(F)) continue;
+        const Value = F.PropertyFor;
+        switch (comptime F.deinit_mode) {
+            .best_effort => deinitBestEffort(Value, &@field(instance, field_name).value),
+            .custom, .none => {},
+        }
     }
 }
 
@@ -621,25 +666,56 @@ fn hasValueDeinit(comptime T: type) bool {
     };
 }
 
+/// Property storage owns its value; raw `RefCounted` pointers are borrowed
+/// (signals, virtual arguments, container element views) and rejected in favor
+/// of `ownership.Ref`.
+fn validatePropertyValueType(comptime T: type) void {
+    if (comptime reflect.isRefCountedPointer(T)) {
+        @compileError(std.fmt.comptimePrint(
+            "Property<{s}> stores a borrowed RefCounted pointer; use godot.ownership.Ref({s}) " ++
+                "for owned property storage (or a custom accessor surface)",
+            .{ @typeName(T), reflect.classNameOf(T) },
+        ));
+    }
+}
+
 const NormalizedOptions = struct {
     name: ?[:0]const u8,
     usage: enums.PropertyUsageFlags,
     hint: enums.PropertyHint,
     hint_string: [:0]const u8,
     variant_type: ?interface.VariantType,
+    element_type: ?type,
+    key_type: ?type,
+    value_type: ?type,
     read_only: bool,
     set_mode: SetMode,
     deinit_mode: DeinitMode,
 };
 
-const option_keys = [_][]const u8{ "usage", "name", "hint", "hint_string", "type", "get", "set", "read_only", "init", "deinit" };
+const option_keys = std.StaticStringMap(void).initComptime(.{
+    .{ "usage", {} },
+    .{ "name", {} },
+    .{ "hint", {} },
+    .{ "hint_string", {} },
+    .{ "type", {} },
+    .{ "element", {} },
+    .{ "key", {} },
+    .{ "value", {} },
+    .{ "get", {} },
+    .{ "set", {} },
+    .{ "read_only", {} },
+    .{ "init", {} },
+    .{ "deinit", {} },
+});
 const OptionKeysFormatter = struct {
     pub fn format(_: @This(), w: *std.Io.Writer) !void {
-        if (comptime option_keys.len == 0) return;
+        const keys = option_keys.keys();
+        if (comptime keys.len == 0) return;
         try w.writeAll(".");
-        try w.writeAll(option_keys[0]);
-        if (comptime option_keys.len == 1) return;
-        inline for (option_keys[1..]) |key| {
+        try w.writeAll(keys[0]);
+        if (comptime keys.len == 1) return;
+        inline for (keys[1..]) |key| {
             try w.writeAll(", .");
             try w.writeAll(key);
         }
@@ -647,13 +723,11 @@ const OptionKeysFormatter = struct {
 };
 
 fn isKnownOption(comptime key: []const u8) bool {
-    inline for (option_keys) |known| {
-        if (std.mem.eql(u8, key, known)) return true;
-    }
-    return false;
+    return comptime option_keys.has(key);
 }
 
 fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptions {
+    validatePropertyValueType(T);
     const OptionsT = @TypeOf(options);
     const info = @typeInfo(OptionsT);
     if (info != .@"struct" or info.@"struct".is_tuple or info.@"struct".layout == .@"bitpack") {
@@ -670,6 +744,19 @@ fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptio
     if (!@hasField(OptionsT, "usage")) {
         @compileError("Property<" ++ @typeName(T) ++ "> is missing the required '.usage' option");
     }
+    const element_type: ?type = if (@hasField(OptionsT, "element"))
+        normalizeContainerType(T, "element", options.element)
+    else
+        null;
+    const key_type: ?type = if (@hasField(OptionsT, "key"))
+        normalizeContainerType(T, "key", options.key)
+    else
+        null;
+    const value_type: ?type = if (@hasField(OptionsT, "value"))
+        normalizeContainerType(T, "value", options.value)
+    else
+        null;
+    validateContainerTypes(T, element_type, key_type, value_type);
 
     const name: ?[:0]const u8 = if (@hasField(OptionsT, "name")) options.name else null;
     if (name) |explicit_name| {
@@ -718,6 +805,9 @@ fn normalizeOptions(comptime T: type, comptime options: anytype) NormalizedOptio
         .hint = if (@hasField(OptionsT, "hint")) normalizeHint(T, options.hint) else .none,
         .hint_string = hint_string,
         .variant_type = variant_type,
+        .element_type = element_type,
+        .key_type = key_type,
+        .value_type = value_type,
         .read_only = read_only,
         .set_mode = set_mode,
         .deinit_mode = deinit_mode,
@@ -755,6 +845,95 @@ fn normalizeUsage(comptime T: type, comptime usage: anytype) enums.PropertyUsage
         @field(flags, flag) = @field(usage, flag);
     }
     return flags;
+}
+
+/// A `.element`/`.key`/`.value` option value is a type, not a value.
+fn normalizeContainerType(comptime T: type, comptime option_name: []const u8, comptime value: anytype) type {
+    if (comptime @TypeOf(value) != type) @compileError(std.fmt.comptimePrint(
+        "Property<{s}> .{s} must be a type naming the container element/side, found: {s}",
+        .{ @typeName(T), option_name, @typeName(@TypeOf(value)) },
+    ));
+    return value;
+}
+
+/// Container options are only valid on the matching engine container, and an
+/// array element cannot combine with dictionary sides.
+fn validateContainerTypes(
+    comptime T: type,
+    comptime element_type: ?type,
+    comptime key_type: ?type,
+    comptime value_type: ?type,
+) void {
+    comptime {
+        if (element_type != null and (key_type != null or value_type != null)) @compileError(
+            "Property<" ++ @typeName(T) ++ "> cannot combine '.element' with '.key' or '.value'; " ++
+                "array properties take '.element' and dictionary properties take '.key'/'.value'",
+        );
+        if (element_type != null and conversion.engineType(T) != builtins.Array) @compileError(
+            "Property<" ++ @typeName(T) ++ "> declares '.element', which requires the property's " ++
+                "engine type to be godot.builtins.Array; found: " ++ engineTypeName(T),
+        );
+        if ((key_type != null or value_type != null) and conversion.engineType(T) != builtins.Dictionary) @compileError(
+            "Property<" ++ @typeName(T) ++ "> declares '.key'/'.value', which requires the property's " ++
+                "engine type to be godot.builtins.Dictionary; found: " ++ engineTypeName(T),
+        );
+    }
+}
+
+fn engineTypeName(comptime T: type) []const u8 {
+    return if (conversion.engineType(T)) |Engine| @typeName(Engine) else "no engine type";
+}
+
+/// Validates a container element/side through the conversion layer once the
+/// owning class and field name are known.
+fn validateContainerSupport(
+    comptime T: type,
+    comptime field_name: [:0]const u8,
+    comptime Value: type,
+    comptime option_name: []const u8,
+) void {
+    conversion.checkSupported(Value, .variant, std.fmt.comptimePrint(
+        "Property '{s}.{s}' .{s}",
+        .{ @typeName(T), field_name, option_name },
+    ));
+}
+
+/// Effective element/key/value types for a container property. An explicit
+/// option overrides only its own side; the others keep what a declared container
+/// type provides, and non-containers resolve from the explicit options alone.
+const ContainerSides = union(enum) {
+    array: type,
+    dictionary: struct { key: type, value: type },
+};
+
+/// One merged container side: the explicit option, else the declared side,
+/// else untyped `Variant`.
+fn containerSide(comptime explicit: ?type, comptime declared: ?type) type {
+    if (explicit) |Value| return Value;
+    if (declared) |Value| return Value;
+    return builtins.Variant;
+}
+
+fn effectiveContainerSides(comptime F: type) ?ContainerSides {
+    comptime {
+        if (property_hint.declaredContainer(F.PropertyFor)) |declared| {
+            return switch (declared) {
+                .array => |arr| .{ .array = F.element_type orelse arr.element },
+                .dictionary => |dict| .{ .dictionary = .{
+                    .key = containerSide(F.key_type, dict.key),
+                    .value = containerSide(F.value_type, dict.value),
+                } },
+            };
+        }
+        if (F.element_type) |Element| return .{ .array = Element };
+        if (F.key_type != null or F.value_type != null) {
+            return .{ .dictionary = .{
+                .key = containerSide(F.key_type, null),
+                .value = containerSide(F.value_type, null),
+            } };
+        }
+        return null;
+    }
 }
 
 fn normalizeVariantType(comptime T: type, comptime variant_type: anytype) interface.VariantType {
@@ -875,16 +1054,20 @@ fn validateDeinitShape(comptime T: type, comptime deinit_hook: anytype) void {
     if (ReturnT != void) {
         @compileError("Property<" ++ @typeName(T) ++ "> .deinit must return void, found: " ++ @typeName(ReturnT));
     }
-    if (fn_info.param_types.len != 1) {
+    if (fn_info.param_types.len != 2) {
         @compileError(std.fmt.comptimePrint(
-            "Property<{s}> .deinit must accept exactly one owner parameter ('*Owner'), found {d} parameters",
-            .{ @typeName(T), fn_info.param_types.len },
+            "Property<{s}> .deinit must accept exactly two parameters ('*Owner' and '*{s}'), found {d} parameters",
+            .{ @typeName(T), @typeName(T), fn_info.param_types.len },
         ));
     }
     const OwnerParam = fn_info.param_types[0].?;
     if (!isSingleItemPointer(OwnerParam)) {
-        @compileError("Property<" ++ @typeName(T) ++ "> .deinit parameter must be a single-item owner pointer " ++
-            "('*Owner'), found: " ++ @typeName(OwnerParam));
+        @compileError("Property<" ++ @typeName(T) ++ "> .deinit first parameter must be a single-item owner pointer " ++
+            "(a '*Owner'), found: " ++ @typeName(OwnerParam));
+    }
+    const ValueParam = fn_info.param_types[1].?;
+    if (ValueParam != *T) {
+        @compileError("Property<" ++ @typeName(T) ++ "> .deinit second parameter must be '*" ++ @typeName(T) ++ "', found: " ++ @typeName(ValueParam));
     }
 }
 
@@ -943,10 +1126,16 @@ fn validateSetterOwner(comptime Owner: type, comptime field_name: [:0]const u8) 
 
 fn validateDeinitOwner(comptime Owner: type, comptime field_name: [:0]const u8) void {
     const F = @FieldType(Owner, field_name);
-    const OwnerParam = @typeInfo(@TypeOf(@field(F.options, "deinit"))).@"fn".param_types[0].?;
+    const fn_info = @typeInfo(@TypeOf(@field(F.options, "deinit"))).@"fn";
+    const OwnerParam = fn_info.param_types[0].?;
     if (OwnerParam != *Owner) {
         @compileError("Property<" ++ @typeName(F.PropertyFor) ++ "> .deinit for field '" ++ field_name ++ "' on '" ++ @typeName(Owner) ++
-            "' must accept '*" ++ @typeName(Owner) ++ "', found: " ++ @typeName(OwnerParam));
+            "' must accept '*" ++ @typeName(Owner) ++ "' as its first parameter, found: " ++ @typeName(OwnerParam));
+    }
+    const ValueParam = fn_info.param_types[1].?;
+    if (ValueParam != *F.PropertyFor) {
+        @compileError("Property<" ++ @typeName(F.PropertyFor) ++ "> .deinit for field '" ++ field_name ++ "' on '" ++ @typeName(Owner) ++
+            "' must accept '*" ++ @typeName(F.PropertyFor) ++ "' as its second parameter, found: " ++ @typeName(ValueParam));
     }
 }
 
@@ -956,6 +1145,18 @@ fn descriptorFor(comptime T: type, comptime field_name: [:0]const u8) PropertyDe
     if (comptime hasCustomGetter(F)) validateGetterOwner(T, field_name, F.PropertyFor);
     if (comptime hasCustomSetter(F)) validateSetterOwner(T, field_name);
     if (comptime hasCustomDeinit(F)) validateDeinitOwner(T, field_name);
+    // Container element/side types go through conversion like the property
+    // value itself; the owner names the failing field. Explicit options and
+    // declared container types merge per side.
+    if (comptime effectiveContainerSides(F)) |sides| {
+        switch (sides) {
+            .array => |Element| validateContainerSupport(T, field_name, Element, "element"),
+            .dictionary => |dict| {
+                validateContainerSupport(T, field_name, dict.key, "key");
+                validateContainerSupport(T, field_name, dict.value, "value");
+            },
+        }
+    }
     return comptime blk: {
         const OptionsT = @TypeOf(F.options);
         const explicit_hint = @hasField(OptionsT, "hint") or @hasField(OptionsT, "hint_string");
@@ -964,7 +1165,26 @@ fn descriptorFor(comptime T: type, comptime field_name: [:0]const u8) PropertyDe
         var hint_string = F.hint_string;
         var class_name: ?[:0]const u8 = null;
         if (!explicit_hint and usageBits(usage) != 0) {
-            if (property_hint.resolve(F.PropertyFor)) |resolved| {
+            if (effectiveContainerSides(F)) |sides| {
+                switch (sides) {
+                    .array => |Element| {
+                        if (property_hint.resolveArray(Element)) |resolved| {
+                            hint = resolved.hint;
+                            hint_string = resolved.hint_string;
+                        }
+                    },
+                    .dictionary => |dict| {
+                        if (property_hint.resolveDictionary(dict.key, dict.value)) |resolved| {
+                            hint = resolved.hint;
+                            hint_string = resolved.hint_string;
+                        }
+                    },
+                }
+            } else if (property_hint.resolveConverted(F.PropertyFor)) |resolved| {
+                hint = resolved.hint;
+                hint_string = resolved.hint_string;
+                class_name = resolved.class_name;
+            } else if (property_hint.resolve(F.PropertyFor)) |resolved| {
                 hint = resolved.hint;
                 hint_string = resolved.hint_string;
                 class_name = resolved.class_name;
@@ -1006,6 +1226,7 @@ const interface = bindings.interface;
 const naming = @import("naming");
 
 const builtins = @import("../builtins/builtins.zig");
+const conversion = @import("../conversion.zig");
 const enums = @import("../enums.zig");
 const ownership = @import("../ownership.zig");
 const reflect = @import("../reflect/reflect.zig");

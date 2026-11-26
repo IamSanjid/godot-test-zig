@@ -25,6 +25,11 @@ Established exceptions:
 - Engine names and Godot ABI parameter names are kept as-is (`p_instance`,
   `_ready`, `_process`, generated engine class names such as
   `TextServerManager`).
+- Lifecycle callback builders keep their engine callback names:
+  `CreateInstance`, `RecreateInstance`, and `FreeInstance` are named after the
+  GDExtension callbacks they build. They are functions, not types or callables
+  returning a type, so the exception is deliberate; do not rename them to
+  `camelCase`.
 - Generated bindings own their identifiers, including ABI padding fields
   (`_pad0`) and opaque payload fields (`_opaque`).
 - `Variant.Data` is the engine payload layout, not a catch-all data type.
@@ -125,6 +130,37 @@ inside a group. A directly re-exported submodule starts its own group with
 re-export group (std, third-party, or unrelated parent modules) stay at the
 bottom under the normal import rules.
 
+## Comptime access
+
+- Use direct access for statically known declarations and fields:
+  `Marker.Engine`, `info.marker.toEngine`, `spec.engine`.
+- `@hasDecl` is a guard for optional declarations; `@field` is only for names
+  computed at comptime, such as loops over `decl_names` or user-provided
+  strings.
+- Use `reflect` helpers instead of open-coding `@typeInfo` switches when the
+  helper already exists.
+
+## Public facade vs internal modules
+
+`godot.zig` is the user API surface. Export the modules and declarations user
+code is meant to call (`annotations`, `ownership`, `collections`, `abi`,
+`registration`, codegen types, runtime entry points). Implementation modules stay
+internal: `conversion.zig`, `ptrcall.zig`, caches, and the property/registration
+helpers behind a surface are imported by the runtime, not re-exported by the
+facade.
+
+- Put a rule in the layer that owns it instead of exposing it from a surface or
+  duplicating it in one. Declared-type support and value conversion belong to the
+  internal conversion layer; canonical ABI layout to `abi.zig`; object-slot
+  reference rules to `ptrcall.zig`.
+- Delivered docs describe user-facing surfaces and the conversion model; they do
+  not present internal functions, caches, or private primitives as API. Use a
+  concept name ("the conversion layer", "the Variant path", "the ptrcall path")
+  and link the owning page.
+- Tests may reach internals through the test-only `godot.internal` hook, which is
+  an empty struct outside test builds. It is not API: do not use it from user
+  code and do not document it as a supported path.
+
 ## Tests
 
 - Tests mirror the module layout under `src/godot/tests/`. `all.zig` is the
@@ -145,7 +181,8 @@ bottom under the normal import rules.
   fixtures, or `comptimeSelfCheck` under `src/godot/` outside `tests/`. Tests
   own those checks.
 - Unit tests import the runtime through the public `godot` facade, not relative
-  parent paths. Generated-layer analysis may also use the `bindings` module.
+  parent paths. Internal-module coverage uses the test-only `godot.internal`
+  hook; generated-layer analysis may also use the `bindings` module.
 - Test files are hand-written and committed. Generated output is ignored and is
   never edited to make a test pass.
 

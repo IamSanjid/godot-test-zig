@@ -47,7 +47,9 @@ Marks the single field that stores the engine base pointer.
 
 - At most one `Base` field is allowed.
 - Required by auto-`OnReady`.
-- `initBase` stores the constructed engine base into the marker.
+- `initBase` stores the engine base in the marker as a borrowed parent view. The
+  engine owns the base (the create-instance factory hands it over with `.take()`);
+  never deinitialize the marker.
 - The marker provides a safe accessor and a debug guard.
 
 ### `OnReady(T)`
@@ -105,25 +107,57 @@ health: Property(i32, .{
     .hint = .range,
     .hint_string = "0,100",
 }) = .init(100),
+
+// A wrapper-typed container property: the hint derives from `Array(i32)`.
+numbers: Property(godot.collections.Array(i32), .{
+    .usage = .exported,
+    .set = .best_effort,
+    .deinit = .best_effort,
+}) = .init(undefined),
 ```
 
 - Options: `.usage` (required), `.name`, `.hint`, `.hint_string`, `.type`,
-  `.get`, `.set`, `.read_only`, `.init`, `.deinit`. The option table and
-  semantics are in [properties.md](properties.md#options).
+  `.element`, `.key`, `.value`, `.get`, `.set`, `.read_only`, `.init`,
+  `.deinit`. The option table and semantics are in
+  [properties.md](properties.md#options).
 - `.usage` accepts `enums.PropertyUsageFlags`, a named flag literal such as
   `.exported` / `.none`, or an anonymous struct of flags. Zero-usage properties
   are hidden from `get_property_list` but stay reachable through engine
   set/get.
-- The engine-facing `PropertyInfo.type` is `.type` when present, otherwise
-  `godot.conversion.variantType(T)`; its engine class name comes from the
-  descriptor or `godot.conversion.engineClassName(T)`. Inspector hints are
-  derived from the declared Zig type, not the engine type. See
-  [conversion.md](conversion.md#consumers).
-- Ownership is explicit per field. `.set` and `.deinit` accept `.best_effort`
-  or a function. A trivial value type may omit both; a non-trivial one (managed
-  builtin, `Variant`, `RefCounted` pointer, or a struct declaring `deinit`) must
-  declare both, or just `.deinit` when `.read_only`. `.deinit` is cleanup only
-  and is never called by a setter. The preset helpers are
+- Container properties: a `godot.collections` wrapper value derives the engine
+  container hint (`PROPERTY_HINT_ARRAY_TYPE` / `PROPERTY_HINT_DICTIONARY_TYPE`)
+  from the wrapper's `Element`/`Key`/`Value` declarations with no options:
+  `numbers: Property(godot.collections.Array(i32), ...)`. For
+  `builtins.Array`/`builtins.Dictionary` storage, `.element` and
+  `.key`/`.value` take the same types explicitly. On a wrapper-typed property an
+  explicit option merges per side with the wrapper declarations (an explicit
+  side wins, the other keeps the declared type). A converter element/side
+  resolves its hint through its engine representation. `Variant` means an untyped
+  element or side. The
+  declarations are metadata only: they do not type the stored container, retype
+  an assigned container, or change conversion. Set engine typing on the
+  container itself with its generated `setTyped`/`setTypedAs` methods or the
+  `godot.collections` wrappers; validation and hint formats are in
+  [properties.md](properties.md#typed-container-hints).
+- The engine-facing `PropertyInfo.type` is `.type` when present, otherwise the
+  declared type's engine Variant type; its `class_name` comes from the
+  descriptor or the declared type's engine object representation. Inspector
+  hints are derived from the declared Zig type (or the wrapper
+  declarations/container options for a container property), not the engine
+  type. See [conversion.md](conversion.md).
+- Ownership is explicit per field. `.set` accepts `.best_effort` or
+  `fn (*Owner, T) void`; `.deinit` accepts `.best_effort` or a custom cleanup
+  hook `fn (*Owner, *T) void` (the owner plus a pointer to the stored value). A
+  trivial value type may omit both; a non-trivial one (managed builtin,
+  `Variant`, `godot.ownership.Ref` or another owning wrapper, or a struct
+  declaring `deinit`) must declare both, or just `.deinit` when `.read_only`. A
+  `RefCounted` value must use `godot.ownership.Ref(T)`; a raw `RefCounted`
+  pointer is a compile error, and `godot.ownership.Owned(T)` is manual
+  ownership, not property storage. `.deinit` is cleanup only and is never
+  called by a setter. The wrapper exposes one conditional cleanup method per
+  field: custom hooks take the owner, `.best_effort` takes none, and `.none`
+  declares `deinit = void`; the bulk route is
+  `annotations.deinitPropertyFields`. The preset helpers are
   `godot.annotations.property.setBestEffort`, `deinitBestEffort`, and
   `requiresExplicitOwnership`; the rules are in
   [properties.md](properties.md#ownership-modes).
@@ -144,10 +178,18 @@ post-initialize notification after it; recreation has no such step.
 - Member form: receives `*T`, optional `Allocator`, optional `*Extends`.
 - Static form: returns `T` or `!T`; it replaces the whole instance, so prefer
   the member form for classes that use `Base` markers or `Property` `.init`.
-- On error the instance is detached and its binding freed, then destroyed;
-  `DeinitCallback` and property cleanup do not run. Creation also releases the
-  engine base, while a reload keeps it. See
-  [registration.md](registration.md#instance-lifecycle).
+- On error the framework detaches and destroys the instance; creation also
+  releases the constructed base through its typed handle (`deinit`), while a
+  reload keeps the engine object. Before returning the error it releases the
+  values of fields that declare a custom `.init` initializer and
+  `.deinit = .best_effort`; this partial best-effort pass is the only cleanup on
+  the path. `DeinitCallback` does not run, custom `.deinit` hooks
+  (`fn (*Owner, *T) void`) are skipped (the owner may be partially initialized),
+  and fields without a custom `.init` initializer are not touched because their
+  value may still be `undefined`.
+  `InitCallback` owns its failure cleanup for everything it created or assigned;
+  `.init` values whose cleanup is a custom hook still leak on this rare path.
+  See [registration.md](registration.md#instance-lifecycle).
 - Runs again when a hot reload recreates the instance; see
   [registration.md](registration.md#hot-reload).
 - The allocator is `ClassRegistration.gpa` when present, otherwise
@@ -161,8 +203,9 @@ Called before the user instance is freed.
 - May accept an `Allocator`.
 - Must return `void`.
 - Does not free the instance; `instance_allocator.destroy` follows.
-- Property fields are not released automatically; release them here (for example
-  with `annotations.deinitPropertyFields`) or enable
+- Property fields are not released automatically at free time; release them here
+  (per field through the wrapper's conditional `deinit` method, or in bulk with
+  `annotations.deinitPropertyFields`) or enable
   `ClassOptions.auto_property_cleanup`, which runs cleanup after this callback.
 - Runs from the engine's free-instance callback: during normal destruction, and
   when a hot reload clears the old extension instance during unload. Only
@@ -222,15 +265,23 @@ const Duration = struct {
   conversion support), `.to_engine` (`fn (T) Engine`), and `.from_engine`
   (`fn (Engine) T`). The marker exports `.Engine`, `.toEngine`, `.fromEngine`,
   and declares `marker.Kind.conversion`.
-- Function signatures are validated when `godot.conversion` first uses the
-  marker; the marker constructor validates the spec shape and field names.
+- The marker constructor validates the spec shape and field names; the
+  converter function signatures are validated by the internal conversion layer
+  when a surface first prepares the type. There is no user-facing conversion
+  API: reach the model through the surface declarations and this marker.
 - The engine type cannot be `Variant` and cannot itself be a converter: there
   are no conversion chains. A marker on a type that already has direct support
   is ignored: direct support wins.
-- Properties, signals, and virtuals consume the marker through the shared
-  `godot.conversion` queries and primitives; see [conversion.md](conversion.md)
-  for support rules, ownership, and examples. There is no per-class or
-  per-surface conversion override.
+- Properties, signals, and virtuals consume the marker through the same
+  internal conversion layer; see [conversion.md](conversion.md) for the model,
+  support rules, and examples. There is no per-class or per-surface conversion
+  override.
+- A marker may name an owning builtin engine type (`String`, `Array`,
+  `Dictionary`, ...); `to_engine`/`from_engine` follow the converter ownership
+  rules in [conversion.md](conversion.md#ownership-direction) (`from_engine`
+  must copy or retain what it keeps). The typed container wrappers in
+  [collections.md](collections.md#declared-conversion-type) use this form and are
+  the worked example.
 
 ### `Signal(engine_name, args)`
 
@@ -251,16 +302,24 @@ pub const HealthChanged = godot.annotations.Signal("health_changed", .{
   names the signal and argument in the error. `Variant` is the one untyped
   argument (it registers as `.nil`), while a property storing `Variant` needs an
   explicit `.type`.
-- Registration derives each argument's `variantType` and `engineClassName`
-  through `godot.conversion`; emit encodes the declared values with
-  `encodeVariant`. A custom converter argument must be an exact `T` value. See
-  [signals.md](signals.md#registration).
+- Registration derives each argument's Variant type and engine class name
+  through the internal conversion layer; emit passes each declared value as a
+  borrowed Variant view where the type allows one, and as an owning Variant
+  otherwise. A `RefCounted` object argument (direct pointer, `Ref`, or converter
+  with a `RefCounted` engine) is a borrowed view: it pins no reference, so the
+  Zig caller must keep its own reference alive through the synchronous emit.
+  Deferred connections copy and retain their arguments. A custom converter
+  argument must be an exact `T` value. See [signals.md](signals.md#emit).
 - Signal registration is what makes `connect`/`emit_signal` work: the engine
   resolves signals from the class signal map.
 - A class with no signal declarations registers no signals.
 
-Emit through the marker, which encodes each declared argument into an owning
-Variant and releases it after dispatch:
+Emit through the marker. It uses a borrowed Variant view for inline/plain
+values, managed inline builtins, `Variant`, and object pointers (including
+`RefCounted` pointers; the caller keeps its own reference alive for the
+synchronous dispatch), and builds owning temporaries for engine-owned storage
+(heap-backed builtins, packed arrays, managed-engine converters), releasing them
+after dispatch:
 
 ```zig
 _ = TestNode.HealthChanged.emit(self, .{ self.health.get(), self });
@@ -361,7 +420,9 @@ exports. They are not part of the declaration API:
 Tooling and tests import the submodules directly; user classes stay on the flat
 exports. The facade also exports the `marker` submodule (`marker.Kind`,
 `kindOf`, `is`) because discovery compares marker identity, and the
-`property`/`constants` submodules above. The same split is summarized in
+`property`/`constants` submodules above. The conversion layer behind the
+declared types is internal: the marker declaration is the only user surface, and
+[conversion.md](conversion.md) owns the rules. The same split is summarized in
 [CONTEXT.md](../CONTEXT.md#layout).
 
 ## Annotation initialization

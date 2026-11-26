@@ -224,7 +224,7 @@ fn emitClass(
     try writeClassEnums(writer, arena, resolver, info);
 
     if (class.is_instantiable and !singleton) {
-        try writeConstruct(writer, class, resolver, options.api.strip_deprecation);
+        try writeConstruct(writer, class, &imports, options.api.strip_deprecation);
     }
 
     try writeVirtuals(writer, arena, resolver, info, &imports);
@@ -445,23 +445,31 @@ fn buildAncestry(
     return ancestor_names.items;
 }
 
-fn writeConstruct(writer: *Io.Writer, class: *const ExtensionApiJson.Class, resolver: *const ClassResolver, strip_deprecation: bool) !void {
-    try writer.writeAll("    pub inline fn construct() ?*");
-    try names.writeRawIdent(writer, class.name);
-    try writer.writeAll(" {\n        const value = ");
-    try type_mapping.writeBindingClassPath(writer, class);
-    try writer.writeAll(".construct(runtime.dispatcher());\n");
-    try writer.writeAll("        return if (value) |ptr| @ptrCast(ptr) else null;\n    }\n\n");
+fn writeConstruct(writer: *Io.Writer, class: *const ExtensionApiJson.Class, imports: *ImportSet, strip_deprecation: bool) !void {
+    const handle = if (class.is_refcounted) "Ref" else "Owned";
+    imports.ownership = true;
 
-    if (!strip_deprecation) {
-        try writer.writeAll("    pub inline fn constructLegacy() ?*");
-        try names.writeRawIdent(writer, class.name);
-        try writer.writeAll(" {\n        const value = ");
-        try type_mapping.writeBindingClassPath(writer, class);
-        try writer.writeAll(".constructLegacy(runtime.dispatcher());\n");
-        try writer.writeAll("        return if (value) |ptr| @ptrCast(ptr) else null;\n    }\n\n");
-    }
-    _ = resolver;
+    try writeConstructMethod(writer, class, handle, "construct");
+    if (!strip_deprecation) try writeConstructMethod(writer, class, handle, "constructLegacy");
+}
+
+/// Emits one typed constructor wrapper. The raw binding constructor returns the
+/// creation reference for a `RefCounted` class and plain exclusive ownership
+/// otherwise, so the result is moved into the class's ownership handle.
+fn writeConstructMethod(
+    writer: *Io.Writer,
+    class: *const ExtensionApiJson.Class,
+    handle: []const u8,
+    method: []const u8,
+) !void {
+    try writer.print("    pub inline fn {s}() ownership.{s}(", .{ method, handle });
+    try names.writeRawIdent(writer, class.name);
+    try writer.writeAll(") {\n        const value = ");
+    try type_mapping.writeBindingClassPath(writer, class);
+    try writer.print(".{s}(runtime.dispatcher());\n", .{method});
+    try writer.print("        return ownership.{s}(", .{handle});
+    try names.writeRawIdent(writer, class.name);
+    try writer.writeAll("){ .ptr = if (value) |ptr| @ptrCast(ptr) else null };\n    }\n\n");
 }
 
 fn writeClassConstants(
@@ -595,6 +603,10 @@ fn writeVirtualGroup(
         }
         try writer.writeAll(") callconv(.c) ");
         if (method.return_value) |return_value| {
+            // Virtual returns are outgoing: the callback hands the engine a
+            // borrowed pointer and `encodePtrcallSlot` gives the engine slot its own
+            // reference, so the signature is the raw public type, never an
+            // owning `ownership.Ref`.
             try writePublicCodegenType(writer, resolver, imports, return_value.type, .return_value, return_value.meta);
         } else {
             try writer.writeAll("void");
@@ -808,12 +820,11 @@ fn writeMethod(
     const return_value = method.return_value;
     const return_type = if (return_value) |value| value.type else "void";
     const return_meta = if (return_value) |value| value.meta else null;
-    const resolved_return = try resolvePublicCodegen(resolver, return_type, .return_value, real_name, return_meta);
-    try writer.writeAll(resolved_return.zig);
-    try accountImports(imports, resolved_return);
+    const resolved_return = try resolveReturnType(resolver, return_type, real_name, return_meta);
+    try writeReturnType(writer, imports, resolved_return);
     try writer.writeAll(" {\n");
 
-    if (resolved_return.kind == .void) {
+    if (resolved_return.resolved.kind == .void) {
         try writer.writeAll("        ");
     } else {
         try writer.writeAll("        const result = ");
@@ -849,9 +860,9 @@ fn writeMethod(
     }
     try writer.writeAll(");\n");
 
-    if (resolved_return.kind != .void) {
+    if (resolved_return.resolved.kind != .void) {
         try writer.writeAll("        return ");
-        try type_mapping.writeReturn(writer, resolved_return, "result");
+        try writeReturnValue(writer, resolved_return, "result");
         try writer.writeAll(";\n");
     }
     try writer.writeAll("    }\n\n");
@@ -916,9 +927,8 @@ fn writeVarargMethod(
     const return_value = method.return_value;
     const return_type = if (return_value) |value| value.type else "void";
     const return_meta = if (return_value) |value| value.meta else null;
-    const resolved_return = try resolvePublicCodegen(resolver, return_type, .return_value, real_name, return_meta);
-    try writer.writeAll(resolved_return.zig);
-    try accountImports(imports, resolved_return);
+    const resolved_return = try resolveReturnType(resolver, return_type, real_name, return_meta);
+    try writeReturnType(writer, imports, resolved_return);
     try writer.writeAll(" {\n");
     try writer.writeAll("        var args: [vargs.len]bindings.builtins.Variant = undefined;\n");
     try writer.writeAll("        inline for (vargs, 0..) |value, i| {\n");
@@ -926,7 +936,7 @@ fn writeVarargMethod(
     try writer.writeAll("            args[i] = value.toBinding();\n");
     try writer.writeAll("        }\n");
 
-    if (resolved_return.kind == .void) {
+    if (resolved_return.resolved.kind == .void) {
         try writer.writeAll("        ");
     } else {
         try writer.writeAll("        const result = ");
@@ -956,9 +966,9 @@ fn writeVarargMethod(
     }
     if (!first) try writer.writeAll(", ");
     try writer.writeAll("args);\n");
-    if (resolved_return.kind != .void) {
+    if (resolved_return.resolved.kind != .void) {
         try writer.writeAll("        return ");
-        try type_mapping.writeReturn(writer, resolved_return, "result");
+        try writeReturnValue(writer, resolved_return, "result");
         try writer.writeAll(";\n");
     }
     try writer.writeAll("    }\n\n");
@@ -1010,11 +1020,10 @@ fn writeVirtualWrapper(
     const return_value = method.return_value;
     const return_type = if (return_value) |value| value.type else "void";
     const return_meta = if (return_value) |value| value.meta else null;
-    const resolved_return = try resolvePublicCodegen(resolver, return_type, .return_value, real_name, return_meta);
-    try writer.writeAll(resolved_return.zig);
-    try accountImports(imports, resolved_return);
+    const resolved_return = try resolveReturnType(resolver, return_type, real_name, return_meta);
+    try writeReturnType(writer, imports, resolved_return);
     try writer.writeAll(" {\n");
-    if (resolved_return.kind == .void) {
+    if (resolved_return.resolved.kind == .void) {
         try writer.writeAll("        ");
     } else {
         try writer.writeAll("        const result = ");
@@ -1039,9 +1048,9 @@ fn writeVirtualWrapper(
         try accountImports(imports, resolved);
     }
     try writer.writeAll(");\n");
-    if (resolved_return.kind != .void) {
+    if (resolved_return.resolved.kind != .void) {
         try writer.writeAll("        return ");
-        try type_mapping.writeReturn(writer, resolved_return, "result");
+        try writeReturnValue(writer, resolved_return, "result");
         try writer.writeAll(";\n");
     }
     try writer.writeAll("    }\n\n");
@@ -1165,6 +1174,65 @@ fn writePublicType(
     try accountImports(imports, resolved);
 }
 
+/// Result of resolving one generated engine-call return type.
+const ReturnType = struct {
+    resolved: type_mapping.ResolvedType,
+    /// True for an owning `RefCounted` class pointer: the declared return type
+    /// is `ownership.Ref(Class)` and the binding's raw owning pointer is moved
+    /// into it without retaining.
+    ref: bool = false,
+    /// Zig class alias used inside `ownership.Ref(...)` when `ref` is true.
+    ref_class: ?[]const u8 = null,
+};
+
+/// Resolves the return type of a generated engine-call wrapper (`writeMethod`,
+/// `writeVarargMethod`, `writeVirtualWrapper`), marking `RefCounted` class
+/// pointers as owning `Ref` results. Virtual callback signatures do not use this:
+/// their returns are borrowed raw pointers.
+fn resolveReturnType(
+    resolver: *const ClassResolver,
+    raw: []const u8,
+    real_name: []const u8,
+    meta: ?[]const u8,
+) !ReturnType {
+    const resolved = try resolvePublicCodegen(resolver, raw, .return_value, real_name, meta);
+    const class_name = resolved.import_class orelse return .{ .resolved = resolved };
+    if (resolved.kind != .class_ptr or !resolver.isRefCountedClass(class_name)) {
+        return .{ .resolved = resolved };
+    }
+    return .{ .resolved = resolved, .ref = true, .ref_class = resolver.zigClassName(class_name) };
+}
+
+/// Writes a resolved return type and records the imports it needs.
+fn writeReturnType(writer: *Io.Writer, imports: *ImportSet, return_info: ReturnType) !void {
+    if (return_info.ref) {
+        try writer.writeAll("ownership.Ref(");
+        try writer.writeAll(return_info.ref_class.?);
+        try writer.writeAll(")");
+        imports.ownership = true;
+    } else {
+        try writer.writeAll(return_info.resolved.zig);
+    }
+    try accountImports(imports, return_info.resolved);
+}
+
+/// Writes the returned expression of a generated function body.
+///
+/// The binding returns `RefCounted` class pointers as a raw pointer carrying one
+/// owning reference, so the wrapper takes it over without retaining. All other
+/// returns keep the shared codegen return conversion.
+fn writeReturnValue(writer: *Io.Writer, return_info: ReturnType, expr: []const u8) !void {
+    if (return_info.ref) {
+        try writer.writeAll("ownership.Ref(");
+        try writer.writeAll(return_info.ref_class.?);
+        try writer.writeAll("){ .ptr = if (");
+        try writer.writeAll(expr);
+        try writer.writeAll(") |ptr| @ptrCast(ptr) else null }");
+        return;
+    }
+    try type_mapping.writeReturn(writer, return_info.resolved, expr);
+}
+
 fn accountImports(imports: *ImportSet, resolved: type_mapping.ResolvedType) !void {
     if (resolved.import_class) |name| try imports.add(name);
     if (resolved.import_native) imports.native = true;
@@ -1186,6 +1254,7 @@ fn writeImports(
     if (imports.native) try writer.print("const native = @import(\"{s}native.zig\");\n", .{prefix});
     if (imports.enums) try writer.print("const enums = @import(\"{s}enums.zig\");\n", .{prefix});
     try writer.writeAll("const std = @import(\"std\");\n");
+    if (imports.ownership) try writer.print("const ownership = @import(\"{s}ownership.zig\");\n", .{prefix});
 
     const current_alias = resolver.zigClassName(info.class.name);
     if (!std.mem.eql(u8, current_alias, info.class.name)) {
@@ -1212,6 +1281,8 @@ const ImportSet = struct {
     count: usize = 0,
     native: bool = false,
     enums: bool = false,
+    /// Set when a signature references `ownership.Ref`; emits the module import.
+    ownership: bool = false,
 
     fn add(self: *ImportSet, name: []const u8) !void {
         for (self.names[0..self.count]) |existing| {
@@ -1251,4 +1322,92 @@ const virtuals = @import("../model/virtuals.zig");
 
 test "codegen class renderer compiles" {
     _ = &generate;
+}
+
+test "typed construct and Ref-return ownership shapes" {
+    var ref_aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer ref_aw.deinit();
+
+    const refcounted: ExtensionApiJson.Class = .{
+        .name = "ExampleResource",
+        .is_refcounted = true,
+        .is_instantiable = true,
+    };
+    var ref_imports: ImportSet = .{};
+    try writeConstruct(&ref_aw.writer, &refcounted, &ref_imports, false);
+    const ref_output = ref_aw.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        ref_output,
+        "pub inline fn construct() ownership.Ref(ExampleResource) {",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        ref_output,
+        "pub inline fn constructLegacy() ownership.Ref(ExampleResource) {",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        ref_output,
+        "return ownership.Ref(ExampleResource){ .ptr = if (value) |ptr| @ptrCast(ptr) else null };",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        ref_output,
+        ".constructLegacy(runtime.dispatcher());",
+    ) != null);
+    try std.testing.expect(ref_imports.ownership);
+
+    var plain_aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain_aw.deinit();
+
+    const plain: ExtensionApiJson.Class = .{
+        .name = "ExampleNode",
+        .is_instantiable = true,
+    };
+    var plain_imports: ImportSet = .{};
+    try writeConstruct(&plain_aw.writer, &plain, &plain_imports, true);
+    const plain_output = plain_aw.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        plain_output,
+        "pub inline fn construct() ownership.Owned(ExampleNode) {",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        plain_output,
+        ".construct(runtime.dispatcher());",
+    ) != null);
+    // Stripping deprecation drops the legacy entry point.
+    try std.testing.expect(std.mem.indexOf(u8, plain_output, "constructLegacy") == null);
+    try std.testing.expect(plain_imports.ownership);
+
+    const ref_return: ReturnType = .{
+        .resolved = .{ .kind = .class_ptr, .zig = "?*Resource", .import_class = "Resource" },
+        .ref = true,
+        .ref_class = "Resource",
+    };
+
+    var type_aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer type_aw.deinit();
+    var type_imports: ImportSet = .{};
+    try writeReturnType(&type_aw.writer, &type_imports, ref_return);
+    try std.testing.expectEqualStrings("ownership.Ref(Resource)", type_aw.writer.buffered());
+    try std.testing.expect(type_imports.ownership);
+
+    var value_aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer value_aw.deinit();
+    try writeReturnValue(&value_aw.writer, ref_return, "value");
+    try std.testing.expectEqualStrings(
+        "ownership.Ref(Resource){ .ptr = if (value) |ptr| @ptrCast(ptr) else null }",
+        value_aw.writer.buffered(),
+    );
+
+    var plain_value_aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain_value_aw.deinit();
+    const plain_return: ReturnType = .{
+        .resolved = .{ .kind = .class_ptr, .zig = "?*Node", .import_class = "Node" },
+    };
+    try writeReturnValue(&plain_value_aw.writer, plain_return, "value");
+    try std.testing.expect(std.mem.indexOf(u8, plain_value_aw.writer.buffered(), "ownership.Ref") == null);
 }

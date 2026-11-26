@@ -128,6 +128,13 @@ changing every emitter.
 - Codegen never generates `builtins/builtins.zig` for now.
 - Generated dispatch code imports the hand-written `runtime.zig` as `runtime`
   (for `dispatcher()`, `dispatch()`, and `reflect`), never the `godot.zig` facade.
+- Generated class files import the hand-written `ownership.zig` (relative to the
+  layer root) for typed `construct`/`constructLegacy` and `Ref`-typed
+  engine-method results. This is a deliberate codegen <-> ownership file-level
+  cycle: `ownership.zig` imports the generated `classes` tree for `RefCounted`
+  class types, and generated classes import `ownership.zig`. Do not route it
+  through the facade or `runtime.zig`, and do not move ownership policy into
+  codegen.
 - No codegen-owned `auto.zig`.
 - No codegen-owned registration layer.
 - Bindgen and codegen emitters do not merge.
@@ -136,6 +143,10 @@ changing every emitter.
   The library utility returns a tuple/array of codegen Variants; generated codegen
   wrappers convert each with `toBinding` into the binding Variant stack array.
   Bindgen then assembles the final engine pointer array.
+- The raw Variant borrow helper stays in the bindgen layer:
+  `bindings.builtins.Variant.borrow(dispatcher, T, value)` takes pointers and
+  returns a raw binding `Variant`. Generated code never uses the public codegen
+  `Variant.Borrowed` view; the two `borrow` spellings name different layers.
 
 ## Start here
 

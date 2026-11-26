@@ -17,10 +17,10 @@ const Flags = bitpack struct(u32) {
 };
 
 // The fixture classes below are compile-only: they are never registered or
-// instantiated. Owned fields (String, StringName, object pointers) are
-// initialized with `undefined` only so the best-effort setter ownership paths
-// and the opt-in `annotations.deinitPropertyFields` cleanup are analyzed; those
-// values are never read or released at runtime.
+// instantiated. Owned fields (String, StringName, `ownership.Ref`) are
+// initialized with `undefined` or an empty `Ref` only so the best-effort setter
+// ownership paths and the opt-in `annotations.deinitPropertyFields` cleanup are
+// analyzed; those values are never read or released at runtime.
 
 /// Extension class over an engine `RefCounted` base: opt-in class cleanup must
 /// release the owned builtin field of a refcounted extension class.
@@ -62,22 +62,22 @@ const TestNode = struct {
     mode: annotations.Property(Mode, .{ .usage = .exported }) = .init(.idle),
     flags: annotations.Property(Flags, .{ .usage = .exported }) = .init(.{}),
     target: annotations.Property(?*classes.core.Node, .{ .usage = .exported }) = .init(null),
-    resource: annotations.Property(?*classes.core.Resource, .{
+    resource: annotations.Property(godot.ownership.Ref(classes.core.Resource), .{
         .usage = .exported,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
+    }) = .init(.init(null)),
     owner_node: annotations.Property(*const classes.core.Node, .{ .usage = .none }) = .init(undefined),
-    optional_ref: annotations.Property(?*const classes.core.RefCounted, .{
+    optional_ref: annotations.Property(godot.ownership.Ref(classes.core.RefCounted), .{
         .usage = .none,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
-    extension_ref: annotations.Property(*TestRefCounted, .{
+    }) = .init(.init(null)),
+    extension_ref: annotations.Property(godot.ownership.Ref(TestRefCounted), .{
         .usage = .none,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(undefined),
+    }) = .init(.init(null)),
 
     // Accessor variants.
     cur: annotations.Property(i32, .{
@@ -91,9 +91,10 @@ const TestNode = struct {
     }) = .init(1),
     pending: annotations.Property(u32, .{ .usage = .none, .set = setPending }) = .init(0),
 
-    // Custom `.deinit` cleanup hook: honored by the opt-in
-    // `annotations.deinitPropertyFields` call in the free-instance path,
-    // independently of the best-effort setter ownership policy.
+    // Custom `.deinit` cleanup hook: called with the owner and a pointer to the
+    // stored value by the opt-in `annotations.deinitPropertyFields` call in the
+    // free-instance path, independently of the best-effort setter ownership
+    // policy.
     hooked: annotations.Property(builtins.StringName, .{
         .usage = .none,
         .set = .best_effort,
@@ -116,8 +117,9 @@ const TestNode = struct {
         self.pending.value = value;
     }
 
-    fn deinitHooked(self: *@This()) void {
-        self.hooked.value.deinit();
+    fn deinitHooked(self: *@This(), value: *builtins.StringName) void {
+        _ = self;
+        value.deinit();
     }
 };
 
@@ -149,6 +151,26 @@ const TestGrouped = struct {
     secret: annotations.Property(u32, .{ .usage = .none }) = .init(0),
 };
 
+/// Typed container properties: the backend emits the annotation-derived hint
+/// metadata unchanged and falls back to an empty class name.
+const ContainerNode = struct {
+    pub const Extends = classes.core.Node;
+    base: annotations.Base(Extends) = .{},
+    numbers: annotations.Property(builtins.Array, .{
+        .usage = .exported,
+        .element = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    lookup: annotations.Property(builtins.Dictionary, .{
+        .usage = .exported,
+        .key = builtins.String,
+        .value = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+};
+
 const NoProperties = struct {
     pub const Extends = classes.core.Node;
     base: annotations.Base(Extends) = .{},
@@ -164,12 +186,12 @@ fn check(comptime condition: bool, comptime message: []const u8) void {
     if (!condition) @compileError("registration property tests: " ++ message);
 }
 
-/// Public equivalent of the backend's private `requiredVariantType`: an explicit
-/// `.type` override wins, otherwise the declared value type is mapped through
-/// `conversion.variantType`.
+/// Test-side equivalent of the backend's private `requiredVariantType`: an
+/// explicit `.type` override wins, otherwise the declared value type is mapped
+/// through `conversion.variantType`.
 fn effectiveVariantType(comptime desc: annotations.property.PropertyDescriptor) interface.VariantType {
     if (desc.type) |variant_type| return variant_type;
-    return godot.conversion.variantType(desc.value_type) orelse
+    return godot.internal.conversion.variantType(desc.value_type) orelse
         @compileError(std.fmt.comptimePrint(
             "Property '{s}' has no Variant type for declared type '{s}'.",
             .{ desc.field_name, @typeName(desc.value_type) },
@@ -238,6 +260,11 @@ fn checkDescriptors() void {
     checkDescriptor(descs[8], "flags", "flags", .int);
     checkDescriptor(descs[9], "target", "target", .object);
     checkDescriptor(descs[10], "resource", "resource", .object);
+    // `Ref(Resource)` is an object property whose hint and class name come from
+    // its conversion engine representation.
+    check(descs[10].hint == enums.PropertyHint.resource_type, "Ref(Resource) must use the resource picker hint");
+    check(std.mem.eql(u8, descs[10].hint_string, "Resource"), "Ref(Resource) hint string");
+    check(descs[10].class_name != null and std.mem.eql(u8, descs[10].class_name.?, "Resource"), "Ref(Resource) class name");
     checkDescriptor(descs[11], "owner_node", "owner_node", .object);
     checkDescriptor(descs[12], "optional_ref", "optional_ref", .object);
     checkDescriptor(descs[13], "extension_ref", "extension_ref", .object);
@@ -256,6 +283,21 @@ fn checkDescriptors() void {
     check(overrides[1].type == null, "automatic Variant type must stay null");
     check(effectiveVariantType(overrides[0]) == .string, "type override must win");
     check(effectiveVariantType(overrides[1]) == .int, "automatic Variant type must fall back to typeFor");
+
+    // Typed containers: hint metadata comes from the annotation layer and the
+    // backend keeps it as-is, with the engine container's (empty) class name.
+    check(registration_property.propertyEntryCount(ContainerNode) == 2, "container properties must join the property list");
+    const containers = comptime annotations.property.descriptors(ContainerNode);
+    check(containers[0].hint == enums.PropertyHint.array_type, "Array property must list the Array hint");
+    check(std.mem.eql(u8, containers[0].hint_string, "2/0:"), "Array property hint string");
+    check(containers[0].class_name == null, "Array property must not derive a class name");
+    check(effectiveVariantType(containers[0]) == .array, "Array property must keep the array Variant type");
+    check(containers[1].hint == enums.PropertyHint.dictionary_type, "Dictionary property must list the Dictionary hint");
+    check(std.mem.eql(u8, containers[1].hint_string, "4/0:;2/0:"), "Dictionary property hint string");
+    check(containers[1].class_name == null, "Dictionary property must not derive a class name");
+    check(effectiveVariantType(containers[1]) == .dictionary, "Dictionary property must keep the dictionary Variant type");
+    check(std.mem.eql(u8, godot.internal.conversion.engineClassName(builtins.Array), ""), "Array properties must keep the backend's empty class name");
+    check(std.mem.eql(u8, godot.internal.conversion.engineClassName(builtins.Dictionary), ""), "Dictionary properties must keep the backend's empty class name");
 }
 
 fn checkLifetime() void {
@@ -281,7 +323,9 @@ fn checkLifetime() void {
     // custom hook.
     check(annotations.property.hasCustomDeinit(@FieldType(TestNode, "hooked")), "custom .deinit must be discoverable on a registration fixture");
     check(!annotations.property.hasCustomDeinit(@FieldType(TestNode, "label")), "best-effort cleanup reports no custom hook");
-    check(annotations.property.deinitFn(TestNode, "hooked") != null, "custom .deinit must resolve to a callable hook");
+    const hook_fn = annotations.property.deinitFn(TestNode, "hooked") orelse
+        @compileError("registration property tests: custom .deinit must resolve to a callable hook");
+    check(@TypeOf(hook_fn) == fn (*TestNode, *builtins.StringName) void, "custom .deinit hook must take the owner and the value pointer");
     check(annotations.property.deinitFn(TestNode, "label") == null, "best-effort cleanup exposes no custom hook");
 
     // Descriptor validation runs for every descriptor from `callbacks`, not only
@@ -299,11 +343,14 @@ fn checkRuntimePaths() void {
     _ = registration_property.callbacks(HiddenOnly);
     _ = registration_property.callbacks(NoProperties);
     _ = registration_property.callbacks(TestGrouped);
+    _ = registration_property.callbacks(ContainerNode);
     _ = registration_property.propertyInfoList(TestNode);
     _ = registration_property.propertyInfoList(HiddenOnly);
     // Forces analysis of the section branch in `initList`; never executes the
     // engine StringName/String constructors.
     _ = registration_property.propertyInfoList(TestGrouped);
+    // Forces analysis of container hint strings through the property list.
+    _ = registration_property.propertyInfoList(ContainerNode);
 
     // Runtime class validation for engine object targets (`asDeclared`): the
     // Variant values are never read because this function is never called.
@@ -319,9 +366,9 @@ fn checkRuntimePaths() void {
     // is never called.
     annotations.property.setterFn(TestNode, "label").?(@as(*TestNode, undefined), @as(builtins.String, undefined));
     annotations.property.setterFn(TestNode, "tag").?(@as(*TestNode, undefined), @as(builtins.StringName, undefined));
-    annotations.property.setterFn(TestNode, "resource").?(@as(*TestNode, undefined), @as(?*classes.core.Resource, null));
-    annotations.property.setterFn(TestNode, "optional_ref").?(@as(*TestNode, undefined), @as(?*const classes.core.RefCounted, null));
-    annotations.property.setterFn(TestNode, "extension_ref").?(@as(*TestNode, undefined), @as(*TestRefCounted, undefined));
+    annotations.property.setterFn(TestNode, "resource").?(@as(*TestNode, undefined), @as(godot.ownership.Ref(classes.core.Resource), undefined));
+    annotations.property.setterFn(TestNode, "optional_ref").?(@as(*TestNode, undefined), @as(godot.ownership.Ref(classes.core.RefCounted), undefined));
+    annotations.property.setterFn(TestNode, "extension_ref").?(@as(*TestNode, undefined), @as(godot.ownership.Ref(TestRefCounted), undefined));
     annotations.property.setterFn(TestNode, "target").?(@as(*TestNode, undefined), @as(?*classes.core.Node, null));
     annotations.property.setterFn(TestNode, "position").?(@as(*TestNode, undefined), builtins.Vector2.zero);
     annotations.property.setterFn(TestNode, "health").?(@as(*TestNode, undefined), 0);

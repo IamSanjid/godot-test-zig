@@ -1,14 +1,16 @@
-//! Declared Zig value <-> engine value conversion. Properties, virtuals, and
-//! signals use it; methods and containers will. See docs/conversion.md.
+//! Declared Zig value <-> engine value conversion, used by properties, signals,
+//! virtuals, methods, and collections. Not public API: the Variant path and
+//! declared-type mapping live here, direct ptrcall slot rules live in
+//! `ptrcall.zig`. See docs/conversion.md.
 
-pub const Path = enum { variant, ptr };
+pub const Path = enum { variant, ptrcall };
 
 pub const Support = struct {
     /// A Variant representation exists. `variantType` may still be null for
     /// `Variant` itself, which stores transparently.
     variant: bool,
     /// A ptrcall representation exists.
-    ptr: bool,
+    ptrcall: bool,
 };
 
 /// Conversion support for `T`, following one `Conversion` marker.
@@ -55,7 +57,7 @@ fn EngineTypeCache(comptime T: type) type {
 fn computeEngineType(comptime T: type) ?type {
     if (comptime markerInfo(T)) |info| return info.engine;
     const direct = comptime directSupport(T);
-    return if (direct.variant or direct.ptr) T else null;
+    return if (direct.variant or direct.ptrcall) T else null;
 }
 
 fn VariantTypeCache(comptime T: type) type {
@@ -76,7 +78,7 @@ pub fn checkSupported(comptime T: type, comptime path: Path, comptime context: [
     const available = comptime support(T);
     const ok = comptime switch (path) {
         .variant => available.variant,
-        .ptr => available.ptr,
+        .ptrcall => available.ptrcall,
     };
     if (comptime !ok) @compileError(noConversionMessage(T, path, context));
 }
@@ -84,7 +86,7 @@ pub fn checkSupported(comptime T: type, comptime path: Path, comptime context: [
 /// `checkSupported` for both the Variant and ptrcall paths.
 pub fn checkBoth(comptime T: type, comptime context: []const u8) void {
     checkSupported(T, .variant, context);
-    checkSupported(T, .ptr, context);
+    checkSupported(T, .ptrcall, context);
 }
 
 /// Decodes `T` from a Variant, or null when the Variant does not hold `T`'s
@@ -95,31 +97,29 @@ pub fn decodeVariant(comptime T: type, value: *const builtins.Variant) ?T {
     if (comptime markerInfo(T)) |info| {
         const engine_value = value.asDeclared(info.engine) orelse return null;
         defer deinitEngine(info.engine, engine_value);
-        return @field(info.marker, "fromEngine")(engine_value);
+        return info.marker.fromEngine(engine_value);
     }
     return value.asDeclared(T);
 }
 
-/// Decodes `T` from one ptrcall argument slot. `RefCounted` pointers use
-/// `ref_get_object`; extension-class pointers resolve their Zig instance;
-/// every other type reads its ABI representation.
-pub fn decodePtr(comptime T: type, raw: ?*const anyopaque) T {
-    checkSupported(T, .ptr, "decodePtr");
+/// Decodes `T` from one ptrcall argument slot, or through the marker's
+/// `fromEngine` first. Direct types delegate to `ptrcall.decodeDirectPtr`.
+pub fn decodePtrcallSlot(comptime T: type, raw: ?*const anyopaque) T {
+    checkSupported(T, .ptrcall, "decodePtrcallSlot");
     if (comptime markerInfo(T)) |info| {
-        return @field(info.marker, "fromEngine")(decodeDirectPtr(info.engine, raw));
+        return info.marker.fromEngine(ptrcall.decodeDirectPtr(info.engine, raw));
     }
-    return decodeDirectPtr(T, raw);
+    return ptrcall.decodeDirectPtr(T, raw);
 }
 
-/// Encodes `value` into a Variant with the copy/ownership behavior of
-/// `Variant.initDeclared`. `value` is the declared type `T` or a form
-/// `Variant.initDeclared` accepts for it (a coercible literal, a pointer to an
-/// extending engine/extension class); a converter type requires a `T` value.
-/// Conversion goes through the marker's `toEngine` first.
+/// Encodes `value` into a Variant with `Variant.initDeclared`'s copy/ownership
+/// behavior, through the marker's `toEngine` first. `value` is `T` or a form
+/// `initDeclared` accepts for it (a coercible literal, a pointer to an extending
+/// class); a converter requires an exact `T`.
 pub fn encodeVariant(comptime T: type, value: anytype, out: *builtins.Variant) void {
     checkSupported(T, .variant, "encodeVariant");
     if (comptime markerInfo(T)) |info| {
-        const engine_value = @field(info.marker, "toEngine")(value);
+        const engine_value = info.marker.toEngine(value);
         defer deinitEngine(info.engine, engine_value);
         out.* = builtins.Variant.initDeclared(info.engine, engine_value);
         return;
@@ -127,16 +127,123 @@ pub fn encodeVariant(comptime T: type, value: anytype, out: *builtins.Variant) v
     out.* = builtins.Variant.initDeclared(T, value);
 }
 
-/// Encodes `T` into one ptrcall return slot. `RefCounted` pointers use
-/// `ref_set_object`; extension-class pointers write their engine base;
-/// every other type writes its ABI representation.
-pub fn encodePtr(comptime T: type, value: T, raw: ?*anyopaque) void {
-    checkSupported(T, .ptr, "encodePtr");
+/// Encodes `T` into one ptrcall return slot through the marker's `toEngine`
+/// first. Direct types delegate to `ptrcall.encodeDirectPtr`; the slot receives
+/// its own value/reference, so consumers have nothing to release.
+pub fn encodePtrcallSlot(comptime T: type, value: T, raw: ?*anyopaque) void {
+    checkSupported(T, .ptrcall, "encodePtrcallSlot");
     if (comptime markerInfo(T)) |info| {
-        encodeDirectPtr(info.engine, @field(info.marker, "toEngine")(value), raw);
+        ptrcall.encodeDirectPtr(info.engine, info.marker.toEngine(value), raw);
         return;
     }
-    encodeDirectPtr(T, value, raw);
+    ptrcall.encodeDirectPtr(T, value, raw);
+}
+
+/// True when `T` can be passed to `borrowVariant`: a direct type or converter
+/// whose engine representation is borrowed rather than owned (a canonical
+/// scalar, a plain builtin, or an object pointer). A borrowed `RefCounted` view
+/// pins no reference, so the caller must keep its own reference alive during the
+/// engine call. Owned storage needs `encodeVariant`.
+pub fn canBorrowVariant(comptime T: type) bool {
+    if (comptime markerInfo(T)) |info| return canBorrowEngine(info.engine);
+    return builtins.Variant.canBorrow(T);
+}
+
+fn canBorrowEngine(comptime Engine: type) bool {
+    if (comptime !builtins.Variant.canBorrow(Engine)) return false;
+    if (comptime reflect.objectTarget(Engine) != null) return true;
+    return comptime bindings.builtins.traits.kindOf(Engine) == .plain;
+}
+
+/// Writes a borrowed Variant view of `value` into `out`, with `encodeVariant`'s
+/// accepted forms. The view is valid only during one synchronous engine call:
+/// never deinit or store it. Types `canBorrowVariant` rejects must use
+/// `encodeVariant`.
+pub fn borrowVariant(comptime T: type, value: anytype, out: *builtins.Variant) void {
+    checkSupported(T, .variant, "borrowVariant");
+    if (comptime !canBorrowVariant(T)) @compileError(std.fmt.comptimePrint(
+        "borrowVariant: type '{s}' has engine-owned Variant storage and cannot be borrowed; use encodeVariant",
+        .{@typeName(T)},
+    ));
+    if (comptime markerInfo(T)) |info| {
+        out.* = borrowVariantValue(info.engine, info.marker.toEngine(value));
+        return;
+    }
+    out.* = borrowVariantValue(T, value);
+}
+
+/// Borrowed Variant view of `value`, normalized to `T` for
+/// `Variant.initDeclared`; aliases `value` or its engine value, never deinit.
+fn borrowVariantValue(comptime T: type, value: anytype) builtins.Variant {
+    if (comptime reflect.objectTarget(T) != null) return borrowObjectVariant(T, value);
+    const local: T = coerceBorrowValue(T, value);
+    return builtins.Variant.borrow(T, &local).get();
+}
+
+/// Borrowed object Variant for a declared object pointer `T`: engine subclass
+/// pointers pass, extension instances reduce to their engine base (except
+/// extension-declared types, which require that exact instance). A null nullable
+/// value becomes `Variant.nil`.
+fn borrowObjectVariant(comptime T: type, value: anytype) builtins.Variant {
+    const ValueT = @TypeOf(value);
+    const target = comptime reflect.objectTarget(T) orelse unreachable;
+    if (comptime ValueT == T) return builtins.Variant.borrow(T, value).get();
+    if (comptime ValueT == @TypeOf(null)) {
+        if (comptime !target.optional) @compileError(
+            "borrowVariant: " ++ @typeName(T) ++ " is not optional; pass an object pointer instead of null",
+        );
+        return builtins.Variant.nil;
+    }
+
+    const value_target = comptime reflect.objectTarget(ValueT) orelse @compileError(std.fmt.comptimePrint(
+        "borrowVariant expects an object pointer for {s}, found: {s}",
+        .{ @typeName(T), @typeName(ValueT) },
+    ));
+    const ValueClass = value_target.class;
+    const Class = target.class;
+
+    if (comptime target.kind == .extension) {
+        if (comptime ValueClass != Class) @compileError(std.fmt.comptimePrint(
+            "borrowVariant: extension class '{s}' requires that exact instance; found: {s}",
+            .{ @typeName(Class), @typeName(ValueT) },
+        ));
+    } else {
+        const EngineBase = comptime reflect.EngineBaseType(ValueClass);
+        if (comptime !reflect.inheritsFrom(EngineBase, Class)) @compileError(std.fmt.comptimePrint(
+            "borrowVariant expects '{s}', but '{s}' resolves to engine base '{s}', which does not extend it",
+            .{ @typeName(Class), @typeName(ValueT), @typeName(EngineBase) },
+        ));
+    }
+
+    const raw: *ValueClass = if (comptime value_target.optional) blk: {
+        const item = value orelse return builtins.Variant.nil;
+        break :blk @constCast(@as(*const ValueClass, @ptrCast(item)));
+    } else @constCast(@as(*const ValueClass, @ptrCast(value)));
+
+    // The declared extension type keeps its exact instance; `Variant.borrow`
+    // reduces it to the engine base. Engine-declared types reduce here.
+    const object: *Class = if (comptime target.kind == .extension or value_target.kind == .engine)
+        @ptrCast(raw)
+    else
+        @ptrCast(reflect.engineBasePointer(ValueClass, raw));
+    const declared: T = object;
+    return builtins.Variant.borrow(T, declared).get();
+}
+
+/// Normalizes `value` to `T` under the declared-type rules of
+/// `Variant.initDeclared`, without creating an owning Variant.
+fn coerceBorrowValue(comptime T: type, value: anytype) T {
+    const ValueT = @TypeOf(value);
+    if (comptime ValueT == T) return value;
+    if (comptime ValueT == comptime_int) return @as(T, value);
+    if (comptime ValueT == comptime_float) return @as(T, value);
+    if (comptime ValueT == @TypeOf(.enum_literal) and @typeInfo(T) == .@"enum") {
+        return @as(T, value);
+    }
+    @compileError(std.fmt.comptimePrint(
+        "borrowVariant expects {s}, found: {s}",
+        .{ @typeName(T), @typeName(ValueT) },
+    ));
 }
 
 const MarkerInfo = struct {
@@ -160,7 +267,7 @@ fn computeMarkerInfo(comptime T: type) ?MarkerInfo {
     // declaration values (for example generated generic helpers that raise
     // conditional compile errors on some instantiations).
     const direct = comptime directSupport(T);
-    if (comptime direct.variant or direct.ptr) return null;
+    if (comptime direct.variant or direct.ptrcall) return null;
 
     const Marker = comptime conversion_marker.find(T) orelse return null;
     validateMarker(T, Marker);
@@ -171,11 +278,11 @@ fn computeMarkerInfo(comptime T: type) ?MarkerInfo {
 }
 
 fn directSupport(comptime T: type) Support {
-    if (comptime T == void) return .{ .variant = false, .ptr = false };
+    if (comptime T == void) return .{ .variant = false, .ptrcall = false };
 
     const variant = comptime T == builtins.Variant or builtins.Variant.typeFor(T) != null;
-    const ptr = comptime variant or isSingleItemPointer(T);
-    return .{ .variant = variant, .ptr = ptr };
+    const has_ptrcall = comptime variant or isSingleItemPointer(T);
+    return .{ .variant = variant, .ptrcall = has_ptrcall };
 }
 
 fn isSingleItemPointer(comptime T: type) bool {
@@ -203,111 +310,19 @@ fn deinitEngine(comptime E: type, value: E) void {
     }
 }
 
-fn decodeDirectPtr(comptime T: type, raw: ?*const anyopaque) T {
-    if (comptime reflect.objectTarget(T)) |target| {
-        if (comptime target.kind == .extension) return decodeExtensionPtr(T, target, raw);
-    }
-    if (comptime reflect.isRefCountedPointer(T)) return decodeRefCountedPtr(T, raw);
-    return abi.readArgument(T, raw);
-}
-
-fn encodeDirectPtr(comptime T: type, value: T, raw: ?*anyopaque) void {
-    if (comptime reflect.objectTarget(T)) |target| {
-        if (comptime target.kind == .extension) return encodeExtensionPtr(T, target, value, raw);
-    }
-    if (comptime reflect.isRefCountedPointer(T)) return encodeRefCountedPtr(T, value, raw);
-    abi.writeReturn(T, raw, value);
-}
-
-fn decodeRefCountedPtr(comptime T: type, raw: ?*const anyopaque) T {
-    const ref: interface.ConstRefPtr = @ptrCast(@alignCast(raw));
-    const object = runtime.dispatch(.ref_get_object, .{ref});
-
-    if (comptime reflect.isOptionalPointer(T)) {
-        return if (object) |value| @ptrCast(value) else null;
-    }
-    return @ptrCast(object orelse @panic(
-        "Godot passed a null RefCounted object for a non-optional value",
-    ));
-}
-
-fn encodeRefCountedPtr(comptime T: type, value: T, raw: ?*anyopaque) void {
-    const object: interface.ObjectPtr = if (comptime reflect.isOptionalPointer(T))
-        if (value) |item| @ptrCast(item) else null
-    else
-        @ptrCast(value);
-
-    runtime.dispatch(.ref_set_object, .{
-        @as(interface.RefPtr, @ptrCast(@alignCast(raw))),
-        object,
-    });
-}
-
-fn decodeExtensionPtr(
-    comptime T: type,
-    comptime target: reflect.ObjectTarget,
-    raw: ?*const anyopaque,
-) T {
-    const Class = target.class;
-    const Base = reflect.EngineBaseType(Class);
-    const maybe_base: ?*Base = if (comptime reflect.isRefCounted(Class)) blk: {
-        const ref: interface.ConstRefPtr = @ptrCast(@alignCast(raw));
-        const object = runtime.dispatch(.ref_get_object, .{ref});
-        break :blk if (object) |value| @ptrCast(value) else null;
-    } else abi.readArgument(?*Base, raw);
-
-    const base = maybe_base orelse {
-        if (comptime target.optional) return null;
-        @panic("Godot passed a null extension object for a non-optional value");
-    };
-    const instance = base.asInstance(Class) orelse {
-        if (comptime target.optional) return null;
-        @panic("Godot passed an engine object without the extension instance");
-    };
-    return @ptrCast(instance);
-}
-
-fn encodeExtensionPtr(
-    comptime T: type,
-    comptime target: reflect.ObjectTarget,
-    value: T,
-    raw: ?*anyopaque,
-) void {
-    const Class = target.class;
-    const Base = reflect.EngineBaseType(Class);
-
-    if (comptime reflect.isRefCounted(Class)) {
-        const object: interface.ObjectPtr = if (comptime target.optional)
-            if (value) |item| @ptrCast(reflect.engineBasePointer(Class, item)) else null
-        else
-            @ptrCast(reflect.engineBasePointer(Class, value));
-
-        runtime.dispatch(.ref_set_object, .{
-            @as(interface.RefPtr, @ptrCast(@alignCast(raw))),
-            object,
-        });
-        return;
-    }
-
-    if (comptime target.optional) {
-        const maybe_base: ?*Base = if (value) |item| reflect.engineBasePointer(Class, item) else null;
-        abi.writeReturn(?*Base, raw, maybe_base);
-        return;
-    }
-    abi.writeReturn(*Base, raw, reflect.engineBasePointer(Class, value));
-}
-
 fn validateMarker(comptime T: type, comptime Marker: type) void {
     const Engine = comptime conversion_marker.MarkerEngine(Marker);
-    inline for (.{ "toEngine", "fromEngine" }) |field_name| {
-        if (comptime !@hasDecl(Marker, field_name)) @compileError(std.fmt.comptimePrint(
-            "Type '{s}' has an invalid Conversion marker '{s}': missing '.{s}'.",
-            .{ @typeName(T), @typeName(Marker), field_name },
-        ));
-    }
+    if (comptime !@hasDecl(Marker, "toEngine")) @compileError(std.fmt.comptimePrint(
+        "Type '{s}' has an invalid Conversion marker '{s}': missing '.toEngine'.",
+        .{ @typeName(T), @typeName(Marker) },
+    ));
+    if (comptime !@hasDecl(Marker, "fromEngine")) @compileError(std.fmt.comptimePrint(
+        "Type '{s}' has an invalid Conversion marker '{s}': missing '.fromEngine'.",
+        .{ @typeName(T), @typeName(Marker) },
+    ));
 
     const EngineSupport = directSupport(Engine);
-    if (comptime !EngineSupport.variant and !EngineSupport.ptr) @compileError(std.fmt.comptimePrint(
+    if (comptime !EngineSupport.variant and !EngineSupport.ptrcall) @compileError(std.fmt.comptimePrint(
         "Type '{s}' has an invalid Conversion marker '{s}': '.Engine' must have a Variant or " ++
             "ptrcall representation; found '{s}'.",
         .{ @typeName(T), @typeName(Marker), @typeName(Engine) },
@@ -318,8 +333,8 @@ fn validateMarker(comptime T: type, comptime Marker: type) void {
         .{ @typeName(T), @typeName(Marker) },
     ));
 
-    validateConverterFn(T, Marker, "toEngine", @TypeOf(@field(Marker, "toEngine")), T, Engine);
-    validateConverterFn(T, Marker, "fromEngine", @TypeOf(@field(Marker, "fromEngine")), Engine, T);
+    validateConverterFn(T, Marker, "toEngine", @TypeOf(Marker.toEngine), T, Engine);
+    validateConverterFn(T, Marker, "fromEngine", @TypeOf(Marker.fromEngine), Engine, T);
 }
 
 fn validateConverterFn(
@@ -348,7 +363,7 @@ fn validateConverterFn(
 fn pathName(comptime path: Path) []const u8 {
     return switch (path) {
         .variant => "variant",
-        .ptr => "ptrcall",
+        .ptrcall => "ptrcall",
     };
 }
 
@@ -383,8 +398,7 @@ const std = @import("std");
 const bindings = @import("bindings");
 const interface = bindings.interface;
 
-const abi = @import("abi.zig");
+const ptrcall = @import("ptrcall.zig");
 const builtins = @import("builtins/builtins.zig");
 const conversion_marker = @import("annotations/conversion.zig");
 const reflect = @import("reflect/reflect.zig");
-const runtime = @import("runtime.zig");

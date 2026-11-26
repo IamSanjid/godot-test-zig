@@ -132,13 +132,18 @@ const PropertyGroupsLookalike = struct {
 const DeinitProbe = struct {
     deinit_called: bool = false,
     hook_called: bool = false,
+    /// Optional observation point for tests that replace the value; the flag
+    /// above belongs to the replacement afterwards.
+    replaced_count: ?*u32 = null,
 
     pub fn deinit(self: *@This()) void {
         self.deinit_called = true;
+        if (self.replaced_count) |count| count.* += 1;
     }
 };
 
-/// Custom `.deinit` overrides the best-effort cleanup.
+/// Custom `.deinit` overrides the best-effort cleanup and receives the owner
+/// plus a pointer to the stored value.
 const HookOwner = struct {
     probe: godot.annotations.Property(DeinitProbe, .{
         .usage = .none,
@@ -150,13 +155,49 @@ const HookOwner = struct {
         .deinit = deinitPlain,
     }) = .init(0),
     plain_deinit_called: bool = false,
+    plain_value_ok: bool = false,
+    hook_owner_ok: bool = false,
 
-    fn deinitProbe(self: *@This()) void {
-        self.probe.value.hook_called = true;
+    fn deinitProbe(self: *@This(), value: *DeinitProbe) void {
+        value.hook_called = true;
+        self.hook_owner_ok = value == &self.probe.value;
     }
 
-    fn deinitPlain(self: *@This()) void {
+    fn deinitPlain(self: *@This(), value: *u32) void {
         self.plain_deinit_called = true;
+        self.plain_value_ok = value == &self.plain.value;
+    }
+};
+
+fn initialProbe() DeinitProbe {
+    return .{};
+}
+
+/// Partial creation cleanup: only `.best_effort` values assigned by `.init` are
+/// released, and custom `.deinit` hooks never run on a partially created owner.
+const InitializedCleanupOwner = struct {
+    initialized: godot.annotations.Property(DeinitProbe, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+        .init = godot.annotations.Init(DeinitProbe, initialProbe, .{}),
+    }) = .init(.{}),
+    defaulted: godot.annotations.Property(DeinitProbe, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(.{}),
+    hooked: godot.annotations.Property(DeinitProbe, .{
+        .usage = .none,
+        .set = .best_effort,
+        .deinit = deinitHooked,
+        .init = godot.annotations.Init(DeinitProbe, initialProbe, .{}),
+    }) = .init(.{}),
+    hook_calls: u32 = 0,
+
+    fn deinitHooked(self: *@This(), value: *DeinitProbe) void {
+        self.hook_calls += 1;
+        value.deinit_called = true;
     }
 };
 
@@ -193,8 +234,8 @@ const BestEffortProbeOwner = struct {
     }) = .init(.{}),
 };
 
-/// Compile-only best-effort engine paths: managed builtin, `Variant`, and a
-/// `RefCounted` pointer. The values are never read.
+/// Compile-only best-effort engine paths: managed builtin, `Variant`, and an
+/// owned `Ref`. The values are never read.
 const BestEffortOwner = struct {
     string: godot.annotations.Property(godot.builtins.String, .{
         .usage = .none,
@@ -207,11 +248,11 @@ const BestEffortOwner = struct {
         .set = .best_effort,
         .deinit = .best_effort,
     }) = .init(godot.builtins.Variant.nil),
-    ref: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+    ref: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.RefCounted), .{
         .usage = .none,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
+    }) = .init(.init(null)),
 };
 
 /// Read-only managed values declare cleanup and no setter.
@@ -221,11 +262,11 @@ const ReadOnlyManagedOwner = struct {
         .read_only = true,
         .deinit = .best_effort,
     }) = .init(undefined),
-    locked_ref: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+    locked_ref: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.RefCounted), .{
         .usage = .none,
         .read_only = true,
         .deinit = .best_effort,
-    }) = .init(null),
+    }) = .init(.init(null)),
 };
 
 /// Extension over `RefCounted`; helpers resolve the engine base.
@@ -305,28 +346,20 @@ const VariantValueOwner = struct {
     }) = .init(godot.builtins.Variant.nil),
 };
 
-/// Compile-only ownership coverage; engine calls are not executed.
+/// Compile-only ownership coverage; engine calls are not executed. Raw object
+/// pointers stay valid for non-`RefCounted` classes; owned `RefCounted` storage
+/// uses `ownership.Ref`.
 const RefLifetimeOwner = struct {
-    engine: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+    engine: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.RefCounted), .{
         .usage = .none,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
-    engine_const: godot.annotations.Property(*const godot.classes.core.RefCounted, .{
+    }) = .init(.init(null)),
+    extension: godot.annotations.Property(godot.ownership.Ref(RefCountedExtension), .{
         .usage = .none,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(undefined),
-    extension: godot.annotations.Property(?*RefCountedExtension, .{
-        .usage = .none,
-        .set = .best_effort,
-        .deinit = .best_effort,
-    }) = .init(null),
-    extension_const: godot.annotations.Property(*const RefCountedExtension, .{
-        .usage = .none,
-        .set = .best_effort,
-        .deinit = .best_effort,
-    }) = .init(undefined),
+    }) = .init(.init(null)),
     node: godot.annotations.Property(?*godot.classes.core.Node, .{ .usage = .none }) = .init(null),
 };
 
@@ -526,9 +559,29 @@ fn checkLifetime() void {
     check(hooked.has_custom_deinit, "has_custom_deinit must mirror the option");
     check(!godot.annotations.property.hasCustomDeinit(@FieldType(FieldLifetimeOwner, "probe")), ".best_effort reports no custom deinit");
     const hook_fn = godot.annotations.property.deinitFn(HookOwner, "probe") orelse @compileError("property tests: custom .deinit must be discoverable");
-    check(@TypeOf(hook_fn) == fn (*HookOwner) void, "custom .deinit thunk must take a mutable owner pointer");
+    check(@TypeOf(hook_fn) == fn (*HookOwner, *DeinitProbe) void, "custom .deinit thunk must take the owner and the value pointer");
     check(godot.annotations.property.deinitFn(FieldLifetimeOwner, "probe") == null, ".best_effort exposes no custom deinit hook");
     _ = godot.annotations.property.descriptors(HookOwner);
+
+    // Conditional `Property.deinit` method: a custom field takes the owner, a
+    // `.best_effort` field takes none, and a `.none` field's `deinit` is `void`.
+    var method_owner: HookOwner = .{};
+    method_owner.probe.deinit(&method_owner);
+    check(method_owner.probe.value.hook_called, "custom field .deinit must call the hook");
+    check(method_owner.hook_owner_ok, "custom field .deinit must pass the owner and the field value pointer");
+    method_owner.plain.deinit(&method_owner);
+    check(method_owner.plain_value_ok, "custom field .deinit must pass the plain field's value pointer");
+    var manual_owner: HookOwner = .{};
+    hook_fn(&manual_owner, &manual_owner.probe.value);
+    check(manual_owner.probe.value.hook_called, "resolved .deinit thunk must take the owner and the value pointer");
+    const BestEffortField = @FieldType(FieldLifetimeOwner, "probe");
+    check(@TypeOf(BestEffortField.deinit) == fn (*BestEffortField) void, ".best_effort field .deinit must take no owner");
+    var best_effort_owner: FieldLifetimeOwner = .{};
+    best_effort_owner.probe.deinit();
+    check(best_effort_owner.probe.value.deinit_called, ".best_effort field .deinit must clean the stored value");
+    const NoneField = @FieldType(CheckOwner, "count");
+    check(NoneField.deinit == void, ".none field .deinit must be void");
+    check(@TypeOf(NoneField.deinit) == type, ".none field .deinit must be a type, not a callable method");
 
     // Custom hook overrides the best-effort cleanup.
     var hook_owner: HookOwner = .{};
@@ -536,6 +589,8 @@ fn checkLifetime() void {
     check(hook_owner.probe.value.hook_called, "custom .deinit must run");
     check(!hook_owner.probe.value.deinit_called, "custom .deinit must override the best-effort cleanup");
     check(hook_owner.plain_deinit_called, "custom .deinit must run for any value type");
+    check(hook_owner.hook_owner_ok, "deinitPropertyFields must pass the owner and the field value pointer");
+    check(hook_owner.plain_value_ok, "deinitPropertyFields must pass the field value pointer for plain values");
 
     // Best-effort cleanup: value types with `deinit`, independent of accessors.
     var field_owner: FieldLifetimeOwner = .{};
@@ -579,7 +634,8 @@ fn checkBestEffortPolicy() void {
     check(godot.annotations.property.requiresExplicitOwnership(godot.builtins.String), "String owns a managed value");
     check(godot.annotations.property.requiresExplicitOwnership(godot.builtins.StringName), "StringName owns a managed value");
     check(godot.annotations.property.requiresExplicitOwnership(godot.builtins.Variant), "Variant owns its payload");
-    check(godot.annotations.property.requiresExplicitOwnership(?*godot.classes.core.RefCounted), "RefCounted pointers own a reference");
+    check(godot.annotations.property.requiresExplicitOwnership(?*godot.classes.core.RefCounted), "RefCounted pointers own a reference at the helper level");
+    check(godot.annotations.property.requiresExplicitOwnership(godot.ownership.Ref(godot.classes.core.Resource)), "Ref values own a reference and declare deinit");
     check(godot.annotations.property.requiresExplicitOwnership(DeinitProbe), "structs declaring deinit own cleanup");
     check(!godot.annotations.property.requiresExplicitOwnership(i32), "scalars are trivial");
     check(!godot.annotations.property.requiresExplicitOwnership(godot.builtins.Vector2), "plain value builtins are trivial");
@@ -607,7 +663,7 @@ fn checkBestEffortEnginePaths() void {
     const undefined_owner: *BestEffortOwner = undefined;
     godot.annotations.property.setterFn(BestEffortOwner, "string").?(undefined_owner, @as(godot.builtins.String, undefined));
     godot.annotations.property.setterFn(BestEffortOwner, "variant").?(undefined_owner, @as(godot.builtins.Variant, undefined));
-    godot.annotations.property.setterFn(BestEffortOwner, "ref").?(undefined_owner, @as(?*godot.classes.core.RefCounted, null));
+    godot.annotations.property.setterFn(BestEffortOwner, "ref").?(undefined_owner, @as(godot.ownership.Ref(godot.classes.core.RefCounted), undefined));
     godot.annotations.deinitPropertyFields(BestEffortOwner, undefined_owner);
     const undefined_read_only: *ReadOnlyManagedOwner = undefined;
     godot.annotations.deinitPropertyFields(ReadOnlyManagedOwner, undefined_read_only);
@@ -620,11 +676,371 @@ fn checkOwnershipRuntimePaths() void {
     godot.annotations.deinitPropertyFields(RefLifetimeOwner, &owner);
 }
 
-/// Compile-only `.init` coverage.
+/// Compile-only `.init` and creation-failure cleanup coverage.
 fn checkInitializerEnginePaths() void {
     var owner: BuiltinInitializerOwner = .{};
     var dummy_base: void = {};
     godot.annotations.initPropertyFields(BuiltinInitializerOwner, void, &owner, &dummy_base);
+    godot.annotations.property.deinitPropertyInitializerValues(BuiltinInitializerOwner, &owner);
+}
+
+/// Typed container properties: `.element` / `.key` / `.value` derive the
+/// container hint metadata; hidden properties and explicit hints opt out.
+const ContainerHintOwner = struct {
+    int_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    node_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = ?*godot.classes.core.Node,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    resource_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = ?*godot.classes.core.Resource,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    object_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = ?*godot.classes.core.Object,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    enum_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = HintMode,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    flags_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = HintFlags,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    variant_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = godot.builtins.Variant,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    hidden_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .none,
+        .element = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    explicit_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .hint = .none,
+        .hint_string = "custom",
+        .element = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    plain_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    pair_dict: godot.annotations.Property(godot.builtins.Dictionary, .{
+        .usage = .exported,
+        .key = godot.builtins.String,
+        .value = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    key_dict: godot.annotations.Property(godot.builtins.Dictionary, .{
+        .usage = .exported,
+        .key = godot.builtins.String,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    value_dict: godot.annotations.Property(godot.builtins.Dictionary, .{
+        .usage = .exported,
+        .value = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    untyped_dict: godot.annotations.Property(godot.builtins.Dictionary, .{
+        .usage = .exported,
+        .key = godot.builtins.Variant,
+        .value = godot.builtins.Variant,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    mode_converter_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = ModeConverter,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    flags_converter_array: godot.annotations.Property(godot.builtins.Array, .{
+        .usage = .exported,
+        .element = FlagsConverter,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+};
+
+fn checkContainerHints() void {
+    const descs = godot.annotations.property.descriptors(ContainerHintOwner);
+    check(descs.len == 16, "container-hint checks must cover every Property field");
+
+    check(descs[0].hint == .array_type, "Array(i32) must use the Array hint");
+    check(std.mem.eql(u8, descs[0].hint_string, "2/0:"), "Array(i32) hint string must encode the int element");
+    check(descs[0].class_name == null, "container hints must not set a property class name");
+
+    check(std.mem.eql(u8, descs[1].hint_string, "24/34:Node"), "Array(?*Node) hint string must use the node picker");
+    check(std.mem.eql(u8, descs[2].hint_string, "24/17:Resource"), "Array(?*Resource) hint string must use the resource picker");
+    check(std.mem.eql(u8, descs[3].hint_string, "24/17:Object"), "other object classes must fall back to the resource picker");
+    check(std.mem.eql(u8, descs[4].hint_string, "2/2:Idle:0,Running:3"), "enum elements must keep the resolved enum hint string");
+    check(std.mem.eql(u8, descs[5].hint_string, "2/6:First:1,Second:2"), "bitfield elements must keep the resolved flags hint string");
+
+    check(descs[6].hint == .none, "a Variant element means an untyped array and must not derive a hint");
+    check(std.mem.eql(u8, descs[6].hint_string, ""), "untyped arrays must keep an empty hint string");
+
+    check(descs[7].hint == .none, "hidden properties must not derive a container hint");
+    check(std.mem.eql(u8, descs[7].hint_string, ""), "hidden properties must keep an empty hint string even with '.element'");
+
+    check(descs[8].hint == .none, "an explicit hint must win over the element-derived hint");
+    check(std.mem.eql(u8, descs[8].hint_string, "custom"), "an explicit hint string must win over the element-derived hint");
+
+    check(descs[9].hint == .none, "an Array property without '.element' must not derive a hint");
+    check(std.mem.eql(u8, descs[9].hint_string, ""), "an Array property without '.element' keeps an empty hint string");
+
+    check(descs[10].hint == .dictionary_type, "Dictionary(String, i32) must use the Dictionary hint");
+    check(std.mem.eql(u8, descs[10].hint_string, "4/0:;2/0:"), "Dictionary(String, i32) hint string must join both sides");
+    check(descs[10].class_name == null, "dictionary hints must not set a property class name");
+    check(std.mem.eql(u8, descs[11].hint_string, "4/0:"), "a typed key with an untyped value must encode only the key spec");
+    check(std.mem.eql(u8, descs[12].hint_string, ";2/0:"), "a typed value with an untyped key must keep the empty key spec");
+    check(descs[13].hint == .none, "Dictionary(Variant, Variant) is untyped and must not derive a hint");
+    check(std.mem.eql(u8, descs[13].hint_string, ""), "untyped dictionaries must keep an empty hint string");
+
+    // Converter element hints follow the engine representation, not the struct
+    // declared by the converter.
+    check(std.mem.eql(u8, descs[14].hint_string, "2/2:Idle:0,Running:3"), "enum-engine converter elements must keep the engine enum hint");
+    check(std.mem.eql(u8, descs[15].hint_string, "2/6:First:1,Second:2"), "bitfield-engine converter elements must keep the engine flags hint");
+}
+
+/// Element converter used to pin that a wrapper property hint follows the
+/// element's engine representation.
+const Duration = struct {
+    millis: i32,
+
+    pub const GodotConversion = godot.annotations.Conversion(.{
+        .engine = i32,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: Duration) i32 {
+        return self.millis;
+    }
+
+    fn fromEngine(value: i32) Duration {
+        return .{ .millis = value };
+    }
+};
+
+/// Element converters whose engine representation is an enum or bitfield;
+/// container hints must follow the engine representation, not the struct.
+const ModeConverter = struct {
+    mode: HintMode,
+
+    pub const GodotConversion = godot.annotations.Conversion(.{
+        .engine = HintMode,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: ModeConverter) HintMode {
+        return self.mode;
+    }
+
+    fn fromEngine(mode: HintMode) ModeConverter {
+        return .{ .mode = mode };
+    }
+};
+
+const FlagsConverter = struct {
+    flags: HintFlags,
+
+    pub const GodotConversion = godot.annotations.Conversion(.{
+        .engine = HintFlags,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: FlagsConverter) HintFlags {
+        return self.flags;
+    }
+
+    fn fromEngine(flags: HintFlags) FlagsConverter {
+        return .{ .flags = flags };
+    }
+};
+
+/// A converter to `Array` whose `Element` declaration is not a type; the hint
+/// resolver must ignore the declaration instead of treating it as a container.
+const NotATypeContainer = struct {
+    engine: godot.builtins.Array,
+
+    pub const Element = 3;
+
+    pub const GodotConversion = godot.annotations.Conversion(.{
+        .engine = godot.builtins.Array,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: NotATypeContainer) godot.builtins.Array {
+        return godot.builtins.Array.fromArray(self.engine);
+    }
+
+    fn fromEngine(engine: godot.builtins.Array) NotATypeContainer {
+        return .{ .engine = godot.builtins.Array.fromArray(engine) };
+    }
+
+    fn deinit(self: *NotATypeContainer) void {
+        self.engine.deinit();
+    }
+};
+
+/// Wrapper-typed container properties: the hint derives from the declared
+/// conversion type's `Element`/`Key`/`Value` declarations. An explicit
+/// `.element`/`.key`/`.value` option overrides only its own side.
+const WrapperHintOwner = struct {
+    numbers: godot.annotations.Property(godot.collections.Array(i32), .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    durations: godot.annotations.Property(godot.collections.Array(Duration), .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    scores: godot.annotations.Property(godot.collections.Dictionary(godot.builtins.String, i32), .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    explicit: godot.annotations.Property(godot.collections.Array(i32), .{
+        .usage = .exported,
+        .hint = .none,
+        .hint_string = "custom",
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    not_a_type: godot.annotations.Property(NotATypeContainer, .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    key_override: godot.annotations.Property(godot.collections.Dictionary(godot.builtins.String, ?*godot.classes.core.Node), .{
+        .usage = .exported,
+        .key = godot.builtins.String,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+    element_override: godot.annotations.Property(godot.collections.Array(?*godot.classes.core.Node), .{
+        .usage = .exported,
+        .element = i32,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(undefined),
+};
+
+fn checkWrapperContainerHints() void {
+    const descs = godot.annotations.property.descriptors(WrapperHintOwner);
+    check(descs.len == 7, "wrapper-hint checks must cover every Property field");
+
+    check(descs[0].value_type == godot.collections.Array(i32), "wrapper properties must keep the wrapper as the value type");
+    check(descs[0].hint == .array_type, "a wrapper Array(i32) property must derive the Array hint");
+    check(std.mem.eql(u8, descs[0].hint_string, "2/0:"), "a wrapper Array(i32) hint must encode the declared element");
+    check(descs[0].class_name == null, "wrapper container hints must not set a property class name");
+
+    check(descs[1].hint == .array_type, "a wrapper over a converter element must still derive the Array hint");
+    check(std.mem.eql(u8, descs[1].hint_string, "2/0:"), "a converter element must resolve through its engine type");
+
+    check(descs[2].hint == .dictionary_type, "a wrapper Dictionary(String, i32) property must derive the Dictionary hint");
+    check(std.mem.eql(u8, descs[2].hint_string, "4/0:;2/0:"), "a wrapper dictionary hint must join both declared sides");
+
+    check(descs[3].hint == .none, "an explicit hint must win over the wrapper-derived hint");
+    check(std.mem.eql(u8, descs[3].hint_string, "custom"), "an explicit hint string must win over the wrapper-derived hint");
+
+    check(descs[4].hint == .none, "a non-type Element declaration must not derive a container hint");
+    check(std.mem.eql(u8, descs[4].hint_string, ""), "a non-type Element declaration must keep an empty hint string");
+
+    check(std.mem.eql(u8, descs[5].hint_string, "4/0:;24/34:Node"), "an explicit dictionary key must keep the declared value side");
+    check(std.mem.eql(u8, descs[6].hint_string, "2/0:"), "an explicit array element must win over the declared element");
+}
+
+/// Owned `Ref` property storage: hints come from the conversion engine type and
+/// `.best_effort` releases the stored wrapper. Engine calls are never executed.
+const RefPropertyOwner = struct {
+    resource: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.Resource), .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(.init(null)),
+    texture: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.Texture2D), .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(.init(null)),
+    extension: godot.annotations.Property(godot.ownership.Ref(RefCountedExtension), .{
+        .usage = .exported,
+        .set = .best_effort,
+        .deinit = .best_effort,
+    }) = .init(.init(null)),
+    node: godot.annotations.Property(?*godot.classes.core.Node, .{ .usage = .exported }) = .init(null),
+};
+
+fn checkRefProperty() void {
+    const descs = godot.annotations.property.descriptors(RefPropertyOwner);
+    check(descs.len == 4, "Ref property checks must cover every owner field");
+
+    check(descs[0].value_type == godot.ownership.Ref(godot.classes.core.Resource), "Ref properties keep the owning wrapper as the value type");
+    check(descs[0].hint == .resource_type, "Ref(Resource) must use the resource picker");
+    check(std.mem.eql(u8, descs[0].hint_string, "Resource"), "Ref(Resource) hint string must name the engine class");
+    check(descs[0].class_name != null and std.mem.eql(u8, descs[0].class_name.?, "Resource"), "Ref(Resource) class name must come from the engine class");
+    check(descs[0].type == null, "Ref(Resource) keeps an automatic Variant type");
+    check(godot.internal.conversion.variantType(descs[0].value_type) == .object, "Ref(Resource) stores the object Variant type");
+    const engine_class = godot.reflect.objectClassOf(godot.internal.conversion.engineType(descs[0].value_type).?) orelse
+        @compileError("property tests: Ref(Resource) must convert through an object pointer");
+    check(engine_class == godot.classes.core.Resource, "Ref(Resource) converts through the Resource engine pointer");
+
+    check(descs[1].hint == .resource_type, "Ref(Texture2D) must use the resource picker");
+    check(std.mem.eql(u8, descs[1].hint_string, "Texture2D"), "Ref(Texture2D) hint string must name the engine class");
+    check(descs[1].class_name != null and std.mem.eql(u8, descs[1].class_name.?, "Texture2D"), "Ref(Texture2D) class name");
+
+    check(descs[2].hint == .none and std.mem.eql(u8, descs[2].hint_string, ""), "Ref over a non-Resource class has no picker hint");
+    check(descs[2].class_name != null and std.mem.eql(u8, descs[2].class_name.?, "RefCountedExtension"), "Ref extension class name");
+
+    check(descs[3].hint == .node_type, "non-RefCounted object pointers stay valid property storage");
+
+    const set = godot.annotations.property.setterFn(RefPropertyOwner, "resource") orelse @compileError("property tests: Ref properties must have a best-effort setter");
+    check(@TypeOf(set) == fn (*RefPropertyOwner, godot.ownership.Ref(godot.classes.core.Resource)) void, "best-effort Ref setter shape");
+    check(godot.annotations.property.deinitFn(RefPropertyOwner, "resource") == null, "best-effort Ref cleanup is not a custom hook");
+}
+
+/// Compile-only instantiation of the best-effort ownership helpers for `Ref`
+/// values; the engine calls are analyzed, never executed.
+fn checkRefOwnershipPaths() void {
+    const Ref = godot.ownership.Ref(godot.classes.core.Resource);
+    const undefined_owner: *RefPropertyOwner = undefined;
+    godot.annotations.property.setterFn(RefPropertyOwner, "resource").?(undefined_owner, @as(Ref, undefined));
+    var field: Ref = undefined;
+    godot.annotations.property.setBestEffort(Ref, &field, undefined);
+    godot.annotations.property.deinitBestEffort(Ref, &field);
+    godot.annotations.deinitPropertyFields(RefPropertyOwner, undefined_owner);
 }
 
 fn comptimeChecks() void {
@@ -640,9 +1056,12 @@ fn comptimeChecks() void {
     checkMarkerIdentity();
     checkLifetime();
     checkBestEffortPolicy();
+    checkRefProperty();
     checkGroups();
     checkNoMarkerLayout();
     checkEnumHints();
+    checkContainerHints();
+    checkWrapperContainerHints();
 }
 
 const GroupedOwner = struct {
@@ -767,28 +1186,28 @@ const HintOwner = struct {
     unregistered: godot.annotations.Property(UnregisteredMode, .{ .usage = .exported }) = .init(.idle),
     cross_class: godot.annotations.Property(OtherMode, .{ .usage = .exported }) = .init(.alpha),
     node: godot.annotations.Property(?*godot.classes.core.Node, .{ .usage = .exported }) = .init(null),
-    resource: godot.annotations.Property(?*godot.classes.core.Resource, .{
+    resource: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.Resource), .{
         .usage = .exported,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
+    }) = .init(.init(null)),
     plain_object: godot.annotations.Property(?*godot.classes.core.Object, .{ .usage = .exported }) = .init(null),
-    ref_counted: godot.annotations.Property(?*godot.classes.core.RefCounted, .{
+    ref_counted: godot.annotations.Property(godot.ownership.Ref(godot.classes.core.RefCounted), .{
         .usage = .exported,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
+    }) = .init(.init(null)),
     node_ext: godot.annotations.Property(?*NodeExtension, .{ .usage = .exported }) = .init(null),
-    resource_ext: godot.annotations.Property(?*ResourceExtension, .{
+    resource_ext: godot.annotations.Property(godot.ownership.Ref(ResourceExtension), .{
         .usage = .exported,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
-    ref_ext: godot.annotations.Property(?*RefCountedExtension, .{
+    }) = .init(.init(null)),
+    ref_ext: godot.annotations.Property(godot.ownership.Ref(RefCountedExtension), .{
         .usage = .exported,
         .set = .best_effort,
         .deinit = .best_effort,
-    }) = .init(null),
+    }) = .init(.init(null)),
 };
 
 fn checkEnumHints() void {
@@ -826,26 +1245,28 @@ fn checkEnumHints() void {
     check(std.mem.eql(u8, descs[6].hint_string, "Node"), "Node hint string");
     check(descs[6].class_name != null and std.mem.eql(u8, descs[6].class_name.?, "Node"), "Node class name");
 
-    check(descs[7].hint == .resource_type, "Resource pointers must get the resource picker hint");
-    check(std.mem.eql(u8, descs[7].hint_string, "Resource"), "Resource hint string");
-    check(descs[7].class_name != null and std.mem.eql(u8, descs[7].class_name.?, "Resource"), "Resource class name");
+    check(descs[7].hint == .resource_type, "Ref(Resource) must derive the resource picker hint");
+    check(std.mem.eql(u8, descs[7].hint_string, "Resource"), "Ref(Resource) hint string");
+    check(descs[7].class_name != null and std.mem.eql(u8, descs[7].class_name.?, "Resource"), "Ref(Resource) class name");
+    check(descs[7].type == null, "Ref(Resource) keeps an automatic Variant type");
+    check(godot.internal.conversion.variantType(descs[7].value_type) == .object, "Ref(Resource) stores the object Variant type");
 
     check(descs[8].hint == .none, "plain object pointers must not get a picker hint");
     check(std.mem.eql(u8, descs[8].hint_string, ""), "plain object pointers keep an empty hint string");
     check(descs[8].class_name != null and std.mem.eql(u8, descs[8].class_name.?, "Object"), "plain object class name");
 
-    check(descs[9].hint == .none, "non-Resource RefCounted pointers must not get a picker hint");
-    check(descs[9].class_name != null and std.mem.eql(u8, descs[9].class_name.?, "RefCounted"), "RefCounted class name");
+    check(descs[9].hint == .none, "Ref(RefCounted) must not get a picker hint");
+    check(descs[9].class_name != null and std.mem.eql(u8, descs[9].class_name.?, "RefCounted"), "Ref(RefCounted) class name");
 
     check(descs[10].hint == .node_type, "extension Node pointers must get the node picker hint");
     check(std.mem.eql(u8, descs[10].hint_string, "CustomNode"), "extension Node hint string uses GodotClassName");
     check(descs[10].class_name != null and std.mem.eql(u8, descs[10].class_name.?, "CustomNode"), "extension Node class name");
 
-    check(descs[11].hint == .resource_type, "extension Resource pointers must get the resource picker hint");
+    check(descs[11].hint == .resource_type, "Ref over an extension Resource must get the resource picker hint");
     check(std.mem.eql(u8, descs[11].hint_string, "CustomResource"), "extension Resource hint string uses GodotClassName");
     check(descs[11].class_name != null and std.mem.eql(u8, descs[11].class_name.?, "CustomResource"), "extension Resource class name");
 
-    check(descs[12].hint == .none, "non-Resource RefCounted extension pointers must not get a picker hint");
+    check(descs[12].hint == .none, "Ref over a non-Resource extension must not get a picker hint");
     check(descs[12].class_name != null and std.mem.eql(u8, descs[12].class_name.?, "RefCountedExtension"), "extension RefCounted class name");
 }
 
@@ -853,23 +1274,80 @@ comptime {
     comptimeChecks();
     _ = &checkBestEffortEnginePaths;
     _ = &checkOwnershipRuntimePaths;
+    _ = &checkRefOwnershipPaths;
     _ = &checkInitializerEnginePaths;
 }
 
-test "best-effort setter stores without cleanup and cleanup deinitializes" {
+test "best-effort setter releases the replaced struct value" {
     var owner: BestEffortProbeOwner = .{};
     const set = godot.annotations.property.setterFn(BestEffortProbeOwner, "probe").?;
+
+    // The replaced value's `deinit` runs before the replacement is stored, so
+    // the field reports the fresh value afterwards.
+    var replaced: u32 = 0;
+    owner.probe.value = .{ .replaced_count = &replaced };
     set(&owner, .{});
+    try std.testing.expectEqual(@as(u32, 1), replaced);
     try std.testing.expect(!owner.probe.value.deinit_called);
 
     godot.annotations.deinitPropertyFields(BestEffortProbeOwner, &owner);
     try std.testing.expect(owner.probe.value.deinit_called);
 
-    var direct: DeinitProbe = .{};
+    // The direct helper follows the same replacement contract.
+    var direct_replaced: u32 = 0;
+    var direct: DeinitProbe = .{ .replaced_count = &direct_replaced };
     godot.annotations.property.setBestEffort(DeinitProbe, &direct, .{});
+    try std.testing.expectEqual(@as(u32, 1), direct_replaced);
     try std.testing.expect(!direct.deinit_called);
     godot.annotations.property.deinitBestEffort(DeinitProbe, &direct);
     try std.testing.expect(direct.deinit_called);
+}
+
+test "creation-failure cleanup releases only initialized best-effort values" {
+    var owner: InitializedCleanupOwner = .{};
+    var initialized_count: u32 = 0;
+    var defaulted_count: u32 = 0;
+    owner.initialized.value = .{ .replaced_count = &initialized_count };
+    owner.defaulted.value = .{ .replaced_count = &defaulted_count };
+
+    godot.annotations.property.deinitPropertyInitializerValues(InitializedCleanupOwner, &owner);
+
+    try std.testing.expectEqual(@as(u32, 1), initialized_count);
+    try std.testing.expect(owner.initialized.value.deinit_called);
+    try std.testing.expectEqual(@as(u32, 0), defaulted_count);
+    try std.testing.expect(!owner.defaulted.value.deinit_called);
+    try std.testing.expectEqual(@as(u32, 0), owner.hook_calls);
+    try std.testing.expect(!owner.hooked.value.deinit_called);
+}
+
+test "conditional Property.deinit method shapes" {
+    // A custom hook receives the owner and a pointer to the stored value.
+    var custom_owner: HookOwner = .{};
+    custom_owner.probe.deinit(&custom_owner);
+    try std.testing.expect(custom_owner.probe.value.hook_called);
+    try std.testing.expect(custom_owner.hook_owner_ok);
+    custom_owner.plain.deinit(&custom_owner);
+    try std.testing.expect(custom_owner.plain_deinit_called);
+    try std.testing.expect(custom_owner.plain_value_ok);
+
+    // `.best_effort` cleans the stored value and takes no owner.
+    var best_effort_owner: FieldLifetimeOwner = .{};
+    best_effort_owner.probe.deinit();
+    try std.testing.expect(best_effort_owner.probe.value.deinit_called);
+    try std.testing.expect(!best_effort_owner.accessor.value.deinit_called);
+
+    // `.none` exposes a `void` declaration, not a callable method.
+    const NoneField = @FieldType(CheckOwner, "count");
+    try std.testing.expect(NoneField.deinit == void);
+    try std.testing.expect(@TypeOf(NoneField.deinit) == type);
+
+    // The bulk cleanup helper dispatches the same two-argument hook.
+    var hook_owner: HookOwner = .{};
+    godot.annotations.deinitPropertyFields(HookOwner, &hook_owner);
+    try std.testing.expect(hook_owner.probe.value.hook_called);
+    try std.testing.expect(hook_owner.hook_owner_ok);
+    try std.testing.expect(!hook_owner.probe.value.deinit_called);
+    try std.testing.expect(hook_owner.plain_value_ok);
 }
 
 const std = @import("std");

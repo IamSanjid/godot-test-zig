@@ -1,60 +1,55 @@
 # Declared-type conversion
 
-`godot.conversion` is the one layer that answers, for a declared Zig type,
-whether Godot can carry it, which engine type represents it, and how to convert
-between the two. Properties, signals, virtuals, and signal registration use it;
-methods and containers will. The hand-written [`Variant`](variants.md) owns the
-payload format and the underlying declared-type operations; this page owns the
-support, metadata, and ownership policy layered on top.
+Every engine-facing surface declares the Zig type it carries: a
+[`Property(T, ...)`](properties.md) field, a [`Signal`](signals.md) argument, and
+later a method parameter or virtual signature. That **declared type** crosses the
+engine boundary on one of two paths:
 
-A declared type is the Zig type written in a `Property`, `Signal` argument, or
-virtual signature. Consumers do not reimplement its rules: they ask this module
-and call its primitives.
+| Path | Used by | Carries |
+|---|---|---|
+| Variant | property set/get, signal registration and emit | an engine `Variant` |
+| ptrcall | virtual callbacks; methods when they land | one raw ABI slot |
 
-## Paths and support
-
-```zig
-pub const Path = enum { variant, ptr };
-
-pub const Support = struct {
-    variant: bool, // a Variant representation exists
-    ptr: bool,     // a ptrcall representation exists
-};
-```
-
-The two flags are independent in principle and are reported by `support(T)`:
-
-- `.variant` means the value can cross the engine boundary as a `Variant`. It
-  requires a concrete Variant type, except for `Variant` itself, which stores
-  transparently and reports no type.
-- `.ptr` means the value can cross as one ptrcall slot. Scalars use their
-  canonical slot widths (`i64`/`u64`, `f64`, `u8`), builtins use their layout,
-  and `RefCounted`/extension object pointers use the special slot rules
-  described in [ownership.md](ownership.md#virtual-arguments).
+Conversion is a compile-time model, not a user API. One internal layer decides
+which paths a declared type supports, which engine type represents it, and how a
+value moves; each surface uses that answer and never reimplements it. User code
+does not call conversion functions: it declares types, and a custom type joins
+the model with a [`Conversion` marker](annotations.md#conversionspec). A type
+that is neither directly supported nor marked is a compile error where a surface
+declares it.
 
 ## Direct support
 
-A type has direct support when no marker is needed:
+A directly supported type needs no marker:
 
-| Declared Zig type | `.variant` | `.ptr` | Engine type |
+| Declared Zig type | Variant | ptrcall | Engine representation |
 |---|---|---|---|
 | scalars, `bool`, enums, packed bitfields up to 64 bits | yes | yes | the type itself |
 | codegen builtin types (`String`, `Vector2`, `Array`, ...) | yes | yes | the type itself |
 | engine and extension class pointers, including optional and `const` forms | yes (`.object`) | yes | the pointer type |
-| `Variant` | yes (transparent) | yes | `Variant` |
+| `Variant` | yes (transparent storage) | yes | `Variant` |
 | raw single-item pointer (`*T`, `?*T`), including `?*anyopaque` | no | yes | the pointer type |
 | `void`, integers wider than 64 bits, class values, many-pointers, slices, plain structs | no | no | none |
 
-Raw single-item pointers are deliberately split: they have a ptrcall
-representation for buffers, out parameters, and opaque ABI slots, but no Variant
-representation and no engine class name. They cannot be used where a Variant is
-required.
+- The Variant column means the value can cross as a `Variant`: scalars and
+  object pointers get a concrete Variant type, `Variant` stores transparently,
+  and raw pointers have no Variant representation.
+- The ptrcall column means the value fits one ABI slot: scalars use canonical
+  slot widths (`i64`/`u64`, `f64`, `u8`), builtins their declared layout, and
+  object pointers the reference rules in [ownership.md](ownership.md).
+- A raw single-item pointer is for buffers, out parameters, and opaque ABI
+  slots. It is not an object pointer: no Variant representation, no class name,
+  and no engine type beyond the pointer.
+
+The [typed container wrappers](collections.md) are declared types too: their
+engine representation is the directly supported `Array`/`Dictionary` builtin, and
+they convert elements through the same model.
 
 ## The `Conversion` marker
 
-A custom value type joins the layer by attaching a `Conversion` marker
-declaration to the type itself. The declaration name is free; discovery scans
-the type's declarations for the marker identity:
+A custom value type joins the model with a marker declaration on the type
+itself. The declaration name is free; discovery scans the type's declarations
+for the marker identity:
 
 ```zig
 const Duration = struct {
@@ -76,339 +71,189 @@ const Duration = struct {
 };
 ```
 
-Any declaration name works (`GodotConversion` is a common choice, not a
-requirement). A type may declare at most one marker; lookalike declarations that
-do not carry the conversion marker identity are ignored.
+The spec has three snake_case keys:
 
-The spec has exactly three snake_case keys:
-
-| Spec key | Meaning |
+| Key | Meaning |
 |---|---|
 | `.engine` | The directly supported engine representation type |
 | `.to_engine` | `fn (T) Engine`: converts the declared value for the engine |
 | `.from_engine` | `fn (Engine) T`: converts an engine value back |
 
-`godot.annotations.Conversion(...)` validates the spec shape and returns the
-marker type. The marker exports `.Engine` (type), `.toEngine`, `.fromEngine`,
-and `.marker = Kind.conversion`. `conversion.zig` consumes those exports; user
-code names the marker once and otherwise uses `godot.conversion` queries.
+A type may declare at most one marker; lookalikes without the marker identity are
+ignored. The marker declares no metadata callback of its own: the Variant type
+and engine class name of a converted value are derived from `.engine`, so
+registration and conversion always agree.
 
-Ownership of the converter functions:
+Rules:
 
-- `to_engine` receives the declared value by value and returns an independent
-  owned engine value when the engine type owns storage.
-- `from_engine` receives a borrowed engine value. It must copy if it stores it.
-- Object pointer engine types are borrowed pointers in both directions.
-
-## Validation
-
-Every query or primitive validates the marker before using it:
-
-- `.engine` must be a type, and it must be a **directly supported** type with at
-  least one path. A converter engine cannot itself be a converter: there are no
-  conversion chains. A converter whose engine type is ptr-only therefore supports
-  only ptrcall consumers (virtuals); Variant consumers reject it.
-- `.engine = Variant` is rejected. `Variant` has transparent storage and no
+- `.engine` must be a directly supported type with at least one path. A
+  converter engine cannot itself be a converter: conversion never chains. A
+  ptrcall-only engine therefore limits the marked type to ptrcall consumers.
+- `.engine = Variant` is rejected: `Variant` stores transparently and has no
   concrete representation to convert to or from.
 - `to_engine` and `from_engine` must be non-generic, non-varargs functions with
-  exactly one parameter and the exact parameter/return types above. A normal
-  function value with that signature is accepted; a generic wrapper is not.
-- Marking a type that already has direct support is ignored: direct support
-  wins and the type's declarations are not scanned. The marker is for types the
-  layer does not already know, not an override.
-- The marker is found by scanning the type's own declarations, never a class,
-  field, or registry. It can only be attached to a type that can carry
-  declarations (struct, enum, union, opaque).
+  exactly one parameter and the exact parameter/return types above.
+- A marker on a type that already has direct support is ignored: direct support
+  wins and the type's declarations are not scanned.
+- The marker is found on the type itself, never on a class field or through a
+  registry. Conversion is a property of the type, not of a surface: properties,
+  signals, and future methods share one marker with no per-surface override.
 
-Errors that depend on the owner type name the marker declaration and field; a
-consumer asking for an unsupported path gets a contextual error naming the
-consumer and the type, for example `Property 'Hero.health'` or
-`Signal 'health_changed' argument 'health'`.
+Converter functions follow the ownership direction below. `to_engine` receives
+the declared value by value and returns an independent engine value when the
+engine type owns storage; `from_engine` receives a borrowed engine value and
+must copy or retain whatever it keeps. A `from_engine` that keeps an owning
+builtin must retain it rather than hand a borrowed handle on, because the call
+that delivered it releases its intermediate; [collections.md](collections.md) is
+the worked example.
 
-## Queries
+`godot.ownership.Ref` is the only ownership handle with a marker: a decoded
+`Ref` owns one reference its consumer must release. `godot.ownership.Owned`
+deliberately has no marker; it is exclusive manual ownership, not a value that
+crosses the boundary. Typed construction is likewise outside conversion; see
+[ownership.md](ownership.md#construction).
 
-```zig
-godot.conversion.support(T)        // Support{ .variant, .ptr }
-godot.conversion.engineType(T)     // ?type: T, the marker's Engine, or null
-godot.conversion.variantType(T)    // ?interface.VariantType
-godot.conversion.engineClassName(T)// [:0]const u8, "" when not an object
-```
+## Ownership direction
 
-- `support(T)` follows one marker, if present, and otherwise reports direct
-  support. It never chains.
-- `engineType(T)` returns `T` for a directly supported type, the marker's
-  `.Engine` for a converter, and `null` when neither applies. `void` and
-  non-convertible types have no engine type.
-- `variantType(T)` is the Variant type of the engine representation. It is null
-  for `Variant` itself and for every ptr-only type. A converter inherits its
-  engine type's Variant type.
-- `engineClassName(T)` is the engine class name of the engine representation, or
-  an empty string when that representation is not an object pointer. It follows
-  a converter's engine type, so a `Duration` reports `""` and a `NodeRef` over
-  `?*Node` reports `"Node"`. Use this query directly; do not reconstruct it from
-  `engineType` and a separate class-name lookup.
+Conversion moves exactly one value; it never owns a surface's policy. The two
+directions have fixed defaults:
 
-All four are comptime queries with per-type caches (`SupportCache`,
-`EngineTypeCache`, `VariantTypeCache`, `MarkerInfoCache`). The marker is located
-and validated once per type; consumers pay no runtime cost.
+- **Engine to Zig (decode)**: the engine value is borrowed for the call. Object
+  pointers stay borrowed. Owning builtins and `Variant` are copied into values
+  the consumer owns. A converter's `from_engine` must retain what it keeps, so a
+  decoded `Ref` or container wrapper owns one reference.
+- **Zig to engine (encode)**: the input value is never consumed by the Variant
+  path, which copies or retains into an owning Variant. The ptrcall path writes
+  what the slot expects: an object pointer is handed over and the slot takes its
+  own reference, while a returned builtin value is moved into engine-owned
+  storage. In both directions the caller keeps the references it still owns.
 
-### Compile-time gates
+Consumers apply the direction: properties store the decoded value under their
+declared `.set`/`.deinit` modes, signal emit keeps the caller's Zig values owned,
+and virtual callbacks return raw borrowed pointers. Ownership of the decodes is
+stated once in [ownership.md](ownership.md); this page states only how values
+cross.
 
-```zig
-godot.conversion.checkSupported(T, .variant, "Property 'Hero.health'");
-godot.conversion.checkBoth(T, "virtual '_get_width'");
-```
+### Variant path
 
-`checkSupported` is the declaration-time gate: it reports the missing path with
-the caller's context. `checkBoth` does the same for both paths. The four
-primitives also check their own path, so a caller that skipped the gate still
-fails at compile time rather than mis-encoding.
+- A borrowed Variant view (`Variant.borrow`) may replace the owning encode for a
+  synchronous call that only reads, such as signal emit. A view copies an inline
+  value, or a managed builtin's handle bytes without retaining its refcounted
+  buffer, into the Variant payload; that is a call-scoped alias, not a
+  refcount-free copy and not a way to pass ownership. The classification is
+  compile-time: canonical scalars, inline plain and managed builtins, `Variant`,
+  and object pointers borrow, including `RefCounted` object pointers (direct,
+  `Ref(T)`, or a converter whose engine representation is an object pointer).
+  Heap-backed builtins (`Transform2D`, `AABB`, `Basis`, `Transform3D`,
+  `Projection`), packed arrays, and converters whose engine representation is a
+  managed builtin stay on the owning encode. A borrowed `RefCounted` view pins
+  no reference, so the caller must keep its own reference alive for the
+  synchronous call; a deferred connection copies and retains its arguments.
+- A borrowed view aliases the Zig value for the duration of the call: it is never
+  deinitialized or stored. The engine copies deferred signal arguments into its
+  own queue, so call-scoped is enough.
+- An **owning** Variant payload owns its object references. A pointer read out of
+  an owning Variant is borrowed while that Variant is alive; keep the Variant or
+  take a `Ref` to keep the object. A borrowed object Variant (`Variant.borrow`)
+  owns no reference and must never be deinitialized. See [variants.md](variants.md).
 
-## The four primitives
+### ptrcall path
 
-| Primitive | Path | Direction | Result ownership |
-|---|---|---|---|
-| `decodeVariant(T, *const Variant) ?T` | variant | engine to Zig | declared value: borrowed for object pointers, owned for owning builtins and `Variant` per `Variant.asDeclared` |
-| `encodeVariant(T, value, *Variant)` | variant | Zig to engine | writes one owning Variant; the input value stays with the caller |
-| `decodePtr(T, ?*const anyopaque) T` | ptr | engine to Zig | borrowed for object pointers, value for scalars/builtins |
-| `encodePtr(T, value, ?*anyopaque)` | ptr | Zig to engine | transfers the value into the engine slot |
+- Argument slots point at engine-owned storage valid for the call. Decoded
+  argument values are therefore borrowed: object pointers are borrowed, and a
+  builtin argument must be copied if it must outlive the call. Never deinitialize
+  an argument value.
+- Return slots are engine-owned storage the callback writes into, and the engine
+  owns the result afterwards. A returned `RefCounted` object is handed to the
+  slot, which takes its own reference; the callback keeps whatever reference it
+  already owned, so a stored handle is returned with `.get()` and a constructed
+  object is moved out of its typed handle before encoding. There is no
+  post-encode cleanup.
+- Declared object pointers resolve between engine base and extension instance on
+  the ptrcall path: an extension instance is represented by its engine base, and
+  a received base resolves the registered instance for that exact extension
+  class. A pointer to an engine object without the extension binding is null
+  (optional) or a runtime error (non-optional).
 
-All four take the declared type `T`, not the engine type. A converter's
-`toEngine`/`fromEngine` is applied inside, so consumers never branch on whether
-a marker exists.
+## Variant and ptrcall consequences
 
-### `decodeVariant`
+The two paths are independent, and a surface requires the ones it uses:
 
-- Direct type: `value.asDeclared(T)`, or null on a tag/range/class mismatch.
-- Converter: `value.asDeclared(Engine)` first; null when the Variant does not
-  hold the engine representation. `fromEngine` then converts. If `Engine` owns
-  storage (a managed builtin, a user struct with `deinit`), that intermediate is
-  deinitialized after `fromEngine` returns; `fromEngine` must have copied what it
-  keeps.
-- Object pointers are borrowed. An engine object is class-checked by
-  `asDeclared`; an extension pointer resolves only its exact registered
-  instance.
+| Surface | Requires |
+|---|---|
+| `Property` | Variant for every field, including hidden ones |
+| `Signal` | Variant at declaration; registration derives metadata, emit converts |
+| Virtuals | ptrcall for every parameter and non-void return |
+| Methods (planned) | both: `call` decodes Variant arguments, ptrcall uses slots |
 
-### `encodeVariant`
+- A signature that cannot support a required path is a compile error at the
+  declaration, naming the surface and field/argument. The error is the whole
+  gate: a value is never silently converted on a path its type does not support.
+- The Variant path has an owning intermediate: registration derives metadata
+  only, and a value conversion allocates or retains inside the Variant. The
+  ptrcall path has no Variant: it writes one slot, and the engine owns the
+  storage on both sides of the call.
+- Non-object builtins travel by value or layout, so their ptrcall cost is a copy.
+  Object slots are the exception: they are reference storage on the return side
+  and borrowed reference storage on the argument side (see
+  [ownership.md](ownership.md#engine-boundary)). These are ptrcall rules; the
+  canonical scalar/builtin slot layout is a separate, dependency-free ABI
+  helper.
+- A declared type may support one path only. A raw pointer is ptrcall-only; a
+  type whose engine representation is ptrcall-only cannot be a property or
+  signal argument. Direct support wins over a marker, so a marker cannot reduce
+  a directly supported type's paths.
+- `Variant` itself is special: transparent storage, no concrete Variant type.
+  A property that stores `Variant` needs an explicit `.type`; a signal argument
+  registers as untyped `.nil`.
 
-- Direct type: `Variant.initDeclared(T, value)`. For directly supported `T` this
-  accepts the forms `initDeclared` already accepts: the exact value, a coercible
-  numeric/enum literal, a null optional, or an engine pointer/extension instance
-  that extends the declared object class.
-- Converter: `toEngine(value)` first, then `Variant.initDeclared(Engine, ...)`;
-  the engine intermediate is deinitialized after the Variant copies or retains
-  it. The converter value must be an exact `T`, not a literal or a related
-  pointer; only the engine intermediate gets the declared-form conveniences.
-- The input value is never consumed. The written Variant is owning and must be
-  deinitialized by the caller.
+## Containers and elements
 
-### `decodePtr`
+The [`godot.collections`](collections.md) wrappers are declared conversion types
+whose engine representation is the container builtin, so they support both
+paths:
 
-- Direct scalar/builtin: reads the canonical slot through `abi.readArgument`.
-- Direct object pointer: `RefCounted` uses `ref_get_object` and returns the
-  borrowed object; an extension pointer reads the engine base and resolves its
-  Zig instance with `asInstance`.
-- Converter: decodes the engine type, then calls `fromEngine`. RefCounted and
-  extension rules are the engine type's rules, not the declared type's.
-
-### `encodePtr`
-
-- Direct scalar/builtin: writes the canonical slot through `abi.writeReturn`.
-- Direct `RefCounted` pointer: `ref_set_object`, which adds an owning reference
-  to the engine-owned `Ref<T>` slot. The caller still owns its own reference.
-- Direct extension pointer: writes the engine base via `engineBasePointer`.
-- Converter: `toEngine(value)` then the engine type's slot rule. For a
-  `RefCounted` engine pointer the engine storage takes the reference; the
-  converter must not release it as part of encoding.
-
-No primitive calls a Variant constructor on the ptr path or a ptrcall write on
-the Variant path. Choose the primitive by what the consumer owns, not by the
-declared type.
-
-## Ownership
-
-The declared value and the engine representation have separate lifetimes. The
-rule for each direction:
-
-- `to_engine` returns an independent engine value. The Variant path creates the
-  output Variant from it and then deinitializes the intermediate, so a converter
-  to an owning builtin (`String`, `Array`, ...) must return an owned value that
-  the conversion layer may release. The ptr path transfers the returned value to
-  the engine slot; a `RefCounted` pointer written through `ref_set_object` gets
-  a new reference in engine storage, so the converter must not release that
-  reference itself.
-- `from_engine` receives a borrowed engine value. The Variant path obtains it
-  with `asDeclared`, which returns owned values for owning builtins and borrowed
-  pointers for objects; the layer deinitializes the builtin intermediate after
-  `from_engine` returns, so `from_engine` must copy anything it keeps. The ptr
-  path passes the borrowed scalar/builtin/pointer straight through.
-- `encodeVariant` never consumes the caller's declared value; it copies or takes
-  an owning reference for the Variant. `encodePtr` transfers the declared value
-  into the engine slot.
-- `decodeVariant` returns a declared value that the caller owns according to the
-  declared type; `decodePtr` returns borrowed object pointers.
-- Object pointers are borrowed in both directions. `RefCounted` Variant payloads
-  hold one owning reference owned by the Variant; `Ref<T>` ptrcall storage is
-  engine-owned. Never assign a raw pointer into `Ref<T>` storage.
-- Do not return a cached process-lifetime literal (for example a
-  `fromComptimeLatin1` string) from `to_engine`/`from_engine` when the engine
-  type owns storage; the layer may deinitialize that intermediate.
-
-Consumer obligations follow from the path table: properties must apply their
-declared `.set`/`.deinit` ownership modes to the decoded value; signals must
-deinitialize the Variant temporaries they create; virtual callbacks must leave
-arguments borrowed and return transferred values. The conversion layer owns the
-encoding/decoding ownership transfer, not the consumer's field or callback
-lifetime policy.
-
-## Pointer and extension classes
-
-An object pointer type (`*C`, `*const C`, `?*C`, `?*const C`) is both a Variant
-`object` and a ptrcall pointer. The converted value is always the engine object:
-
-- Variant path: `initDeclared`/`asDeclared` reduce an extension instance to its
-  engine base and resolve it back only for the exact registered extension class
-  (subclasses pass for engine classes).
-- Ptr path: `decodePtr` turns the engine base into the extension instance via
-  `asInstance`; `encodePtr` turns the instance into the engine base via
-  `engineBasePointer`.
-- `RefCounted` slots use `ref_get_object`/`ref_set_object` in both paths. Never
-  assign a raw pointer into `Ref<T>` storage; see
-  [ownership.md](ownership.md#refcounted).
-
-A raw pointer (`*i32`, `?*anyopaque`, a buffer type) is not an object pointer. It
-has no Variant representation, no class name, and no engine type beyond the
-pointer itself; it is only valid where a ptrcall slot is expected. Its pointee
-layout is read or written directly by `abi`.
-
-## Consumers
-
-| Consumer | Paths it requires | How it uses the layer |
-|---|---|---|
-| [`Property`](properties.md) | `.variant` for every field, including hidden ones | `decodeVariant` on set, `encodeVariant` on get; `PropertyInfo.type` from `.type` or `variantType`; class name from the descriptor or `engineClassName`; hints stay declared-type metadata |
-| [`Signal`](signals.md) | `.variant` at declaration | registration takes `variantType` and `engineClassName` for the argument metadata; `emit` calls `encodeVariant` into owning temporaries |
-| [Virtuals](virtuals.md) | `.ptr` for every parameter and non-void return | `decodePtr` on arguments, `encodePtr` on the return; RefCounted storage is the engine type's slot rule |
-| methods (planned) | both | `call_func` will use `decodeVariant`/`encodeVariant`; `ptrcall_func` will use `decodePtr`/`encodePtr`; a signature that cannot support both is a compile error |
-| containers (planned) | both | element conversion composes the primitives; no separate container conversion rules |
-
-`Property` ownership classification is separate from conversion support: a
-converter is classified by its declared Zig type, not by its engine type. A
-custom struct with a `String` engine is still a trivial value type unless it
-declares `deinit`; use a function `.set`/`.deinit` when its engine storage needs
-explicit release. See [properties.md](properties.md#ownership-modes).
-
-Property hints are also independent of the engine representation: they come from
-the declared Zig type in `annotations/property_hint.zig`. A converter to
-`?*Node` reports the `Node` class name through `engineClassName`, but it is a
-plain struct to the hint resolver, so it gets no Node picker hint. Declare the
-real object pointer type when the inspector picker is wanted.
-
-### Signals
-
-Signal argument types are declared Zig types, so the layer validates `.variant`
-support when the `Signal` marker is declared, not when a signal is emitted. The
-`Variant` argument is the one exception: it registers as untyped `.nil` and
-emits its transparent storage. Registration derives each argument's Variant type
-and engine class name from the same queries. `emit` converts through
-`encodeVariant`; a custom converter argument must be an exact `T` value.
-
-### Properties
-
-The dynamic property backend validates every descriptor, including zero-usage
-ones, with `checkSupported(T, .variant, ...)`. `.type` overrides only the
-`PropertyInfo` type; it never bypasses conversion and never changes how the value
-is encoded or decoded. `Variant` is convertible but has no Variant type, so
-`Property(Variant)` needs an explicit `.type`; a type without `.variant` support
-fails the check regardless of `.type`.
-
-### Virtuals
-
-Virtual registration validates `.ptr` support for every non-self parameter and
-for a non-void return, then the callback uses `decodePtr`/`encodePtr`. Virtuals
-have no Variant path and do not consult `.variant` support. A converter whose
-engine type is a `RefCounted` pointer follows the same `Ref<T>` rule as a direct
-`RefCounted` pointer.
-
-## Examples
-
-```zig
-const Duration = struct {
-    millis: i32,
-
-    pub const GodotConversion = godot.annotations.Conversion(.{
-        .engine = i32,
-        .to_engine = toEngine,
-        .from_engine = fromEngine,
-    });
-
-    fn toEngine(self: Duration) i32 {
-        return self.millis;
-    }
-
-    fn fromEngine(millis: i32) Duration {
-        return .{ .millis = millis };
-    }
-};
-```
-
-`support(Duration)` is `.{ .variant = true, .ptr = true }`, `engineType` is
-`i32`, `variantType` is `.int`, and `engineClassName` is empty. It works as a
-property value and as a signal argument with no further declarations:
-
-```zig
-duration: godot.annotations.Property(Duration, .{ .usage = .exported }) = .init(.{ .millis = 0 }),
-
-pub const DurationChanged = godot.annotations.Signal("duration_changed", .{
-    .{ "duration", Duration },
-});
-```
-
-```zig
-const NodeRef = struct {
-    node: ?*godot.classes.core.Node,
-
-    pub const GodotConversion = godot.annotations.Conversion(.{
-        .engine = ?*godot.classes.core.Node,
-        .to_engine = toEngine,
-        .from_engine = fromEngine,
-    });
-
-    fn toEngine(self: NodeRef) ?*godot.classes.core.Node {
-        return self.node;
-    }
-
-    fn fromEngine(node: ?*godot.classes.core.Node) NodeRef {
-        return .{ .node = node };
-    }
-};
-```
-
-`support(NodeRef)` is both paths, `engineType` is `?*Node`, and
-`variantType` is `.object`. Signals and properties deriving their metadata from
-conversion report `engineClassName(NodeRef) == "Node"`. Emit and property get
-copy the pointer into the Variant (engine ownership rules apply); `fromEngine`
-receives a borrowed pointer on decode.
+- On the Variant path a wrapper is the ordinary `.array`/`.dictionary` Variant;
+  the engine container's own typing metadata travels with its handle, untouched.
+- Element conversion is composed lazily by the wrapper, not by the conversion
+  layer: `get` and the append/put/set operations convert one element at a time.
+  A wrapper's `Element`/`Key`/`Value` declarations are property-hint metadata,
+  not conversion support declarations; they do not type an assigned container.
+- A wrapper decoded from the engine owns one engine reference, like `Ref`; a
+  wrapper moved into a `Property` field transfers its handle. A method surface
+  that receives a decoded wrapper argument must release it once; virtual
+  signatures use engine-defined types, so no virtual release path is needed and
+  the case does not arise yet.
+- `Property` container hints are separate metadata derived from the wrapper
+  declarations or explicit `.element`/`.key`/`.value` options; see
+  [properties.md](properties.md#typed-container-hints).
 
 ## Not in this version
 
-- No conversion chains: an engine type must have direct support.
-- No per-class or per-consumer conversion overrides; one marker per type.
+- No conversion chains and no per-class or per-surface overrides.
 - No conversion for `void`, integers wider than 64 bits, many-pointers, slices,
   or plain structs without a marker.
-- No callables integration yet: `callable.zig` still uses
-  `Variant.initDeclared`/`asDeclared` directly, so a custom converter is not
-  accepted there. See [callables.md](callables.md).
-- No methods or container conversion; both are planned consumers.
+- No callables integration: a custom converter argument has no closure-side
+  receive yet; see [callables.md](callables.md).
+- No methods yet; method argument-release handling for decoded owning values
+  comes with that surface.
+- No user-facing conversion functions: the declared-type conversion layer is
+  internal to the runtime, and test builds reach it through a test-only path
+  documented in
+  [architecture.md](architecture.md#internal-modules-and-test-access).
 
 ## Related
 
-- [variants.md](variants.md) - the hand-written Variant payload, declared-type
-  operations, and ownership.
 - [annotations.md](annotations.md#conversionspec) - the `Conversion` marker
   declaration surface.
-- [properties.md](properties.md#ownership-modes) - property set/deinit modes.
+- [ownership.md](ownership.md) - the `Ref`/`Owned`/borrowed model and the engine
+  boundary.
+- [variants.md](variants.md) - the Variant payload, declared-type operations, and
+  borrowed views.
+- [collections.md](collections.md) - typed container wrappers as declared
+  conversion types and their ownership.
+- [properties.md](properties.md#ownership-modes) - property `.set`/`.deinit`
+  modes.
 - [signals.md](signals.md#registration) - signal registration and emit.
-- [virtuals.md](virtuals.md#refcounted-is-the-exception) - ptrcall/RefCounted
-  callback behavior.
-- [ownership.md](ownership.md) - borrowed arguments, transferred returns, and
-  the retain/release helpers.
+- [virtuals.md](virtuals.md#refcounted-arguments-and-returns) - callback
+  argument and return rules.

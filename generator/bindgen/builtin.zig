@@ -398,7 +398,7 @@ fn writeVarargMethod(
     try writer.writeAll(" {\n");
 
     if (!method.is_static) {
-        try writer.writeAll("    var self_variant = Variant.wrap(dispatcher, ");
+        try writer.writeAll("    var self_variant = Variant.borrow(dispatcher, ");
         try writer.writeAll(class.name);
         try writer.writeAll(", ");
         try writer.writeAll("self");
@@ -408,7 +408,7 @@ fn writeVarargMethod(
     if (fixed_count != 0) {
         try writer.print("    var fixed: [{d}]Variant = undefined;\n", .{fixed_count});
         for (method.arguments, 0..) |argument, index| {
-            try writer.print("    fixed[{d}] = Variant.wrap(dispatcher, @TypeOf(", .{index});
+            try writer.print("    fixed[{d}] = Variant.borrow(dispatcher, @TypeOf(", .{index});
             try names.writeArgName(writer, argument.name, 0);
             try writer.writeAll("), &");
             try names.writeArgName(writer, argument.name, 0);

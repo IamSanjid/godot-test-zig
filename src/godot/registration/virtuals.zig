@@ -141,7 +141,7 @@ fn validateSignature(
     inline for (declared_info.param_types[offset..], 0..) |maybe_param, index| {
         conversion.checkSupported(
             maybe_param.?,
-            .ptr,
+            .ptrcall,
             std.fmt.comptimePrint("Declared virtual '{s}' parameter {d}", .{ name, index + 1 }),
         );
     }
@@ -149,7 +149,7 @@ fn validateSignature(
     if (comptime Return != void) {
         conversion.checkSupported(
             Return,
-            .ptr,
+            .ptrcall,
             std.fmt.comptimePrint("Declared virtual '{s}' return value", .{name}),
         );
     }
@@ -176,14 +176,22 @@ fn makeCallback(
             const offset: usize = if (meta.static) 0 else 1;
             inline for (info.param_types[offset..], 0..) |maybe_param, index| {
                 const Param = maybe_param.?;
-                args[offset + index] = conversion.decodePtr(Param, p_args[index]);
+                args[offset + index] = conversion.decodePtrcallSlot(Param, p_args[index]);
             }
 
-            const result = @call(.auto, declaredFn, args);
-
             const Return = info.return_type orelse void;
-            if (comptime Return != void) {
-                conversion.encodePtr(Return, result, r_ret);
+            if (comptime Return == void) {
+                _ = @call(.auto, declaredFn, args);
+            } else {
+                const result = @call(.auto, declaredFn, args);
+                // The return is outgoing: non-RefCounted pointers are written
+                // borrowingly. A `RefCounted` return slot is engine `Ref`
+                // storage, so encoding hands the object to the slot, which takes
+                // its own reference. A fresh object's creation reference moves
+                // into that slot, so move it out through a local wrapper: `var
+                // value = Class.construct(); return value.take();` (`take` needs
+                // `*Self`). Nothing is released afterwards.
+                conversion.encodePtrcallSlot(Return, result, r_ret);
             }
         }
     }.call;

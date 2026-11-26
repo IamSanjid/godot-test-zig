@@ -29,8 +29,10 @@ test "hand-written runtime tests are linked" {
     _ = @import("builtins/variant.zig");
     _ = @import("builtins/vector.zig");
     _ = @import("classes.zig");
+    _ = @import("collections.zig");
     _ = @import("conversion.zig");
     _ = @import("ownership.zig");
+    _ = @import("ptrcall.zig");
     _ = @import("reflect/base.zig");
     _ = @import("reflect/extension.zig");
     _ = @import("reflect/hierarchy.zig");

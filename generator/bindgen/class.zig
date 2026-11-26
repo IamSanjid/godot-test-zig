@@ -980,7 +980,7 @@ fn writeVarargMethod(
                     std.log.err("Vararg class argument `{s}` has unexpected type `{s}`", .{ argument.name, resolved.zig });
                     return error.UnsupportedVarargClassArgument;
                 }
-                try writer.writeAll("builtins.Variant.wrap(dispatcher, ");
+                try writer.writeAll("builtins.Variant.borrow(dispatcher, ");
                 try writer.writeAll(resolved.zig[1..]);
                 try writer.writeAll(", ");
                 try names.writeArgName(writer, argument.name, 0);
@@ -989,7 +989,7 @@ fn writeVarargMethod(
                 try names.writeArgName(writer, argument.name, 0);
                 try writer.writeAll(";\n");
             } else {
-                try writer.writeAll("builtins.Variant.wrap(dispatcher, @TypeOf(");
+                try writer.writeAll("builtins.Variant.borrow(dispatcher, @TypeOf(");
                 try names.writeArgName(writer, argument.name, 0);
                 try writer.writeAll("), &");
                 try names.writeArgName(writer, argument.name, 0);

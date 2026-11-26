@@ -12,24 +12,24 @@ pub inline fn indexConst(self: *const PackedInt64Array, p_index: i64) *const i64
 }
 // @section_end artifact indexConst
 
-// @section artifact bytes
+// @section artifact asSlice
 
 /// Mutable view (forces a COW detach).
-pub inline fn bytes(self: *PackedInt64Array) []i64 {
+pub inline fn asSlice(self: *PackedInt64Array) []i64 {
     const len: usize = @intCast(self.size());
     if (len == 0) return &.{};
     const start = self.index(0);
     return @as([*]i64, @ptrCast(start))[0..len];
 }
-// @section_end artifact bytes
+// @section_end artifact asSlice
 
-// @section artifact bytesConst
+// @section artifact asSliceConst
 
 /// Read-only view. Invalid after the array is modified or freed.
-pub inline fn bytesConst(self: *const PackedInt64Array) []const i64 {
+pub inline fn asSliceConst(self: *const PackedInt64Array) []const i64 {
     const len: usize = @intCast(self.size());
     if (len == 0) return &.{};
     const start = self.indexConst(0);
     return @as([*]const i64, @ptrCast(start))[0..len];
 }
-// @section_end artifact bytesConst
+// @section_end artifact asSliceConst

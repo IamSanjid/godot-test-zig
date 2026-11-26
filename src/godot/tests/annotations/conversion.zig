@@ -2,9 +2,9 @@
 //!
 //! Discovery scans a type's declarations for a `Conversion` marker, so the
 //! declaration name is free. `annotations/conversion.zig`'s `find`/
-//! `MarkerEngine` are internal to the annotation module;
-//! `godot.conversion.engineType`/`variantType` are the public paths that
-//! exercise both, so identity is pinned here.
+//! `MarkerEngine` are internal to the annotation module; the test-only
+//! `godot.internal.conversion.engineType`/`variantType` exercise both, so
+//! identity is pinned here.
 
 const Duration = struct {
     millis: i32,
@@ -76,13 +76,13 @@ fn checkConversionMarker() void {
 
     // Discovery: engineType goes through annotations.conversion.find and
     // MarkerEngine for the attached marker, whatever it is named.
-    if (comptime godot.conversion.engineType(Duration) != i32)
+    if (comptime godot.internal.conversion.engineType(Duration) != i32)
         @compileError("conversion discovery must find the Conversion marker");
-    if (comptime godot.conversion.variantType(Duration) != .int)
+    if (comptime godot.internal.conversion.variantType(Duration) != .int)
         @compileError("conversion discovery must use the marker's engine type");
-    if (comptime godot.conversion.engineType(Mixed) != i32)
+    if (comptime godot.internal.conversion.engineType(Mixed) != i32)
         @compileError("a lookalike declaration must not hide the real marker");
-    if (comptime godot.conversion.support(LookalikeOnly).variant)
+    if (comptime godot.internal.conversion.support(LookalikeOnly).variant)
         @compileError("a markerless lookalike must not be treated as a conversion");
     if (godot.annotations.marker.kindOf(FakeMarker) != null)
         @compileError("a Conversion lookalike must not declare an annotation marker");
@@ -95,8 +95,8 @@ comptime {
 test "Conversion marker identity survives discovery" {
     comptime checkConversionMarker();
     var variant: godot.builtins.Variant = undefined;
-    godot.conversion.encodeVariant(Duration, Duration{ .millis = 13 }, &variant);
-    const decoded = godot.conversion.decodeVariant(Duration, &variant) orelse
+    godot.internal.conversion.encodeVariant(Duration, Duration{ .millis = 13 }, &variant);
+    const decoded = godot.internal.conversion.decodeVariant(Duration, &variant) orelse
         @panic("conversion test: decoded Duration is null");
     try std.testing.expectEqual(@as(i32, 13), decoded.millis);
 }

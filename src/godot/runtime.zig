@@ -102,7 +102,7 @@ pub fn richLogFn(
     var godot_string = builtins.String.fromUtf8(t.written()) catch return;
     defer godot_string.deinit();
 
-    utility.general.printRich(.wrap(builtins.String, &godot_string), .{});
+    utility.general.printRich(builtins.Variant.borrow(builtins.String, &godot_string).get(), .{});
 }
 
 pub fn initialize(_: ?*anyopaque, p_level: interface.InitializationLevel) callconv(.c) void {

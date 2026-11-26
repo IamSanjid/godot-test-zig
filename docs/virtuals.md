@@ -15,6 +15,8 @@ pub const Virtual = struct {
     };
 
     pub const Optional = struct {
+        // Arguments and returns stay raw borrowed pointers; the engine slot
+        // takes its own reference to a returned `RefCounted` object.
         pub const _getImage = *const fn (self: *const Texture2D) callconv(.c) ?*Image;
     };
 
@@ -28,8 +30,11 @@ pub const Virtual = struct {
 - `Required` and `Optional` are the registration categories.
 - `Meta` supplies the engine hash, staticness, and exact `godot_name` from the API JSON.
 - No binding-level function types are emitted.
-- The generated signature uses public Zig types; ptrcall marshalling happens
-  through `godot.conversion` (`decodePtr`/`encodePtr`), backed by `abi.zig`.
+- The generated signature uses public Zig types: raw borrowed pointers for
+  arguments and for every return, including `RefCounted` results (`?*Class`).
+- The generated callable wrappers that invoke a virtual from Zig are ordinary
+  generated methods, so a `RefCounted` engine result comes back as
+  `ownership.Ref(Class)`. Only the user override signatures stay raw pointers.
 - The ABI slot width is inferred from the Zig type, not stored per virtual.
 
 ## User declaration
@@ -49,6 +54,8 @@ Rules:
   the base implementation.
 - Non-static virtuals must take `*T` or `*const T` as the first parameter.
 - Remaining parameter and return types must match the generated virtual type.
+  Arguments and returns stay raw borrowed pointers; a `RefCounted` return is
+  `?*Class`, never `godot.ownership.Ref(Class)`.
 - Functions must not be generic.
 - Static virtuals have no self parameter.
 - An alternate Zig declaration name may be provided with
@@ -111,10 +118,11 @@ fn callback(
 - For static virtuals, `p_instance` is unused and `p_args[0]` is the first
   argument.
 
-All virtual argument/return marshalling goes through `godot.conversion`: the
-callback calls `decodePtr`/`encodePtr`. For non-RefCounted values conversion uses
-[abi.zig](../src/godot/abi.zig), the same shared helper available as `godot.abi`,
-which decides the slot from the Zig type:
+All virtual argument/return marshalling goes through the internal conversion
+layer's ptrcall path: the callback decodes each argument and writes the return
+into the engine slot. For scalar and builtin values the canonical slot layout
+comes from [abi.zig](../src/godot/abi.zig), the dependency-free helper also
+available as `godot.abi`, which decides the slot from the Zig type:
 
 - `float` / `real_t` -> `f64` slot + `@floatCast`
 - normal integers -> `i64` (or `u64` when the integer is u64)
@@ -123,33 +131,55 @@ which decides the slot from the Zig type:
 - `bool` -> `u8`
 - everything else -> its declared layout
 
-This slot mapping is not virtual-specific. Registration validates `.ptr` support
+This slot mapping is not virtual-specific. Registration validates ptrcall support
 for every parameter and non-void return, and `virtuals.zig` supplies only the
-callback shape; conversion owns the RefCounted rules described below.
+callback shape.
 
-## RefCounted is the exception
+`Variant` parameters and returns also travel here as ptrcall slot values (a
+pointer to Variant storage), never through the Variant call path; real virtuals
+such as `Control._getDragData() -> Variant` and
+`AnimationMixer._post_process_key_value(..., Variant) -> Variant` do this. The
+Variant call path exists only for registered extension methods.
 
-Godot virtual ABI represents `RefCounted` values differently:
+## RefCounted arguments and returns
 
-- `RefCounted` arguments arrive as `Ref<T>*`, not `Object**`.
-- `RefCounted` returns are `Ref<T>` storage, not `Object*`.
+The virtual ABI stores `RefCounted` values differently: arguments arrive as
+engine reference pointers and returns are written into engine-owned reference
+storage. The internal ptrcall layer handles that:
 
-`godot.conversion.decodePtr` calls `ref_get_object` for arguments, and
-`encodePtr` calls `ref_set_object` for returns. The object pointer from
-`ref_get_object` is borrowed for the call; taking ownership requires an explicit
-reference. `ref_set_object` writes into engine-owned `Ref<T>` storage and adds a
-new owning reference there; see [ownership.md](ownership.md).
+- an argument slot is borrowed engine-owned reference storage, so the decoded
+  argument is a borrowed pointer;
+- a return slot is engine-owned reference storage: writing gives the slot a
+  reference (for an already-referenced object it adds one; for a fresh object
+  `init_ref` consumes the creation reference instead). See
+  [ownership.md](ownership.md#engine-boundary).
 
-A custom converter whose engine type is a `RefCounted` pointer inherits this:
-`from_engine` receives the borrowed pointer and `to_engine` returns the pointer
-that `ref_set_object` will store. Do not assign a raw pointer into `Ref<T>`
-storage.
+For the generated signature and for user code this means:
 
-`isRefCountedPointer` still lives in `reflect`: it resolves the single-item class
-pointer through `reflect.objectTarget` and checks
-`reflect.inheritsFrom(Class, classes.core.RefCounted)`. Conversion uses it to
-choose the RefCounted branch; the virtual callback does not open-code
-`ref_get_object` / `ref_set_object`. See [conversion.md](conversion.md).
+- Arguments stay raw and borrowed (`?*Class` or `*Class`). The pointer is valid
+  for the call; take `godot.ownership.Ref(Class).init(pointer)` before keeping it.
+- Returns stay raw and borrowed too: declare `?*Class` (or `*Class`). The
+  callback's conversion write hands the pointer to the engine's return slot,
+  which takes the object itself, so there is no wrapper to hand over or release
+  afterwards.
+- Return a borrowed pointer you keep alive elsewhere (for example `.get()` of a
+  stored `Ref`): your reference is untouched and the slot takes its own.
+- Return a newly constructed object by moving its typed handle out through a
+  local wrapper - `take()` needs a mutable wrapper, so an rvalue
+  `construct().take()` does not compile:
+
+  ```zig
+  var value = godot.classes.core.AudioEffectInstance.construct();
+  return value.take();
+  ```
+
+  The engine slot receives the raw pointer, and a fresh object's creation
+  reference moves into the slot's `Ref` storage. To keep a newly constructed
+  object too, store the `Ref` (or, for a non-`RefCounted` class, the `Owned`) in
+  your state and return `.get()`; do not hand the same creation reference out
+  twice.
+- The ownership model is stated once in
+  [ownership.md](ownership.md#the-model).
 
 ## Do not use upcast/downcast here
 
@@ -159,16 +189,14 @@ no ABI benefit.
 
 ## Variant and non-trivial builtins
 
-Virtual arguments are borrowed views. The engine owns the argument storage and
-will clean it up after the callback. Never deinitialize argument values.
+Virtual arguments are borrowed views: the engine owns the storage and cleans it
+up after the callback. Never deinitialize argument values; clone or copy the
+value if it must outlive the call.
 
-Return values are transferred to the engine. Godot's virtual thunk creates the
-return temp before calling the extension, so the callback writes directly into
-`r_ret`; there is no previous non-empty value to release. Return an owned
-Variant/String/Array and do not deinitialize it after writing to `r_ret`.
-Returning a borrowed argument directly may double-own its internal references;
-clone it first when ownership is required. `RefCounted` returns are stored by
-`ref_set_object`, which adds a new owning reference to engine-owned `Ref<T>`
-storage; release any reference you own separately.
-
-See [ownership.md](ownership.md).
+Return values are transferred to the engine. Godot's virtual thunk
+default-constructs the return temp before calling the extension, so the callback
+writes directly into `r_ret` and does not deinitialize it afterwards. Return an
+owned `Variant`/`String`/`Array` and let the write move it into the slot;
+returning a borrowed argument directly can double-own its internal references,
+so clone it first. `RefCounted` returns are raw borrowed pointers retained by the
+engine slot, as described above; see [ownership.md](ownership.md).

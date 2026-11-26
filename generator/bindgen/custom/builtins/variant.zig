@@ -75,7 +75,7 @@ comptime {
 }
 
 // @section_end artifact Data
-// @section artifact wrap
+// @section artifact borrow
 /// Creates a **borrowed** Variant view of `value` for a raw binding call.
 ///
 /// `T` is the value type; `value` must be `*T`, `*const T`, `?*T` or
@@ -92,29 +92,29 @@ comptime {
 /// `RID`, `Callable`, `Signal`, `Array`, `Dictionary`, the vector/rect types,
 /// `Plane`, `Quaternion`, and `Color`); any generated opaque class pointer is
 /// handled as an object. This raw-layer helper remains pointer-based and is a
-/// subset of the public codegen `Variant.wrap`.
+/// subset of the public codegen `Variant.borrow`.
 ///
 /// Packed arrays and heap-backed builtins (`AABB`, `Basis`, `Projection`,
 /// `Transform2D`, `Transform3D`) compile-error: their Variant payload is an
 /// engine-owned allocation or copy-on-write ref, so they need the owning
 /// Variant constructors.
-pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
+pub fn borrow(dispatcher: anytype, comptime T: type, value: anytype) Variant {
     const VT = @TypeOf(value);
     if (VT != *const T and
         VT != *T and
         VT != ?*T and
         VT != ?*const T)
         @compileError(std.fmt.comptimePrint(
-            "Variant.wrap expects a pointer to {s} (or an optional pointer), found: {s}",
+            "Variant.borrow expects a pointer to {s} (or an optional pointer), found: {s}",
             .{ @typeName(T), @typeName(VT) },
         ));
 
     if (comptime traits.isPackedArray(T)) {
-        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+        @compileError("Variant.borrow cannot borrow " ++ @typeName(T) ++
             ": packed arrays are copy-on-write engine values. Use the owning Variant constructor instead.");
     }
     if (comptime traits.isHeapBuiltin(T)) {
-        @compileError("Variant.wrap cannot borrow " ++ @typeName(T) ++
+        @compileError("Variant.borrow cannot borrow " ++ @typeName(T) ++
             ": the engine keeps it behind an owned heap allocation. Use the owning Variant constructor instead.");
     }
 
@@ -176,11 +176,11 @@ pub fn wrap(dispatcher: anytype, comptime T: type, value: anytype) Variant {
             }),
             .@"struct" => |info| {
                 const Backing = info.backing_integer orelse
-                    @compileError("Variant.wrap does not support type: " ++ @typeName(T));
+                    @compileError("Variant.borrow does not support type: " ++ @typeName(T));
                 const bits: Backing = @bitCast(v.*);
                 return borrowed(.int, .{ .int = canonicalInt(Backing, bits) });
             },
-            else => @compileError("Variant.wrap does not support type: " ++ @typeName(T)),
+            else => @compileError("Variant.borrow does not support type: " ++ @typeName(T)),
         },
     }
 }
@@ -201,7 +201,7 @@ fn canonicalInt(comptime T: type, value: T) i64 {
     return @intCast(value);
 }
 
-// @section_end artifact wrap
+// @section_end artifact borrow
 // @section artifact nil
 /// Precomputed nil Variant value. It owns no engine-managed references; copy it
 /// when a separate value is needed.

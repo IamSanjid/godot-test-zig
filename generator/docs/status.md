@@ -24,7 +24,7 @@
 - cached String/StringName default literal handling
 - compile-time default options are inlined (primitives, enums, bitfields,
   Color/Vector/Rect); runtime-owned defaults stay optional
-- hand-written Variant `wrap`/`init`/`as(T)` conversion; raw binding Variant
+- hand-written Variant `borrow`/`init`/`as(T)` conversion; raw binding Variant
   keeps internal `asInt`/`asCallable` accessors for emitted vararg returns
 - codegen varargs convert library-supplied codegen Variants to binding Variants;
   bindgen assembles the final engine pointer array

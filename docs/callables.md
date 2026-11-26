@@ -4,10 +4,10 @@ A custom callable is the only way to hand the engine a Zig function: the engine
 wraps it in a refcounted `CallableCustomExtension` and calls it from
 `Object.connect`, `Callable.call`, deferred calls, and signal emission.
 
-Status: design. The declared-type conversion it depends on exists as
-`godot.conversion`; the closure constructor is not implemented, and callables are
-not migrated to the conversion layer yet, so a custom type with a `Conversion`
-marker is not accepted.
+Status: design. The declared-type conversion it depends on exists in the
+internal conversion layer described in [conversion.md](conversion.md); the
+closure constructor is not implemented, and callables are not migrated to that
+layer yet, so a custom type with a `Conversion` marker is not accepted.
 
 ## Engine contract
 
@@ -86,13 +86,13 @@ _ = emitter.connect(.Pinged, callback, .{});
   `fromClosure` calls are never equal: **keep the returned `Callable` to
   disconnect**.
 - The planned implementation uses `Variant.initDeclared` and
-  `Variant.asDeclared`; callables are not migrated to `godot.conversion`, so a
-  custom type with a `Conversion` marker is not accepted. For directly supported
-  types the mapping is the one [conversion.md](conversion.md) documents. A Zig-emitted
-  signal and a Zig closure receiving it therefore agree on literals,
-  extension-instance reduction, nulls, and class checks for those types. A
-  custom-converter signal argument has no closure-side equivalent until
-  callables migrate.
+  `Variant.asDeclared`; callables are not migrated to the internal conversion
+  layer, so a custom type with a `Conversion` marker is not accepted. For
+  directly supported types the mapping is the one
+  [conversion.md](conversion.md) documents. A Zig-emitted signal and a Zig
+  closure receiving it therefore agree on literals, extension-instance
+  reduction, nulls, and class checks for those types. A custom-converter signal
+  argument has no closure-side equivalent until callables migrate.
 
 ### D3. Typed `connect` comes after the closure
 
