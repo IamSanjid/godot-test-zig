@@ -51,7 +51,7 @@ operations. User code does not call it: it declares a supported type or a
 - composes the Variant-path operations on this page: a converted type is decoded
   as `asDeclared(Engine)` followed by `from_engine`, and encoded as `to_engine`
   followed by `initDeclared(Engine)`.
-- uses a separate ptrcall path for virtuals and planned methods; that path
+- uses a separate ptrcall path for virtuals and methods; that path
   carries no Variant.
 
 `Variant.typeFor(T)` reports only a direct representation. A declared surface

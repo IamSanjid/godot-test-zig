@@ -24,6 +24,8 @@ registration can run without annotations.
 | `deinit_callback` | `DeinitCallback(T, f)` | Class declaration: free-instance callback |
 | `notification_callback` | `NotificationCallback(T, f)` | Class declaration: notification hook |
 | `signal` | `Signal(name, args)` | Class declaration: signal metadata and typed emit |
+| `method` | `Method(impl, options)` | Class declaration: one engine method |
+| `methods` | `Methods(tuple)` | Class declaration: method container |
 | `constants` | `Constants(decls)` | Class declaration: integer constants, enums, bitfields |
 | `property_groups` | `PropertyGroups(groups)` | Class declaration: inspector section tree |
 | `conversion` | `Conversion(spec)` | Type-attached value conversion |
@@ -34,8 +36,8 @@ declaration claims; each family still validates its parameters with its
 constructor and discovery code, and a hand-written marker that only carries the
 kind is rejected or fails its own checks. A marker with a valid kind but an
 invalid signal name, constant declaration, callback signature, `Property` option,
-or conversion spec is still a compile error. `Init` is not a marker and is never
-discovered.
+method signature, or conversion spec is still a compile error. `Init` is not a
+marker and is never discovered.
 
 Kind identity is the first filter for field and declaration discovery; the
 family-specific rules in the sections below remain the contract. See
@@ -330,6 +332,53 @@ pointer that extends it, or an extension instance whose engine base extends it.
 Extension-declared arguments accept only that exact instance. See
 [signals.md](signals.md) for registration, emit, and what is not supported yet.
 
+### `Method(impl, options)` / `Methods(tuple)`
+
+Declares engine methods in one class-level tuple container. The tuple holds one
+`Method` per method, and the container declaration name is a free handle; a
+class may declare several containers, flattened in declaration order:
+
+```zig
+pub const RegMethods = godot.annotations.Methods(.{
+    godot.annotations.Method(.ping, .{ .arg_names = .{"target"} }),
+    godot.annotations.Method(.version, .{ .is_static = true }),
+    godot.annotations.Method(helperImpl, .{ .name = "helper", .arg_names = .{"value"} }),
+});
+```
+
+- The first `Method` argument is an enum literal naming the implementation
+  function on the class, or a direct function reference. An enum literal
+  resolves the class declaration and uses its tag converted with
+  `naming.comptimeConvert(.godot, .method, ...)` as the default engine name, so
+  the implementation must be a `pub fn`. A direct reference requires `.name` and
+  may point at a private function.
+- Options: `.name` (verbatim engine name), `.arg_names` (tuple of engine
+  argument names in engine order; when omitted, `"arg0"`, `"arg1"`, ... are
+  registered instead), and `.is_static` (default false).
+- The signature is the Zig function. An instance method takes `*T` or `*const T`
+  as its first parameter, excluded from the engine argument list; `*const T`
+  also derives the const flag. A static method takes only engine arguments and
+  must be marked `.is_static = true`. Functions must be non-generic and
+  non-varargs, and every engine parameter and non-void return must support both
+  conversion paths. Arguments are call-scoped borrowed: direct types are accepted,
+  but `Ref(T)`, typed container wrappers, and converters whose decode or engine
+  representation owns storage are compile errors as arguments. Declare the
+  borrowed direct type and wrap inside the method; owning wrappers stay valid for
+  results. Signature errors, unknown options, duplicate engine names, and
+  `.arg_names` count mismatches are compile errors.
+- `findMethods(T)` returns one resolved entry type per method with `name`,
+  `implementation`, `Fn`, `is_static`, `is_const`, `arg_count`, `arg_names`, and
+  `argName(index)`. Discovery and registration are described in
+  [classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container).
+
+Declarations, discovery, validation, and ClassDB registration are implemented,
+so a `Methods` container changes what the engine sees. Both call adapters are
+registered; their arguments are call-scoped borrowed values (owning forms are
+rejected at declaration) and their results are outgoing engine values. The
+signature, metadata, and ownership rules are in
+[classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container) and
+[ownership.md](ownership.md#the-model).
+
 ### `Constants(decls)`
 
 Wraps a struct of constant declarations as a class-level declaration marker. The declaration
@@ -399,10 +448,12 @@ The flat `godot.annotations` exports remain the declaration and lifecycle API
 that user classes call:
 
 - markers: `Base`, `OnReady`, `Property`, `PropertyGroups`, `Signal`,
-  `Constants`, `Conversion`, `Init`, `Override`, and the callback markers;
+  `Method`, `Methods`, `Constants`, `Conversion`, `Init`, `Override`, and the
+  callback markers;
 - lifecycle helpers: `initBase`, `initAnnotFieldsDefault`,
   `initPropertyFields`, `deinitPropertyFields`, `initOnReadyFields`;
-- discovery: `findSignals`, `findConstants`, and `callComptimeArg1`.
+- discovery: `findSignals`, `findMethods`, `findConstants`, and
+  `callComptimeArg1`.
 
 Two submodules hold the implementation and tooling introspection behind those
 exports. They are not part of the declaration API:

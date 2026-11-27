@@ -183,8 +183,10 @@ binding token is per class and type; `typeToken(T)` returns that token. Detach
 before destroying an attached instance; the engine keeps the class's extension
 pointer, so the bundled property, notification, and free callbacks then see a
 null instance. Do not dispatch virtuals or methods on a detached instance: the
-virtual callback assumes a live attached instance and has no null guard (see
-[Hot reload](#hot-reload)). For free-time property
+virtual callback assumes a live attached instance and has no null guard, and the
+method ptrcall adapter dereferences the instance handle without one (the method
+`call_func` path reports a call error instead, but validated calls use ptrcall).
+See [Hot reload](#hot-reload). For free-time property
 cleanup, pass `true` to `FreeInstance`, or call
 `annotations.deinitPropertyFields` from the free callback directly.
 
@@ -369,9 +371,11 @@ Consequences:
 - If recreation fails, the engine reports the error and the object keeps its
   base without an extension instance; do not dispatch virtuals or methods on it
   afterwards. A virtual callback assumes a live instance and dereferences the
-  attached pointer, so calling one on a base with no instance is undefined
-  behavior; the runtime does not install a null-instance guard (documented risk,
-  `.notes/hot-reload.md`).
+  attached pointer, and the method `ptrcall_func` adapter dereferences the
+  instance handle, so calling either on a base with no instance is undefined
+  behavior; the method `call_func` path is the only one that reports
+  `instance_is_null` instead. The runtime does not install a null-instance guard
+  (documented risk, `.notes/hot-reload.md`).
 
 ## Properties
 
@@ -389,11 +393,11 @@ installed.
 
 ## Class-level metadata
 
-Signals and integer constants are not `ClassCreationInfo6` callbacks. They are
-registered per class, after the class itself. `Registry` stores an optional
-`post_registration_callback` for each registered class and `godot.initialize`
-runs it immediately after `classdb_register_extension_class6`, for the same
-class and the same initialization level:
+Signals, integer constants, and methods are not `ClassCreationInfo6` callbacks.
+They are registered per class, after the class itself. `Registry` stores an
+optional `post_registration_callback` for each registered class and
+`godot.initialize` runs it immediately after `classdb_register_extension_class6`,
+for the same class and the same initialization level:
 
 - a class's `annotations.Signal` declarations register through
   `classdb_register_extension_class_signal`; each argument's Variant type and
@@ -401,7 +405,13 @@ class and the same initialization level:
   (`Variant` registers as untyped `.nil`; see [conversion.md](conversion.md));
 - a class's `annotations.Constants` markers register integer constants, enums,
   and bitpack flags through `classdb_register_extension_class_integer_constant`;
-- a class with neither stores a null callback and does no extra work.
+- a class's `annotations.Methods` containers register one
+  `GDExtensionClassMethodInfo` per `Method` through
+  `classdb_register_extension_class_method`, with both call adapters and the
+  registered argument/return metadata
+  ([classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container));
+- a class that declares none of these stores a null callback and does no extra
+  work.
 
 The ordering is a contract owned by
 [classdb.md](classdb.md#registration-pipeline): never defer this metadata to a
@@ -410,7 +420,7 @@ later initialization level or after another class derives from it.
 `godot.deinitialize` needs no extra calls.
 
 See [classdb.md](classdb.md) for the engine contract and the remaining class-level
-surfaces (methods and static properties).
+surface (the `is_abstract` class mode and static properties).
 
 ## Namespace detection
 

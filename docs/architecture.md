@@ -9,7 +9,7 @@
 | `runtime.zig` | `bindings`, codegen builtins/utility, `registration`, `reflect` | Process-wide dispatcher/registry state and engine lifecycle. |
 | `abi.zig` | nothing | Dependency-free leaf: canonical scalar/builtin ptrcall slot layout and the read/write helpers. No import, no object or reference rules, no policy. |
 | `ptrcall.zig` | `abi.zig`, `bindings`, `reflect`, `runtime.zig` | Internal direct ptrcall slot rules: `RefCounted` reference slots (borrow on read, engine-owned storage on write), extension base/instance resolution, canonical fallback. Shared by the conversion layer and virtual callbacks. |
-| `conversion.zig` | `ptrcall.zig`, `abi.zig`, `bindings`, codegen builtins, `reflect`, `annotations/conversion.zig` | Internal declared-type layer: direct support and marker policy, Variant-path primitives, converter bridge, borrowability. Not facade-exported; surfaces and tests only. |
+| `conversion.zig` | `ptrcall.zig`, `abi.zig`, `bindings`, codegen builtins, `reflect`, `annotations/conversion.zig` | Internal declared-type layer: direct support and marker policy, Variant-path primitives, converter bridge, borrowability, and the method-argument ownership gate. Not facade-exported; surfaces and tests only. |
 | hand-written support | `runtime.zig`, `bindings`, `reflect` | `heap.zig`, annotations, registration helpers. |
 | `ownership.zig` | codegen `classes`, `reflect`, `annotations/conversion.zig` | `Ref`/`Owned` ownership handles for engine objects, low-level retain/release, and typed construction handoff. The `annotations/conversion.zig` import is only for the `Ref` conversion marker, so the direction is ownership -> marker; no runtime or registration dependency. |
 | `collections.zig` | codegen builtins, `conversion.zig`, `annotations/conversion.zig` | Typed owning container wrappers; declared conversion types re-exported by the facade. |
@@ -179,13 +179,13 @@ registration.
   query-only; the conversion layer's engine-class-name query is built on it.
 - `annotations/` - optional markers such as `Base`, `OnReady`, `Property`,
   `InitCallback`, `DeinitCallback`, `NotificationCallback`, plus the
-  class-level `Signal`, `Constants`, and `PropertyGroups` markers and the
-  type-attached `Conversion` marker. Every family declares
+  class-level `Signal`, `Method`/`Methods`, `Constants`, and `PropertyGroups`
+  markers and the type-attached `Conversion` marker. Every family declares
   `pub const marker = marker.Kind.<family>`; discovery checks the kind and then
   the family's shape. `Init` is not a marker.
 - `registration/` - optional `Registry`, class creation, recreation, and free,
-  notification, virtual-method registration, dynamic property callbacks, and
-  class-level ClassDB metadata.
+  notification, virtual-method registration, dynamic property callbacks, method
+  registration and its call adapters, and class-level ClassDB metadata.
 - `heap.zig` - engine allocator.
 - hand-written builtins and the hand-written builtin aggregate.
 

@@ -112,6 +112,55 @@ pub fn decodePtrcallSlot(comptime T: type, raw: ?*const anyopaque) T {
     return ptrcall.decodeDirectPtr(T, raw);
 }
 
+/// Releases one decoded method argument after the user function returns.
+/// Variant-path direct values own their decode; ptrcall direct values are
+/// borrowed. Converter results own on both paths.
+///
+/// Call it with the path the argument was decoded on. Method arguments are
+/// call-scoped borrowed (see `checkMethodArgument`): the method adapter releases
+/// the decode after the user function returns, and user code must not `deinit` or
+/// store an argument. Types without a `deinit` declaration (scalars, plain
+/// builtins, object pointers) are no-ops.
+pub fn deinitDecodedArgument(comptime T: type, comptime path: Path, value: *T) void {
+    checkSupported(T, path, "deinitDecodedArgument");
+    const owns = comptime switch (path) {
+        .variant => true,
+        .ptrcall => markerInfo(T) != null,
+    };
+    if (comptime owns and hasDeinit(T)) value.deinit();
+}
+
+/// True when a method argument of declared type `T` is borrow-like: direct types
+/// (the adapter releases their Variant-path decode) or converters whose decoded
+/// value owns nothing and whose engine representation owns no storage.
+pub fn methodArgumentIsBorrowed(comptime T: type) bool {
+    const info = comptime markerInfo(T) orelse return true;
+    if (comptime hasDeinit(T)) return false;
+    return engineRepresentationIsBorrowed(info.engine);
+}
+
+/// Compile-checks that `T` is valid as a method argument, with an error that
+/// names `context`. Owning wrappers and converters whose decode or engine
+/// representation owns storage cannot be arguments: arguments are call-scoped
+/// borrowed, so declare the borrowed direct type and wrap inside the method.
+pub fn checkMethodArgument(comptime T: type, comptime context: []const u8) void {
+    if (comptime !methodArgumentIsBorrowed(T)) @compileError(std.fmt.comptimePrint(
+        "{s}: type '{s}' owns decoded or engine storage and cannot be a method argument. " ++
+            "Method arguments are call-scoped borrowed; use the borrowed direct type and wrap " ++
+            "explicitly inside the method.",
+        .{ context, @typeName(T) },
+    ));
+}
+
+/// True when `Engine` owns no storage: a canonical scalar, a plain builtin, or a
+/// non-`RefCounted` object pointer. Managed, heap, and packed builtins and
+/// `RefCounted` object pointers own storage.
+fn engineRepresentationIsBorrowed(comptime Engine: type) bool {
+    if (comptime reflect.objectTarget(Engine) != null) return !reflect.isRefCountedPointer(Engine);
+    if (comptime builtins.Variant.typeFor(Engine) == null) return true;
+    return comptime bindings.builtins.traits.kindOf(Engine) == .plain;
+}
+
 /// Encodes `value` into a Variant with `Variant.initDeclared`'s copy/ownership
 /// behavior, through the marker's `toEngine` first. `value` is `T` or a form
 /// `initDeclared` accepts for it (a coercible literal, a pointer to an extending
@@ -299,15 +348,20 @@ fn isSingleItemPointer(comptime T: type) bool {
 /// Releases an owning engine intermediate after a converter has borrowed it.
 /// Values without a `deinit` declaration (scalars, object pointers) are no-ops.
 fn deinitEngine(comptime E: type, value: E) void {
-    switch (@typeInfo(E)) {
-        .@"struct", .@"enum", .@"union", .@"opaque" => {
-            if (comptime @hasDecl(E, "deinit")) {
-                var copy = value;
-                copy.deinit();
-            }
-        },
-        else => {},
+    if (comptime hasDeinit(E)) {
+        var copy = value;
+        copy.deinit();
     }
+}
+
+/// True for types whose `deinit` declaration owns their decoded storage. A
+/// declared type says it owns decodes this way; pointers, optionals, and scalars
+/// have no declarations.
+fn hasDeinit(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct", .@"enum", .@"union", .@"opaque" => @hasDecl(T, "deinit"),
+        else => false,
+    };
 }
 
 fn validateMarker(comptime T: type, comptime Marker: type) void {

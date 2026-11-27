@@ -19,3 +19,5 @@ pub const virtuals = @import("virtuals.zig");
 
 pub const classdb = @import("classdb.zig");
 pub const PostRegistrationCallback = classdb.PostRegistrationCallback;
+
+pub const methods = @import("methods.zig");

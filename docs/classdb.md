@@ -8,15 +8,16 @@ and static properties - plus property groups, which are spliced into the
 dynamic property list, and the two class flags `is_virtual`/`is_abstract`, which
 look symmetric and are not.
 
-Status: the callback-table surfaces and the first class-metadata slice are
-implemented - signals, integer constants, the `is_virtual` flag, and the
-per-class post-registration hook. Property groups and type-derived property
-hints (enum, bitfield, Node/Resource object pointers, and wrapper or explicit
+Status: the callback-table surfaces and the class-metadata slice are implemented
+- signals, integer constants, methods, the `is_virtual` flag, and the per-class
+post-registration hook. Property groups and type-derived property hints (enum,
+bitfield, Node/Resource object pointers, and wrapper or explicit
 `Array`/`Dictionary` container metadata) are implemented on the dynamic property
-list. Signal argument metadata and property metadata/value conversion use the
-internal conversion layer; typed container wrappers are the `godot.collections`
-module and are declared conversion types too. Methods are the next surface, then
-`is_abstract`; both are designed here but not implemented yet.
+list. Signal and method argument metadata and property metadata/value conversion
+use the internal conversion layer; typed container wrappers are the
+`godot.collections` module and are declared conversion types too. Method
+declarations, discovery, validation, registration, and both call adapters are
+implemented and live-verified; `is_abstract` is the next surface.
 
 ## Two families
 
@@ -87,7 +88,8 @@ beta; the bundled `extension_api.json` is 4.8 beta2) - mainly `class_db.cpp`,
   a non-vararg native method with matching argument types, and
   `validated_call` falls through to `ptrcall_func` unconditionally - there is
   no ptrcall-to-call fallback in 4.7, so a method registered with only
-  `call_func` crashes when called from a validated call site.
+  `call_func` crashes when called from a validated call site. `validated_call_func`
+  is never needed for that reason; this runtime leaves it null.
 - `is_virtual` is stored but not consulted during instantiation. `ClassDB::is_virtual()` returns
   `can_instantiate(class) && class->is_virtual`, so a virtual class without a
   creation function does not even report as virtual, and instantiation never
@@ -188,70 +190,161 @@ conversion rule, and the declaration is the only support gate. The naming,
 exact-class receive contract, and unsupported cases are in
 [signals.md](signals.md).
 
-### D4. Methods are declared in a namespace, implemented as normal methods
+### D4. Methods are declared in one `Methods` container
 
-Status: planned. No `Method` annotation or method registration is implemented
-yet; the conversion layer it will use already exists.
+Status: implemented end to end. `Method`/`Methods` declarations, discovery,
+signature validation, ClassDB registration, and both call adapters are in
+place; the live fixture and `godot-test/tests/methods.gd` exercise the two call
+paths against a headless engine.
 
-Zig has no declaration attributes, so a method needs a companion declaration.
-A flat companion declaration collides with the implementation's own name
-(`pub fn get_health` and `pub const get_health` cannot coexist) and would force
-a second name plus a string. A namespace struct avoids both:
+Zig has no declaration attributes, so a method needs a companion declaration. A
+flat marker cannot share the implementation's name (`pub fn ping` and
+`pub const ping` cannot coexist), so the markers live in a `Methods` tuple whose
+declaration name is a free handle; a class may split them across containers:
 
 ```zig
-pub const Methods = struct {
-    pub const ping = godot.annotations.Method(.{ .arg_names = .{"target"} });
-    pub const total_health = godot.annotations.Method(.{});
-};
+pub const RegMethods = godot.annotations.Methods(.{
+    godot.annotations.Method(.ping, .{ .arg_names = .{"target"} }),
+    godot.annotations.Method(.version, .{ .is_static = true }),
+    godot.annotations.Method(helperImpl, .{ .name = "helper", .arg_names = .{"value"} }),
+});
 
 pub fn ping(self: *@This(), target: ?*godot.classes.core.Node) i32 { ... }
-pub fn total_health() i32 { ... }
+pub fn version() i32 { ... }
+fn helperImpl(self: *@This(), value: i32) void { ... }
 ```
 
-- The declaration name inside `Methods` is the engine name, converted with
-  `naming.comptimeConvert(.godot, .method, ...)`; `.name` overrides it verbatim.
-- The implementation is the declaration of the same name on the class, exactly
-  like virtuals are resolved with `@hasDecl(T, name)`. No function value is
-  passed, so no forward reference and no duplicate name is needed.
-- Flags are derived, never written: `*T` self is an instance method, `*const T`
-  self adds `METHOD_FLAG_CONST`, a missing self parameter makes it
-  `METHOD_FLAG_STATIC`.
-- Return type and argument types come from the Zig signature; the annotation
-  only supplies the names Godot needs for GDScript keyword arguments.
-- Vararg methods and default arguments are rejected in the first version. Zig
-  function types do not carry parameter names, and comptime `Variant`
-  construction is limited to scalars and nil, so default arguments would need a
-  deferred registration-time Variant table. Neither is worth blocking on.
+- `Methods` takes a tuple of `Method` markers; discovery flattens every
+  container in declaration order. A `Method` marker outside a container is not
+  discovered.
+- `Method(the_method, options)` accepts two implementation forms:
+  - an enum literal names the class declaration of that name (resolved through
+    `@hasDecl`/`@field`), with the tag converted by
+    `naming.comptimeConvert(.godot, .method, ...)` as the default engine name;
+    only `pub fn` declarations are visible across modules, so an enum-literal
+    implementation must be public;
+  - a direct function reference keeps that function value and requires `.name`,
+    because there is no Zig declaration name to convert. A direct reference may
+    be a private function.
+- Options: `.name` is the verbatim engine name; `.arg_names` is an optional
+  tuple of engine argument names in engine order and must match the engine
+  argument count; `.is_static` defaults to false. An omitted `.arg_names`
+  registers `"arg0"`, `"arg1"`, ... instead, and the resolved entry's
+  `argName(index)` applies that fallback.
+- An instance method takes `*T` or `*const T` as its first parameter. `*const T`
+  sets `is_const`, and the self parameter is excluded from the engine argument
+  list. A static method takes only engine arguments, so a static entry that
+  still receives a self pointer is a compile error. Registration derives
+  `METHOD_FLAG_STATIC` from the marker and `METHOD_FLAG_CONST` from the self
+  parameter.
+- Functions must be non-generic and non-varargs. Return and argument types come
+  from the Zig signature; the marker only supplies the names Godot needs for
+  GDScript keyword arguments.
+- Every engine parameter and non-void return must support both the Variant and
+  ptrcall paths through the internal conversion layer, and the compile error
+  names the method and argument. Custom types with a `Conversion` marker are
+  accepted wherever both paths are supported, but an argument must also be
+  borrow-like.
+- Method arguments are **call-scoped borrowed** and the declaration gate enforces
+  it. A directly supported type is accepted: it crosses as the engine value, and
+  the adapter releases its Variant-path copy after the call. A custom converter is
+  accepted only when its decoded value declares no `deinit` and its engine
+  representation owns no storage - a canonical scalar, a plain builtin, or a
+  non-`RefCounted` object pointer. Owning forms are compile errors as arguments:
+  `Ref(T)`, typed container wrappers, and converters whose engine representation
+  is a managed/heap/packed builtin or a `RefCounted` object pointer. Declare the
+  borrowed direct type instead and wrap explicitly inside the method; owning
+  wrappers stay valid for results, properties, and generated engine-method
+  results.
+- `findMethods(T)` returns one resolved entry type per method: engine name,
+  implementation function value and `Fn` type, `is_static`, `is_const`, engine
+  `arg_count`, the explicit `arg_names`, and `argName(index)`. Duplicate engine
+  names are compile errors. `findMethods` is the declaration surface; the
+  registration stage consumes the entries and adds the two callbacks.
+- Vararg methods and default arguments are not supported. Zig function types do
+  not carry parameter names, and comptime `Variant` construction is limited to
+  scalars and nil, so default arguments would need a deferred registration-time
+  Variant table. Neither is worth blocking on.
 
-Both call paths are mandatory and land together:
+Registration writes one `GDExtensionClassMethodInfo` per resolved entry through
+`classdb_register_extension_class_method`:
 
-1. `ptrcall_func` uses the internal conversion layer's ptrcall path. Arguments
-   are borrowed raw values; a `RefCounted` return is an outgoing raw pointer, so
-   the conversion write fills the engine slot's reference exactly like a virtual
-   return. The shape is the same as the virtual callback apart from the leading
-   `method_userdata`.
-2. `call_func` converts borrowed argument Variants and writes an owning return
-   Variant through the same layer's Variant path, and reports
-   `CALL_ERROR_INVALID_ARGUMENT` instead of panicking.
+- `method_userdata` is null: the adapters are non-capturing and the class
+  instance arrives as `p_instance`.
+- `name` is the engine name; `method_flags` is the normal-method flag plus
+  `METHOD_FLAG_CONST` when the self parameter is `*const T` and
+  `METHOD_FLAG_STATIC` when the marker says static.
+- Each argument's `PropertyInfo` carries its registered name (`argName`), the
+  declared type's engine Variant type and engine class name from the internal
+  conversion layer, an empty hint string, and `.none` metadata. A `Variant`
+  argument or result registers as untyped `.nil` with
+  `PROPERTY_USAGE_NIL_IS_VARIANT` (131072); without that usage bit GDScript reads
+  the slot as `void` instead of `Variant`.
+- Return metadata exists only when the method returns a non-void value and is
+  `.none`; `default_argument_count` is zero and `default_arguments` is null (see
+  the vararg/default-argument rule above).
+- The engine copies the method name and every metadata table during the call, so
+  registration builds stack temporaries and allocates nothing.
 
-Registered methods are called by the engine, so their results are outgoing like
-virtual returns: use raw `?*T` for `RefCounted` results, not `Ref`. `Ref` results
-belong to surfaces where *we* receive the engine's reference (engine-method calls
-and property storage); see [ownership.md](ownership.md#the-model).
+Both call paths are mandatory and implemented together:
 
-Registration will validate each parameter and the return against both paths
-before registering; a signature that cannot support both is a compile error.
-Custom types with a `Conversion` marker are accepted wherever both paths are
-supported.
+1. `call_func` is the Variant path used by `Object.call`/`callv`, `Callable`,
+   signals, and dynamic GDScript dispatch. It checks the argument count
+   (`GDEXTENSION_CALL_ERROR_TOO_FEW_ARGUMENTS`/`..._TOO_MANY_ARGUMENTS` with
+   `expected` set to the method's engine argument count), then the instance (an
+   instance method with a null `p_instance` reports
+   `GDEXTENSION_CALL_ERROR_INSTANCE_IS_NULL`), then decodes one Variant per
+   argument. A null argument pointer or a Variant that does not hold the declared
+   representation reports `GDEXTENSION_CALL_ERROR_INVALID_ARGUMENT` with the
+   argument index and the expected Variant type. The return slot is set to
+   `Variant.nil` before dispatch and receives the encoded result on success.
+   Arguments decoded before a later mismatch are still released.
+2. `ptrcall_func` is the path a validated GDScript call uses. It decodes one raw
+   slot per argument and writes the return slot; it reports no errors because the
+   engine only compiles the validated call after matching the signature. The
+   engine has no ptrcall-to-call fallback, so both adapters are always
+   registered. `validated_call_func` is deliberately not implemented: the engine
+   falls back to `ptrcall_func`, which is the path a validated call takes.
 
-`call_func` is what `Object.call`/`callv`, `Callable`, signals, and dynamic
-GDScript dispatch use. `ptrcall_func` is what a validated GDScript call uses,
-and the engine has no ptrcall-to-call fallback, so registering one without the
-other produces a method that crashes on one of the two call sites.
+The adapters release every call-scoped decoded argument through the conversion
+layer after the user function returns, on the early-error paths too. Method
+arguments are therefore **borrowed for the call**: an implementation must not
+store, deinit, or transfer a decoded argument. The declaration gate already
+rejects the owning forms (see the argument rule in D4), so the release is a no-op
+for ordinary argument types and only releases adapter-managed copies of direct
+managed builtins and `Variant`. When the implementation needs to keep something,
+take the borrowed direct argument and own it explicitly:
 
-Static methods need `METHOD_FLAG_STATIC` for the same reason: the engine nulls
-the instance handle for static calls and dereferences it otherwise. It is
-derived, never written by the user.
+```zig
+// Field: resource: Property(godot.ownership.Ref(Resource), .{ ... })
+pub fn track(self: *@This(), resource: ?*godot.classes.core.Resource) void {
+    self.resource.value = godot.ownership.Ref(godot.classes.core.Resource).init(resource);
+}
+```
+
+Results are outgoing engine values, like virtual returns:
+
+- A raw `?*T` result is borrowed: the engine slot takes its own reference to a
+  `RefCounted` object (or its own copy of a builtin), so return an object you
+  keep alive elsewhere with `.get()`. `Ref` is not the return form for a borrowed
+  object.
+- An owned `RefCounted` result is declared as `godot.ownership.Ref(T)`: the
+  adapter encodes the object into the engine slot and then releases the returned
+  wrapper, so the engine keeps the slot's reference and the handle does not leak.
+- A managed builtin result is moved into the ptrcall slot and released after the
+  Variant encode.
+
+Owning wrappers are valid in the result position (and as `Property` storage and
+generated engine-method results); only the argument position is borrow-only.
+
+The ownership model for these call-scoped arguments and outgoing results is
+stated once in [ownership.md](ownership.md#the-model); the conversion layer's
+encoding direction is in [conversion.md](conversion.md#ownership-direction).
+
+Static methods need `METHOD_FLAG_STATIC` because the engine nulls the instance
+handle for static calls and dereferences it otherwise. The marker records
+staticness explicitly and signature validation checks the self parameter agrees;
+registration derives the engine flag from the marker.
 
 ### D5. Integer constants come from Zig enums and bitfields
 
@@ -322,8 +415,8 @@ abstractness from the resulting null creation function:
   notification dispatch, no virtual lookup.
 - Annotations that need an instance become compile errors: `Property` fields,
   `OnReady` fields, `Base` markers, `InitCallback`, `DeinitCallback`,
-  `NotificationCallback`, `get_virtual_func`, and any `Methods` entry with a
-  self parameter.
+  `NotificationCallback`, `get_virtual_func`, and any `Methods` entry not marked
+  `.is_static = true`.
 - What remains is the static surface: static methods, integer constants, and
   signals. This is also the useful case - a GDScript class can `extends` the
   abstract extension class, inherit that static surface, and `new()` is
@@ -362,12 +455,15 @@ godot.annotations.Constants(struct { ... }) // one constants marker
 godot.annotations.findConstants(T)       // constants discovery
 godot.annotations.ConstantEntry          // one discovered integer constant
 godot.annotations.PropertyGroups(.{ ... }) // one property-section tree
+godot.annotations.Methods(.{ ... })       // one class-level method container
+godot.annotations.Method(impl, options)   // one method declaration
+godot.annotations.findMethods(T)          // method discovery, one entry type per method
 godot.registration.classdb.postRegistrationCallback(T)
 godot.registration.PostRegistrationCallback
 godot.registration.ClassOptions.is_virtual
 
 // planned
-godot.annotations.Method(options)        // planned
+godot.registration.ClassOptions.is_abstract      // no-instance class mode (D6)
 godot.annotations.Constant(value, opts)  // optional override inside Constants
 ```
 
@@ -377,9 +473,10 @@ New files:
 |---|---|---|
 | `src/godot/annotations/signal.zig` | `Signal` marker, argument validation, discovery, typed `emit` | implemented |
 | `src/godot/annotations/constants.zig` | `Constants` marker, constant/enum/bitfield discovery, and enum/bitfield hint metadata | implemented |
-| `src/godot/registration/classdb.zig` | family gate, registration calls, copied argument metadata | implemented |
-| `src/godot/conversion.zig` (internal) | declared-type support/metadata queries, Variant-path conversion, converter bridge; direct ptrcall slots via `ptrcall.zig` | implemented |
-| `src/godot/annotations/method.zig` | `Method` marker, signature checks | planned |
+| `src/godot/annotations/methods.zig` | `Method`/`Methods` markers, discovery, signature validation, resolved entry types | implemented |
+| `src/godot/registration/methods.zig` | ClassDB method metadata and the `call_func`/`ptrcall_func` adapters | implemented |
+| `src/godot/registration/classdb.zig` | family gate and order (constants, signals, methods), registration calls, copied argument metadata | implemented |
+| `src/godot/conversion.zig` (internal) | declared-type support/metadata queries, Variant-path conversion, converter bridge, decoded-argument release, and the method-argument ownership gate; direct ptrcall slots via `ptrcall.zig` | implemented |
 
 The metadata queries these calls need come from the internal conversion layer:
 it derives a declared type's engine Variant type and engine class name (a
@@ -390,10 +487,10 @@ receives metadata; it does not compose a class-name lookup at the call site.
 Discovery follows the established shape: a `find*` function that scans the
 class's type declarations, filters on `marker.Kind` first, re-derives the family
 type and validates its shape, and returns a comptime slice in declaration order.
-Every declaration marker uses that identity: `signal`, `constants`,
+Every declaration marker uses that identity: `signal`, `methods`, `constants`,
 `property_groups`, and `override` for class-level declarations, plus the
 callback kinds; `Conversion` is the type-attached `conversion` marker. `Init` is
-not a marker. Identity and the 11-kind table are in
+not a marker. Identity and the 13-kind table are in
 [annotations.md](annotations.md#marker-identity).
 
 ## Registration pipeline
@@ -414,7 +511,7 @@ pub const RegisteredClass = struct {
 `PostRegistrationCallback` is
 `*const fn (interface.ClassLibraryPtr, *const builtins.StringName) void`. It
 lives in `registration/classdb.zig` - next to the code that produces it - and is
-re-exported by the registration module. The generated body composes the families
+re-exported by the registration module. One callback body composes the families
 internally, so adding one never changes the field.
 
 `godot.initialize` calls it directly after `classdb_register_extension_class6`,
@@ -429,16 +526,16 @@ if (class.post_registration_callback) |post_registration| {
 
 Order inside the per-class function:
 
-1. methods (`..._method`), once they exist
-2. integer constants (`..._integer_constant`)
-3. signals (`..._signal`)
+1. integer constants (`..._integer_constant`)
+2. signals (`..._signal`)
+3. methods (`..._method`)
 
-The implemented slice runs constants then signals; methods will be prepended
-when they land. Constants and signals have no dependency on each other - only
-static properties will need methods to run first. Signal argument names, Variant
-types, and engine class names are expanded at comptime through the internal
-conversion layer; the engine copies the resulting metadata, so no per-value
-conversion happens during registration.
+Constants, signals, and methods are independent registrations today; the order
+is the family list in `registration/classdb.zig` and a future static-property
+surface must run after methods. Argument names, Variant types, and engine class
+names are expanded at comptime through the internal conversion layer; the engine
+copies the resulting metadata, so no per-value conversion happens during
+registration.
 
 Groups and dynamic properties are part of `ClassCreationInfo6` and are not
 registered here. `classdb_unregister_extension_class` drops the class and its
@@ -452,20 +549,27 @@ per-class static.
 
 ## Verification
 
-Discovery, metadata expansion, and the conversion contract are covered by
-compile-only checks and unit tests under `zig build test-godot`
-(`tests/conversion.zig` pins declared-type support/metadata and the Variant path;
-`tests/ptrcall.zig` pins the direct slot rules; the annotation tests pin
-discovery and declaration errors). The optional
+Discovery, metadata expansion, the call adapters, and the conversion contract are
+covered by compile-only checks and unit tests under `zig build test-godot`
+(`tests/conversion.zig` pins declared-type support/metadata, the Variant path,
+the decoded-argument release helper, and the method-argument ownership gate;
+`tests/ptrcall.zig` pins the direct slot
+rules; the annotation tests pin discovery and declaration errors, including
+method flattening, argument names, signature shape, and borrow-like arguments;
+`tests/registration` pins
+method flags, metadata/adapter analysis, the error reports, and the release
+counts for scalar and converter result signatures). The optional
 [`test-godot-live`](build.md#live-godot-tests) step verifies registration
-metadata for the live fixture classes in a headless Godot process; other
-class-level surfaces and editor-only behavior remain compile-only or manual.
+metadata and calls for the live fixture classes in a headless Godot process;
+other class-level surfaces and editor-only behavior remain compile-only or
+manual.
 
 ## Non-goals
 
 - no static property backend for instanced classes (D1)
 - no generator or bindings changes (D7)
 - no vararg methods or default arguments (D4)
+- no `validated_call_func` registration; the engine falls back to `ptrcall_func`
 - no `classdb_register_extension_class_virtual_method` (D6)
 - no extension-to-extension inheritance, which Godot 4 does not support
 - no automatic registration of a class's Zig methods, enums, or signals:

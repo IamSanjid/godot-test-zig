@@ -7,9 +7,9 @@ states the rule once; pages that use it link here instead of restating it.
 
 | Type | Semantics | Use |
 |---|---|---|
-| `godot.ownership.Ref(T)` | Shared, reference-counted: owns exactly one engine reference to `T`, a `RefCounted` class or a subclass. `deinit` releases it; the last release destroys the object. | Engine-method results, `Property` storage, any owned `RefCounted` value. |
+| `godot.ownership.Ref(T)` | Shared, reference-counted: owns exactly one engine reference to `T`, a `RefCounted` class or a subclass. `deinit` releases it; the last release destroys the object. | Engine-method results, `Property` storage, any owned `RefCounted` value. Not a method argument. |
 | `godot.ownership.Owned(T)` | Exclusive manual ownership: owns one non-`RefCounted` object and `deinit` destroys it through `Object.destroy`. There is no reference count. | Only unparented objects that nothing else owns. Never for tree-owned nodes or any object already handed to the engine. |
-| `?*T` / `*T` | Borrowed for the current call; this code owns nothing. | Arguments, virtual returns, container element views, `get()` reads. |
+| `?*T` / `*T` | Borrowed for the current call; this code owns nothing. | Arguments, virtual and method returns, container element views, `get()` reads. |
 | `godot.annotations.Base(T)` | Borrowed parent view installed on the extension instance by registration. | Reaching the engine base from an extension class. Never deinitialize it. |
 
 - Both handles are pointer-sized and pointer-aligned. `Ref(T)` requires `T` to be
@@ -17,9 +17,11 @@ states the rule once; pages that use it link here instead of restating it.
   `RefCounted` (compile error otherwise).
 - `Ref(T)` is the only ownership handle with a declared conversion: engine type
   `?*T`, both paths, `from_engine` retains. That is what makes it valid as a
-  `Property` value or a `Signal` argument. `Owned(T)` deliberately has no
-  `Conversion` marker and cannot be property or signal storage; pass `.get()` as
-  a raw borrowed pointer or `.take()` to hand the object on.
+  `Property` value, a `Signal` argument, and an owned method result. It is not a
+  method argument: arguments are call-scoped borrowed, so the method signature
+  gate rejects `Ref(T)` (see the method bullet below). `Owned(T)` deliberately has
+  no `Conversion` marker and cannot be property or signal storage; pass `.get()`
+  as a raw borrowed pointer or `.take()` to hand the object on.
 - Storage says its policy in the type: a `Property` field that keeps a
   `RefCounted` value declares `Ref(T)`; a raw `RefCounted` pointer is a compile
   error. Non-`RefCounted` object pointers stay raw and borrowed because the
@@ -32,6 +34,16 @@ states the rule once; pages that use it link here instead of restating it.
   `RefCounted` returns: the engine's return slot takes the object itself
   (engine-owned reference storage), so no wrapper is handed over or released.
   See [virtuals.md](virtuals.md#refcounted-arguments-and-returns).
+- Registered extension methods are called by the engine, so their results are
+  outgoing values like virtual returns, but the declared form can express owned
+  results: a raw `?*T` result is borrowed; an owned `RefCounted` result is
+  `Ref(T)`, which the method adapter releases after encoding into the engine slot.
+  Method arguments are **borrow-only** and the signature gate enforces it: direct
+  types are accepted, while `Ref(T)`, typed container wrappers, and converters
+  whose decode or engine representation owns storage are compile errors as
+  arguments. Declare the borrowed raw form and take ownership inside the
+  implementation (`Ref(T).init(borrowed)` to keep a reference). See
+  [classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container).
 - Copies of a `Ref` alias the same reference. Keep one wrapper per reference:
   use `clone()` (or `init(borrowed)`) to take another reference instead of
   copying a wrapper you will also deinit. `Owned` has no copy step: move it with
@@ -190,8 +202,8 @@ details stay internal:
   deinitialized. See [variants.md](variants.md).
 - RefCounted ptrcall slots are engine-owned reference storage. An argument slot
   is borrowed for the call, and a return slot takes its own reference when
-  written. Virtual callbacks and converters use that rule and never write raw
-  object pointers into a reference slot; the rules are stated in
+  written. Virtual callbacks, method callbacks, and converters use that rule and
+  never write raw object pointers into a reference slot; the rules are stated in
   [conversion.md](conversion.md#ptrcall-path) and
   [virtuals.md](virtuals.md#refcounted-arguments-and-returns).
 - A generated engine-method `Ref(T)` result, a successful `construct()`, and a
@@ -222,5 +234,7 @@ from `Base.construct()` owns that decision.
 - [virtuals.md](virtuals.md#refcounted-arguments-and-returns) - callback argument
   and return rules.
 - [collections.md](collections.md#ownership) - owning container wrappers.
+- [classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container) -
+  registered method argument and result policy.
 - [registration.md](registration.md#instance-lifecycle) - create-instance and
   free-instance lifecycle.

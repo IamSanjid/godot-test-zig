@@ -1,5 +1,5 @@
-//! Class-level ClassDB registration: a class's integer constants and signals,
-//! run from the post-registration hook. See docs/classdb.md.
+//! Class-level ClassDB registration: a class's integer constants, signals, and
+//! methods, run from the post-registration hook. See docs/classdb.md.
 
 /// Runs class-level registration for one class. It is specialized per class and
 /// erased to this shape so `RegisteredClass` can store it without knowing the
@@ -13,13 +13,15 @@ pub const PostRegistrationCallback = *const fn (
 /// class-level metadata. The family list lives here because this module owns
 /// the registration order.
 pub fn postRegistrationCallback(comptime T: type) ?PostRegistrationCallback {
-    if (comptime annotations.findSignals(T).len == 0 and
+    if (comptime annotations.findMethods(T).len == 0 and
+        annotations.findSignals(T).len == 0 and
         annotations.findConstants(T).len == 0) return null;
 
     return &struct {
         fn f(library: interface.ClassLibraryPtr, class_name: *const builtins.StringName) void {
             registerConstants(T, library, class_name);
             registerSignals(T, library, class_name);
+            methods.registerMethods(T, library, class_name);
         }
     }.f;
 }
@@ -137,3 +139,4 @@ const annotations = @import("../annotations/annotations.zig");
 const builtins = @import("../builtins/builtins.zig");
 const conversion = @import("../conversion.zig");
 const runtime = @import("../runtime.zig");
+const methods = @import("methods.zig");

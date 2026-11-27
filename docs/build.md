@@ -60,10 +60,10 @@ a real Godot process. It is separate from the unit suites and is not part of
   cross-target request fails with a diagnostic.
 - It builds a dynamic library named `test_extension` from
   `src/godot/tests/live/entrypoint.zig`. That file only exports the entry symbol
-  and registers fixture classes; `live_node.zig`, `live_owned_node.zig`,
-  `live_typed_node.zig`, and `live_resource.zig` hold the fixture classes. The
-  directory is a separate dynamic-library source tree and is not imported by
-  `src/godot/tests/all.zig`.
+  and registers fixture classes; `live_node.zig`, `live_methods.zig`,
+  `live_owned_node.zig`, `live_typed_node.zig`, and `live_resource.zig` hold the
+  fixture classes. The directory is a separate dynamic-library source tree and is
+  not imported by `src/godot/tests/all.zig`.
 - The build installs the library into the gitignored `godot-test/lib/` (plus the
   PDB on Windows) using an artifact install override. The destination is
   relative to the default install prefix (`zig-out`), so run this step with the
@@ -87,12 +87,16 @@ a real Godot process. It is separate from the unit suites and is not part of
   `SUITES` array, prints each failure as `LIVE TEST FAILED [suite]: message`,
   and sets the exit code. Suites extend `tests/test_case.gd` and live directly
   under `tests/`; add a new suite by adding its script to `SUITES`.
-- The live extension registers four fixture classes. `LiveNode` (extends
+- The live extension registers five fixture classes. `LiveNode` (extends
   `Node`) has properties `health` (range hint `0,100`), `label` (String, initial
   `"live"`), and `mode` (enum hint; `Mode { idle, running = 3 }`), group `Live`,
   signals `pinged(health: int)` and `signaled(text, numbers, payload, transform,
   count)`, and integer constants `MAX_HEALTH = 100` and the
-  `Mode` enum (`IDLE`, `RUNNING = 3`). `LiveTypedNode` (extends `Node`) has
+  `Mode` enum (`IDLE`, `RUNNING = 3`). `LiveMethods` (extends `Node`) declares
+  instance, const, and static methods, a managed `String` result, borrowed raw
+  and owned `Ref(Resource)` results, an untyped `Variant`, and a converter
+  argument (`shift(Duration)`), all through one `Methods` container.
+  `LiveTypedNode` (extends `Node`) has
   wrapper-typed container properties `numbers` (`godot.collections.Array(i32)`),
   `resources` (`Array(?*LiveResource)`), and `scores`
   (`Dictionary(String, i32)`); its creation callback fills the wrappers and
@@ -107,17 +111,21 @@ a real Godot process. It is separate from the unit suites and is not part of
   with `Owned.take()` as a child. `LiveResource` (extends `Resource`) is the
   object element class and has one exported scalar property.
 - The GDScript suites check class existence, instantiate/free, property list
-  metadata, signal metadata and delivery, constants, default/set/get values, the
-  auto-derived container hint strings, engine-side container typing, container
-  and `Ref` property set/get round-trips, and the `Owned` deinit/take outcomes.
+  metadata, signal metadata and delivery, method metadata and calls (direct,
+  `Object.call`, `Callable`, const/static, the registered signature and
+  `PROPERTY_USAGE_NIL_IS_VARIANT` metadata, borrowed raw vs owned `Ref` results,
+  converter arguments, and the rejected-call error paths), constants,
+  default/set/get values, the auto-derived container hint strings, engine-side
+  container typing, container and `Ref` property set/get round-trips, and the
+  `Owned` deinit/take outcomes.
 
-The step covers headless registration, property/signal/constant metadata,
-signal emit delivery, wrapper-typed container and owned-`Ref` property hints,
-typing, and round-trips, and the `Owned` manual-ownership paths. It does not
-cover inspector rendering, hot reload, virtual callbacks, or gameplay paths;
-those still need a manual engine or editor run. Like `zig build`, it consumes
-generated sources and does not regenerate them; run `zig build gen` first on a
-fresh checkout.
+The step covers headless registration, property/signal/constant/method metadata,
+signal emit delivery, method calls on both call paths, wrapper-typed container and
+owned-`Ref` property hints, typing, and round-trips, and the `Owned`
+manual-ownership paths. It does not cover inspector rendering, hot reload,
+virtual callbacks, or gameplay paths; those still need a manual engine or editor
+run. Like `zig build`, it consumes generated sources and does not regenerate
+them; run `zig build gen` first on a fresh checkout.
 
 ## Reusing `build/godot.zig`
 

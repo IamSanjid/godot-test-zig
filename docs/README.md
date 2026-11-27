@@ -4,9 +4,10 @@ Start with the repository [README](../README.md) and [CONTEXT](../CONTEXT.md),
 then use these pages by task.
 
 Status: declared-type conversion, properties (including wrapper-typed containers
-and container hints), signals, virtuals, integer constants, and the
-`godot.collections` typed wrappers are implemented. Methods are the next engine
-surface; their design is in [classdb.md](classdb.md).
+and container hints), signals, methods (declaration, registration, and both call
+adapters), virtuals, integer constants, and the `godot.collections` typed wrappers
+are implemented. Abstract classes (`is_abstract`) are the next engine surface;
+their design is in [classdb.md](classdb.md).
 
 ## Building and template work
 
@@ -38,9 +39,9 @@ surface; their design is in [classdb.md](classdb.md).
   argument conversion.
 - [callables.md](callables.md) - custom callable design: Zig closures as engine
   `Callable`s, identity, and typed connect.
-- [classdb.md](classdb.md) - class-level surfaces: implemented signals,
-  integer constants, property groups, and enum/bitfield hints, plus designs for
-  methods and class modes.
+- [classdb.md](classdb.md) - class-level surfaces: implemented signals, integer
+  constants, methods, property groups, and enum/bitfield hints, plus the class
+  modes (`is_virtual` implemented; `is_abstract` designed).
 - [ownership.md](ownership.md) - the `Ref`/`Owned`/borrowed ownership model,
   typed construction and create-instance handoff, and the retain/release
   primitives.

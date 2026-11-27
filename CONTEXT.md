@@ -74,11 +74,20 @@ runtime rules that shape this code:
   are untouched, and
   `InitCallback` owns everything it created (known leak limitation on the
   init-failure path; revisit only with initialized-field tracking).
-- Virtual callback arguments and returns are raw borrowed pointers: the engine
-  return slot is `RefCounted` reference storage and takes the returned object.
+- Virtual callback arguments and returns use engine-defined types: object
+  pointers are raw borrowed; by-value builtins/`Variant` are borrowed aliases.
+  The engine return slot is `RefCounted` reference storage and takes the
+  returned object.
   A fresh constructed return moves its creation reference out through a local
   wrapper (`var value = Class.construct(); return value.take();`); calling
   `.take()` on the temporary does not compile.
+- Registered extension methods are called by the engine, so a raw `?*T` result
+  is borrowed and an owned `RefCounted` result is declared as `Ref(T)`, which the
+  method adapter releases after encoding into the engine slot. Method arguments
+  are borrow-only and the signature gate enforces it: direct types are accepted,
+  while `Ref(T)`, typed container wrappers, and converters whose decode or engine
+  representation owns storage are compile errors as arguments. Declare the
+  borrowed direct type and wrap inside the implementation.
 - Signal emit borrows a call-scoped `Variant` view for inline/plain values,
   managed inline builtins, `Variant`, and object pointers, `RefCounted` included;
   borrowed object views pin no reference, so the Zig caller must keep its own
@@ -102,7 +111,7 @@ src/godot/                hand-written runtime plus generated subtrees
   ptrcall.zig             internal direct ptrcall object-slot rules (RefCounted reference slots, extension base/instance)
   heap.zig                engine-backed allocator
   ownership.zig           Ref/Owned handles, typed-construct ownership, and engine-object retain/release primitives
-  conversion.zig          internal declared-type support, Variant-path conversion, converter bridge, borrowability
+  conversion.zig          internal declared-type support, Variant-path conversion, converter bridge, borrowability, and the method-argument ownership gate
   collections.zig         typed owning Array/Dictionary wrappers; declared conversion types
   reflect/                type, hierarchy, object, and function helpers
     reflect.zig
@@ -127,6 +136,7 @@ src/godot/                hand-written runtime plus generated subtrees
     notification_callback.zig
     override.zig
     signal.zig
+    methods.zig           Method/Methods markers, discovery, signature validation
     constants.zig
     internal/SafeGuard.zig
   registration/           optional lifecycle, virtual, property, and class-level registration
@@ -138,6 +148,7 @@ src/godot/                hand-written runtime plus generated subtrees
     virtuals.zig
     property.zig
     classdb.zig
+    methods.zig           method metadata registration and call/ptrcall adapters
   bindings/               bindgen output + hand-written bindings.zig module root
   classes/                codegen class output (generated)
   builtins/               hand-written and generated builtins
@@ -161,6 +172,7 @@ src/godot/                hand-written runtime plus generated subtrees
     registration/         tests mirroring the registration modules
     live/                 separate dynamic-library tree for test-godot-live; not in all.zig
       entrypoint.zig      entry symbol; registers fixture classes
+      live_methods.zig    LiveMethods engine-method fixture class
       live_node.zig       LiveNode fixture class
       live_owned_node.zig LiveOwnedNode Owned-handle fixture class
       live_resource.zig   LiveResource object-element fixture class
@@ -181,6 +193,7 @@ godot-test/               committed minimal Godot 4.8 project for test-godot-liv
     test_case.gd          shared failures/check/suite-name base
     classdb.gd            registration, signals, constants
     collections.gd        typed container metadata, typing, and round-trips
+    methods.gd            method metadata, both call paths, results, error reports
     ownership.gd          Owned deinit/take and Ref property paths
     properties.gd         property metadata and value round-trips
     signals.gd            signal emit delivery, including borrowed arguments
@@ -200,10 +213,10 @@ conversion primitives, the converter bridge, and borrowed-Variant helpers; its
 direct ptr path delegates to `ptrcall.zig`. It owns the `Conversion` marker
 support policy; the marker itself is `annotations/conversion.zig`, exported as
 `godot.annotations.Conversion`. Property registration, virtual callbacks,
-signal registration/emit, and the typed container wrappers use it, and methods
-will. `conversion.zig` and `ptrcall.zig` are not re-exported by the facade: the
-only non-test path is the surface APIs, and tests reach them through the
-test-only `godot.internal` hook.
+signal registration/emit, method validation/registration/adapters, and the typed
+container wrappers use it. `conversion.zig` and `ptrcall.zig` are not
+re-exported by the facade: the only non-test path is the surface APIs, and tests
+reach them through the test-only `godot.internal` hook.
 `collections.zig` is the typed container module: `Array(T)` and
 `Dictionary(K, V)` each own one engine handle, convert elements through the
 internal conversion layer, and set the engine typing metadata once with
@@ -260,15 +273,17 @@ discovery, and cleanup internals; `godot.annotations.constants` exposes the
 `Constants` internals and type-hint helpers (`typeHint`, `findEnumName`). The
 flat exports
 (`Property`, `PropertyGroups`, `Constants`, `ConstantEntry`, `findConstants`,
+`Signal`, `findSignals`, `Method`, `Methods`, `findMethods`,
 `initPropertyFields`, `deinitPropertyFields`, ...) remain the declaration and
 lifecycle API that user classes and registration call. `marker`
 (`marker.Kind`, `kindOf`, `is`) is also exported for marker-identity checks.
 Every annotation family declares `pub const marker = marker.Kind.<family>`: the
 field wrappers `Base`/`OnReady`/`Property`, and the declaration/type markers
-`InitCallback`/`DeinitCallback`/`NotificationCallback`/`Signal`/`Constants`/
-`PropertyGroups`/`Override`/`Conversion`. Discovery checks the kind and the
-family's structural shape. `Init` is not a marker; Base discovery stays
-structural in `reflect/base.zig` so it can run without annotations.
+`InitCallback`/`DeinitCallback`/`NotificationCallback`/`Signal`/`Method`/
+`Methods`/`Constants`/`PropertyGroups`/`Override`/`Conversion`. Discovery checks
+the kind and the family's structural shape. `Init` is not a marker; Base
+discovery stays structural in `reflect/base.zig` so it can run without
+annotations.
 
 ## Bootstrap
 
@@ -407,6 +422,9 @@ godot.annotations.Base(Extends)
 godot.annotations.Override("_get_cursor_shape", fn)
 godot.annotations.Signal("health_changed", .{ .{ "health", i32 }, .{ "duration", Duration } })
 godot.annotations.findSignals(T)
+godot.annotations.Methods(.{ ... })
+godot.annotations.Method(impl, options)
+godot.annotations.findMethods(T)
 godot.annotations.Constants(struct { ... })
 godot.annotations.findConstants(T)
 godot.annotations.ConstantEntry
@@ -421,6 +439,7 @@ godot.registration.RecreateInstance
 godot.registration.FreeInstance
 godot.registration.virtuals
 godot.registration.classdb
+godot.registration.methods
 godot.registration.Notification
 godot.registration.notification
 godot.registration.PostRegistrationCallback
@@ -463,12 +482,17 @@ Contracts: [properties.md](docs/properties.md#property-groups),
 [signals.md](docs/signals.md#registration).
 
 After the class itself, `Registry`'s per-class `post_registration_callback`
-registers the class's `Signal` declarations and `Constants` markers (integer
-constants, enums, bitpack flags); it is null when the class declares neither.
-That callback is invoked by `godot.initialize`, never passed to the engine.
-Signal argument names stay engine names, while each argument's `PropertyInfo`
-type and class name come from the internal conversion layer (`Variant` registers
-as untyped `.nil`).
+registers the class's integer constants (`Constants` markers), `Signal`
+declarations, and `Method`/`Methods` entries; it is null when the class declares
+none. That callback is invoked by `godot.initialize`, never passed to the engine.
+The order is fixed: constants, signals, methods
+([docs/classdb.md](docs/classdb.md#registration-pipeline)). Signal and method
+argument names stay engine names, while each argument's `PropertyInfo` type and
+class name come from the internal conversion layer (`Variant` registers as
+untyped `.nil`; a `Variant` method argument/result also sets
+`PROPERTY_USAGE_NIL_IS_VARIANT`). A method registers one
+`GDExtensionClassMethodInfo` with both `call_func` and `ptrcall_func`;
+`validated_call_func` stays null because a validated call falls back to ptrcall.
 
 Extension instance creation builds the base with `Base.construct()`, which
 returns the base's typed handle (`Ref(Base)` for a `RefCounted` base,
@@ -512,10 +536,15 @@ for inline/plain values, managed inline builtins, `Variant`, and object pointers
 synchronous dispatch), and builds owning Variants (deinitialized after dispatch)
 only for engine-owned storage: heap-backed builtins, packed arrays, and
 managed-engine converters. The declared Zig values keep their own ownership.
-Zig methods and static ClassDB properties are
-not registered for GDScript yet. Adding those surfaces is deliberate work, not
-an implicit side effect of registering a class; the design is in
-[docs/classdb.md](docs/classdb.md). Property lifetime is explicit per field:
+Zig methods are registered as class-level metadata and callable from GDScript
+through both call paths; their arguments are call-scoped borrowed (the signature
+gate rejects owning forms), a raw `?*T` result is borrowed, and an owned
+`RefCounted` result is `Ref(T)` (the adapter releases the wrapper). Static ClassDB
+properties are not registered, and `is_abstract` is the next class-mode surface.
+Adding those
+surfaces is deliberate work, not an implicit side effect of registering a class;
+the design is in [docs/classdb.md](docs/classdb.md). Property lifetime is
+explicit per field:
 `.set` and `.deinit` accept `.best_effort` or a function; a custom `.deinit`
 hook is `fn (*Owner, *T) void`, and non-trivial value types
 must declare `.deinit` and (unless read-only) `.set`. `RefCounted` storage uses
@@ -551,15 +580,17 @@ opt-in through `ClassOptions.auto_property_cleanup` or a manual
   the gitignored `godot-test/lib/`, and runs `godot-test/run_tests.gd`
   headlessly. The Godot process exit code is the step result. It covers
   headless ClassDB registration metadata (class existence, instantiate/free,
-  properties, signals, constants), signal emit delivery, wrapper-typed container
+  properties, signals, constants, methods) and their calls through both method
+  call paths, signal emit delivery, wrapper-typed container
   hint metadata, engine typing, and set/get round-trips, and the `Owned`
   deinit/take paths, not editor-only inspector rendering or hot reload.
 - Annotations are optional. Missing annotations do not prevent registration.
 - Every annotation family uses the same `marker.Kind` identity: field wrappers
   (Base/OnReady/Property) and declaration or type markers (InitCallback,
-  DeinitCallback, NotificationCallback, Signal, Constants, PropertyGroups,
-  Override, Conversion). Discovery checks the kind and still applies the family's
-  structural shape validation; the kind is identity, not payload validation.
+  DeinitCallback, NotificationCallback, Signal, Method, Methods, Constants,
+  PropertyGroups, Override, Conversion). Discovery checks the kind and still
+  applies the family's structural shape validation; the kind is identity, not
+  payload validation.
   `Init` is not a marker, and Base discovery stays structural in
   `reflect/base.zig` so `Variant` and registration can run without annotations.
 - `ownership.zig` defines the `Ref` shared handle (declared conversion type) and
@@ -572,9 +603,11 @@ opt-in through `ClassOptions.auto_property_cleanup` or a manual
   `registration` import. The codegen <-> ownership cycle is intentional; see
   [docs/architecture.md](docs/architecture.md#dependency-direction).
 - `conversion.zig` is the internal conversion layer for properties, signals,
-  virtuals, typed container element conversion, and future methods: declared-type
-  support, engine/Variant type and class name, borrowability, and the Variant-path
-  conversion primitives live there, not in each surface. Its direct ptrcall path
+  virtuals, methods, and typed container element conversion: declared-type
+  support, engine/Variant type and class name, borrowability, the Variant-path
+  conversion primitives, the decoded-argument release helper, and the
+  method-argument ownership gate live there, not in each surface. Its direct
+  ptrcall path
   delegates to `ptrcall.zig`, which owns the `RefCounted` reference-slot and
   extension base/instance rules; `abi.zig` stays a dependency-free leaf for
   canonical scalar/builtin slot layout only. Neither `conversion.zig` nor
@@ -601,7 +634,8 @@ opt-in through `ClassOptions.auto_property_cleanup` or a manual
   `gpa` are inputs, not policy.
 - No per-virtual user wrappers. User classes declare normal Zig methods matching
   the generated virtual signature.
-- Virtual signatures stay raw borrowed pointers, including for `RefCounted`
+- Virtual signatures stay engine-defined: object pointers are raw borrowed,
+  builtins/`Variant` are borrowed by-value aliases. This includes `RefCounted`
   objects: the engine slot is `RefCounted` reference storage and takes the
   returned object, so the callback hands over no wrapper. A fresh constructed
   return moves the creation reference out through a local wrapper:
@@ -611,12 +645,15 @@ opt-in through `ClassOptions.auto_property_cleanup` or a manual
   not implemented yet.
   [docs/classdb.md](docs/classdb.md#d6-is_virtual-is-a-tooling-flag-only-is_abstract-removes-instances)
   owns the distinction and the ordering.
-- Next engine surfaces, in order: methods (`Method`/`Methods` registration plus
-  call and ptrcall adapters), abstract classes (`is_abstract`), and callables.
-  Typed container wrappers already have a ptrcall representation through their
-  marker; method argument-release handling for decoded owned values is deferred
-  until methods consume containers. Virtual signatures use engine-defined types,
-  so a converter cannot appear there and no virtual release path is needed.
+- Next engine surfaces, in order: abstract classes (`is_abstract`) and callables.
+  Methods are implemented end to end: declarations, discovery, signature
+  validation, ClassDB registration, and both call adapters, with the live methods
+  suite as engine coverage. Method arguments are borrow-only (the signature gate
+  rejects owning wrappers and owned-engine converters) and the adapters release
+  the remaining decodes; a raw `?*T` result is borrowed and an owned `RefCounted`
+  result is `Ref(T)` (the adapter releases the wrapper). Virtual signatures use
+  engine-defined types, so a converter cannot appear there and no virtual release
+  path is needed.
 - The class-file scanner writes only the configured `*.gen.zig` module; it is
   generated by `zig build gen` (or `zig build scan`) and never edited by hand.
 - Template generation is not implemented yet. The planned contract is in

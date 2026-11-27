@@ -18,6 +18,7 @@ export fn test_extension_init(
 
     godot.registry().addClasses(
         .{
+            live_methods.LiveMethods,
             live_node.LiveNode,
             live_owned_node.LiveOwnedNode,
             live_resource.LiveResource,
@@ -38,6 +39,7 @@ const std = @import("std");
 const godot = @import("godot");
 const gdi = godot.bindings.interface;
 
+const live_methods = @import("live_methods.zig");
 const live_node = @import("live_node.zig");
 const live_owned_node = @import("live_owned_node.zig");
 const live_resource = @import("live_resource.zig");

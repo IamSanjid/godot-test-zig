@@ -13,9 +13,10 @@ internal conversion layer; see
 [conversion.md](conversion.md). It is also a **declared conversion type**: a
 `Conversion` marker maps it to the engine `builtins.Array`/`builtins.Dictionary`
 on both the Variant and ptrcall paths, so a wrapper can be a
-[`Property`](properties.md#typed-container-hints) value and a method or virtual
-argument once those surfaces consume values. Each wrapper declares `Element`
-(or `Key`/`Value`) so container hints derive automatically.
+[`Property`](properties.md#typed-container-hints) value, a signal argument, and a
+method result. It is not a method argument: method arguments are borrow-only, so
+the signature gate rejects an owning wrapper decode. Each wrapper declares
+`Element` (or `Key`/`Value`) so container hints derive automatically.
 
 Status: the wrappers, their declared conversion, engine typing metadata,
 wrapper-typed properties with auto hints, and headless live coverage are
@@ -65,8 +66,10 @@ conversion layer:
   wrapper's own handle is untouched either way.
 - The bridge's reverse direction **retains**: the Variant path releases its
   intermediate after decoding, and the ptrcall path passes a borrowed slot
-  value. A decoded wrapper therefore owns one reference its consumer must release
-  through `deinit`; nothing releases decoded values automatically. See
+  value. A decoded wrapper therefore owns one reference. A method signature
+  rejects a wrapper argument because its decode owns a reference, so every
+  consumer must release its decode through `deinit`; nothing releases decoded
+  values automatically. See
   [conversion.md](conversion.md#ownership-direction) and
   [ownership.md](ownership.md).
 - Public `fromEngine` takes over an already owned handle: the caller passes a
@@ -282,12 +285,11 @@ dict.setTypedAs(.string, null, null, .int, null, null);
 
 ## Not in this version
 
-- No automatic release of decoded container arguments: wrappers have a ptrcall
-  representation through their marker, but no method surface consumes a wrapper
-  argument yet. Virtual signatures are engine-defined, so converters cannot
-  appear there. When methods land, the decoded wrapper owns one reference and the
-  method adapter must release it through `deinit`; that argument-release policy
-  is deferred with methods.
+- No automatic release of decoded container values: a wrapper decoded by the
+  property backend is stored under the field's `.set` mode and released by its
+  `.deinit`. Method arguments are borrow-only, so a wrapper is never released
+  automatically by an adapter; virtual signatures are engine-defined, so a
+  converter cannot appear there.
 - No automatic typing of a container assigned through an engine property set:
   the hint is metadata, and the stored container keeps its own typing. Create
   typed containers with `init()` or `setTyped`/`setTypedAs`.

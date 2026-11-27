@@ -1,8 +1,8 @@
 //! Contract checks and compile-only coverage for `godot.internal.conversion`.
 //!
-//! Compile-only analysis instantiates every encode/decode primitive; the runtime
-//! tests only touch scalar Variant and ptrcall slots, which need no engine
-//! initialization.
+//! Compile-only analysis instantiates every encode/decode/borrow/release
+//! primitive; the runtime tests only touch scalar Variant and ptrcall slots and
+//! the scalar-engine release probe, which need no engine initialization.
 
 /// Scalar engine type; both conversion functions are exercised by the analysis
 /// and by the scalar runtime round-trips below.
@@ -102,6 +102,44 @@ const Numbers = struct {
         return .{ .count = 0 };
     }
 };
+
+/// Probe converter whose declared type owns decoded storage: `deinit` must run
+/// on both paths. The scalar engine type keeps the probe engine-free.
+const ProbeOwned = struct {
+    releases: *usize,
+
+    pub const GodotConversion = Conversion(.{
+        .engine = i32,
+        .to_engine = toEngine,
+        .from_engine = fromEngine,
+    });
+
+    fn toEngine(self: ProbeOwned) i32 {
+        _ = self;
+        return 0;
+    }
+
+    fn fromEngine(_: i32) ProbeOwned {
+        return .{ .releases = &probe_release_count };
+    }
+
+    pub fn deinit(self: *ProbeOwned) void {
+        self.releases.* += 1;
+    }
+};
+
+/// Direct pointer target declaring `deinit`: a raw single-item pointer is a
+/// direct ptrcall type, so releasing the decoded pointer must not reach it.
+const ProbeDirect = struct {
+    releases: *usize,
+
+    pub fn deinit(self: *ProbeDirect) void {
+        self.releases.* += 1;
+    }
+};
+
+/// Incremented by the probe `deinit`s; each probe test resets it.
+var probe_release_count: usize = 0;
 
 /// Canonical scalar classifications for borrowed-Variant coverage.
 const Mode = enum(i32) { idle, running = 3 };
@@ -295,6 +333,12 @@ fn expectBorrowable(comptime T: type, comptime expected: bool) void {
     }
 }
 
+fn expectMethodArgument(comptime T: type, comptime expected: bool) void {
+    if (comptime conversion.methodArgumentIsBorrowed(T) != expected) {
+        @compileError("Unexpected method-argument borrowability for " ++ @typeName(T));
+    }
+}
+
 fn expectCanBorrow(comptime T: type, comptime expected: bool) void {
     if (comptime godot.builtins.Variant.canBorrow(T) != expected) {
         @compileError("Unexpected Variant wrap capability for " ++ @typeName(T));
@@ -442,6 +486,45 @@ fn checkBorrowContract() void {
     expectCanBorrow(?*anyopaque, false);
 }
 
+/// Method-argument ownership gate: direct types are call-scoped borrowed, and a
+/// converter qualifies only when its decoded value and engine representation own
+/// nothing.
+fn checkMethodArgumentContract() void {
+    @setEvalBranchQuota(1_000_000);
+
+    // Direct types: the adapter releases any Variant-path decode after the call.
+    expectMethodArgument(i32, true);
+    expectMethodArgument(godot.builtins.String, true);
+    expectMethodArgument(godot.builtins.Array, true);
+    expectMethodArgument(godot.builtins.PackedByteArray, true);
+    expectMethodArgument(godot.builtins.Variant, true);
+    expectMethodArgument(?*godot.classes.core.Node, true);
+    expectMethodArgument(?*godot.classes.core.RefCounted, true);
+    expectMethodArgument(*i32, true);
+    expectMethodArgument(?*anyopaque, true);
+
+    // Converters: scalar and non-`RefCounted` object representations are
+    // borrowed; a declared `deinit` or owned engine storage is rejected.
+    expectMethodArgument(Duration, true);
+    expectMethodArgument(NodeRef, true);
+    expectMethodArgument(ProbeOwned, false);
+    expectMethodArgument(Label, false);
+    expectMethodArgument(ResourceRef, false);
+    expectMethodArgument(Numbers, false);
+    expectMethodArgument(godot.ownership.Ref(godot.classes.core.Resource), false);
+    expectMethodArgument(collections.Array(i32), false);
+    expectMethodArgument(collections.Dictionary(godot.builtins.String, i32), false);
+
+    // Valid types pass the contextual gate; the rejected shapes above are
+    // compile errors and cannot be instantiated here.
+    conversion.checkMethodArgument(i32, "test direct argument");
+    conversion.checkMethodArgument(godot.builtins.String, "test managed builtin argument");
+    conversion.checkMethodArgument(godot.builtins.Variant, "test Variant argument");
+    conversion.checkMethodArgument(?*godot.classes.core.Node, "test object pointer argument");
+    conversion.checkMethodArgument(Duration, "test scalar-converter argument");
+    conversion.checkMethodArgument(NodeRef, "test object-converter argument");
+}
+
 fn analyzeVariantPrimitives(comptime T: type) void {
     var variant: godot.builtins.Variant = undefined;
     _ = conversion.decodeVariant(T, &variant);
@@ -467,6 +550,58 @@ fn analyzeContainerPrimitives() void {
     analyzePtrcallPrimitives(collections.Array(i32));
     analyzeVariantPrimitives(collections.Dictionary(godot.builtins.String, i32));
     analyzePtrcallPrimitives(collections.Dictionary(godot.builtins.String, i32));
+}
+
+fn analyzeDeinitPrimitives(comptime T: type, comptime path: conversion.Path) void {
+    var value: T = undefined;
+    conversion.deinitDecodedArgument(T, path, &value);
+}
+
+/// Compile-only coverage of the decoded-argument release classification for
+/// every representative declared type on both paths.
+fn analyzeDeinitCoverage() void {
+    analyzeDeinitPrimitives(i32, .variant);
+    analyzeDeinitPrimitives(i32, .ptrcall);
+    analyzeDeinitPrimitives(f64, .variant);
+    analyzeDeinitPrimitives(f64, .ptrcall);
+    analyzeDeinitPrimitives(Mode, .variant);
+    analyzeDeinitPrimitives(Mode, .ptrcall);
+
+    analyzeDeinitPrimitives(godot.builtins.Vector2, .variant);
+    analyzeDeinitPrimitives(godot.builtins.Vector2, .ptrcall);
+    analyzeDeinitPrimitives(godot.builtins.String, .variant);
+    analyzeDeinitPrimitives(godot.builtins.String, .ptrcall);
+    analyzeDeinitPrimitives(godot.builtins.Variant, .variant);
+    analyzeDeinitPrimitives(godot.builtins.Variant, .ptrcall);
+
+    analyzeDeinitPrimitives(*godot.classes.core.Node, .variant);
+    analyzeDeinitPrimitives(*godot.classes.core.Node, .ptrcall);
+    analyzeDeinitPrimitives(?*godot.classes.core.Node, .variant);
+    analyzeDeinitPrimitives(?*godot.classes.core.Node, .ptrcall);
+    analyzeDeinitPrimitives(?*godot.classes.core.RefCounted, .variant);
+    analyzeDeinitPrimitives(?*godot.classes.core.RefCounted, .ptrcall);
+    analyzeDeinitPrimitives(*i32, .ptrcall);
+    analyzeDeinitPrimitives(?*anyopaque, .ptrcall);
+    analyzeDeinitPrimitives(?*ExtensionNode, .variant);
+    analyzeDeinitPrimitives(?*ExtensionNode, .ptrcall);
+
+    analyzeDeinitPrimitives(Duration, .variant);
+    analyzeDeinitPrimitives(Duration, .ptrcall);
+    analyzeDeinitPrimitives(Label, .variant);
+    analyzeDeinitPrimitives(Label, .ptrcall);
+    analyzeDeinitPrimitives(NodeRef, .variant);
+    analyzeDeinitPrimitives(NodeRef, .ptrcall);
+    analyzeDeinitPrimitives(ResourceRef, .variant);
+    analyzeDeinitPrimitives(ResourceRef, .ptrcall);
+    analyzeDeinitPrimitives(ProbeOwned, .variant);
+    analyzeDeinitPrimitives(ProbeOwned, .ptrcall);
+
+    analyzeDeinitPrimitives(godot.ownership.Ref(godot.classes.core.Resource), .variant);
+    analyzeDeinitPrimitives(godot.ownership.Ref(godot.classes.core.Resource), .ptrcall);
+    analyzeDeinitPrimitives(collections.Array(i32), .variant);
+    analyzeDeinitPrimitives(collections.Array(i32), .ptrcall);
+    analyzeDeinitPrimitives(collections.Dictionary(godot.builtins.String, i32), .variant);
+    analyzeDeinitPrimitives(collections.Dictionary(godot.builtins.String, i32), .ptrcall);
 }
 
 // Compile-only coverage; analyzed on every build.
@@ -515,8 +650,10 @@ fn analyzeCoverage() void {
 comptime {
     checkContract();
     checkBorrowContract();
+    checkMethodArgumentContract();
     checkGeneratedReturnShapes();
     _ = &analyzeCoverage;
+    _ = &analyzeDeinitCoverage;
     _ = &analyzePropertyBackend;
     _ = &analyzeVirtuals;
 }
@@ -561,6 +698,49 @@ test "borrowVariant borrows scalar and nil Variant views" {
     const no_node: ?*godot.classes.core.Node = null;
     conversion.borrowVariant(*godot.classes.core.Node, no_node, &borrowed);
     try std.testing.expectEqual(interface.VariantType.nil, borrowed.tag);
+}
+
+test "deinitDecodedArgument releases converter results on both paths" {
+    probe_release_count = 0;
+
+    var slot: i64 = 0;
+    conversion.encodePtrcallSlot(i32, 0, @ptrCast(&slot));
+    var ptrcall_value = conversion.decodePtrcallSlot(ProbeOwned, @ptrCast(&slot));
+    try std.testing.expectEqual(@as(usize, 0), probe_release_count);
+    conversion.deinitDecodedArgument(ProbeOwned, .ptrcall, &ptrcall_value);
+    try std.testing.expectEqual(@as(usize, 1), probe_release_count);
+
+    var variant: godot.builtins.Variant = undefined;
+    conversion.encodeVariant(i32, 0, &variant);
+    var variant_value = conversion.decodeVariant(ProbeOwned, &variant).?;
+    try std.testing.expectEqual(@as(usize, 1), probe_release_count);
+    conversion.deinitDecodedArgument(ProbeOwned, .variant, &variant_value);
+    try std.testing.expectEqual(@as(usize, 2), probe_release_count);
+}
+
+test "deinitDecodedArgument ignores borrowed direct values" {
+    probe_release_count = 0;
+
+    var scalar: i32 = 7;
+    conversion.deinitDecodedArgument(i32, .variant, &scalar);
+    conversion.deinitDecodedArgument(i32, .ptrcall, &scalar);
+    try std.testing.expect(scalar == 7);
+
+    var plain: godot.builtins.Vector2 = .{ .x = 1, .y = 2 };
+    conversion.deinitDecodedArgument(godot.builtins.Vector2, .variant, &plain);
+    conversion.deinitDecodedArgument(godot.builtins.Vector2, .ptrcall, &plain);
+    try std.testing.expect(plain.x == 1 and plain.y == 2);
+
+    var node: ?*godot.classes.core.Node = null;
+    conversion.deinitDecodedArgument(?*godot.classes.core.Node, .variant, &node);
+    conversion.deinitDecodedArgument(?*godot.classes.core.Node, .ptrcall, &node);
+
+    // The pointee declares `deinit`, but the decoded declared type is the raw
+    // pointer: it is direct and borrowed, so release must not reach the object.
+    var probe = ProbeDirect{ .releases = &probe_release_count };
+    var probe_ptr: *ProbeDirect = &probe;
+    conversion.deinitDecodedArgument(*ProbeDirect, .ptrcall, &probe_ptr);
+    try std.testing.expectEqual(@as(usize, 0), probe_release_count);
 }
 
 const std = @import("std");

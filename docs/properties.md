@@ -32,8 +32,9 @@ Status:
   [ownership.md](ownership.md).
 - Read-only properties (`.read_only`) and eager creation-time initializers
   (`.init`) are implemented on the same field annotation.
-- Static ClassDB property registration and extension method registration remain
-  future work.
+- Static ClassDB property registration remains future work; extension methods
+  are registered separately as class-level metadata, see
+  [classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container).
 - Unit-test coverage is compile-time only: the build analyzes the runtime
   callbacks. The optional [`test-godot-live`](build.md#live-godot-tests) step
   exercises property registration and default/set/get values headlessly;
@@ -1025,7 +1026,9 @@ guarantee.
 
 - no static ClassDB property registration; [classdb.md](classdb.md#d1-the-dynamic-property-backend-stays-the-only-property-backend)
   records why the dynamic backend stays the only one for instanced classes
-- no extension method registration here; it is [classdb.md](classdb.md) work
+- no extension method registration here; methods are declared with
+  `Methods`/`Method` and registered by the class-level callback, see
+  [classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container)
 - no group prefixes or a manual `.depth` option; nesting sets the depth and names
   are verbatim labels
 - no explicit enum/bitfield hint labels; they come from the Zig declaration's

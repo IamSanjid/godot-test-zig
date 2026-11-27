@@ -122,6 +122,7 @@ src/godot/                hand-written runtime plus generated subtrees
     live/                 separate dynamic-library tree for test-godot-live; not in all.zig
       entrypoint.zig      entry symbol; registers fixture classes
       live_node.zig       registration/annotation fixture class
+      live_methods.zig    engine-method fixture class for both call paths
       live_owned_node.zig Owned-handle construction fixture class
       live_typed_node.zig typed-container and Ref-property fixture class
       live_resource.zig   object element fixture class
@@ -232,16 +233,18 @@ modules are build artifacts; they are ignored and must not be edited.
   tests; `src/godot/tests/live/` is a separate dynamic-library tree, not a unit
   test. `zig build test` does not run the extension in a Godot engine. The
   optional `test-godot-live` step loads it headlessly and checks registration
-  metadata, wrapper-typed container properties with their hint metadata and
-  engine-side typing, signal emit delivery, and the `Owned` deinit/take paths;
-  inspector rendering, hot reload, and other editor-only behavior still need an
-  editor run.
-- Zig methods and static ClassDB properties are not registered for GDScript
-  yet. Methods are the next surface ([docs/classdb.md](docs/classdb.md)),
-  followed by abstract classes and callables. Typed container wrappers already
-  convert on both the Variant and ptrcall paths; method argument-release
-  handling for decoded wrappers comes with methods. Virtual signatures use
-  engine-defined types, so a converter cannot appear there.
+  metadata, engine-method calls through both call paths, wrapper-typed container
+  properties with their hint metadata and engine-side typing, signal emit
+  delivery, and the `Owned` deinit/take paths; inspector rendering, hot reload,
+  and other editor-only behavior still need an editor run.
+- Static ClassDB properties, abstract classes (`is_abstract`), and callables are
+  not implemented yet. Extension methods are registered and callable from
+  GDScript (`Methods`/`Method` in [docs/classdb.md](docs/classdb.md)); method
+  arguments are borrow-only (owning wrappers and owned-engine converters are
+  compile errors as arguments), and an owned `RefCounted`
+  result is declared as `godot.ownership.Ref(T)`. The next surface is
+  `is_abstract`, followed by callables. Virtual signatures use engine-defined
+  types, so a converter cannot appear there.
 - Extension-to-extension class inheritance is rejected for registered classes.
 - A failed `InitCallback` releases only framework-initialized values: fields
   with a custom `.init` initializer and `.deinit = .best_effort` get best-effort

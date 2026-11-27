@@ -1,5 +1,5 @@
 //! Opt-in markers: field wrappers (Base, OnReady, Property), callback and
-//! override markers, class-level `Signal`/`Constants`/`PropertyGroups`
+//! override markers, class-level `Signal`/`Constants`/`PropertyGroups`/`Methods`
 //! metadata, the `Conversion` value-type marker, and the `Init` initializer.
 
 const base = @import("base.zig");
@@ -32,6 +32,11 @@ pub const callNotificationCallback = notification_callback.callNotificationCallb
 const signal = @import("signal.zig");
 pub const Signal = signal.Signal;
 pub const findSignals = signal.findSignals;
+
+const methods = @import("methods.zig");
+pub const Method = methods.Method;
+pub const Methods = methods.Methods;
+pub const findMethods = methods.findMethods;
 
 /// `Constants` marker and discovery helpers.
 pub const constants = @import("constants.zig");

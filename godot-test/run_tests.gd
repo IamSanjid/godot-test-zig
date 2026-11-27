@@ -7,6 +7,7 @@ extends SceneTree
 const SUITES = [
 	preload("res://tests/classdb.gd"),
 	preload("res://tests/collections.gd"),
+	preload("res://tests/methods.gd"),
 	preload("res://tests/ownership.gd"),
 	preload("res://tests/properties.gd"),
 	preload("res://tests/signals.gd"),

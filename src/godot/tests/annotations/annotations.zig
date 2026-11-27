@@ -58,6 +58,8 @@ fn checkMarkerKinds() void {
         "deinit_callback",
         "notification_callback",
         "signal",
+        "method",
+        "methods",
         "constants",
         "property_groups",
         "conversion",

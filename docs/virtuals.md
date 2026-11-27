@@ -15,7 +15,8 @@ pub const Virtual = struct {
     };
 
     pub const Optional = struct {
-        // Arguments and returns stay raw borrowed pointers; the engine slot
+        // Engine-defined types: object pointers are raw borrowed pointers;
+        // builtins/Variant travel by value as borrowed aliases. The return slot
         // takes its own reference to a returned `RefCounted` object.
         pub const _getImage = *const fn (self: *const Texture2D) callconv(.c) ?*Image;
     };
@@ -30,8 +31,9 @@ pub const Virtual = struct {
 - `Required` and `Optional` are the registration categories.
 - `Meta` supplies the engine hash, staticness, and exact `godot_name` from the API JSON.
 - No binding-level function types are emitted.
-- The generated signature uses public Zig types: raw borrowed pointers for
-  arguments and for every return, including `RefCounted` results (`?*Class`).
+- The generated signature uses public Zig types matching the engine ABI:
+  object pointers are raw borrowed pointers (`?*Class`), while builtins and
+  `Variant` travel by value. `RefCounted` returns are `?*Class`.
 - The generated callable wrappers that invoke a virtual from Zig are ordinary
   generated methods, so a `RefCounted` engine result comes back as
   `ownership.Ref(Class)`. Only the user override signatures stay raw pointers.
@@ -54,8 +56,9 @@ Rules:
   the base implementation.
 - Non-static virtuals must take `*T` or `*const T` as the first parameter.
 - Remaining parameter and return types must match the generated virtual type.
-  Arguments and returns stay raw borrowed pointers; a `RefCounted` return is
-  `?*Class`, never `godot.ownership.Ref(Class)`.
+  Object pointers stay raw borrowed; by-value builtins/`Variant` arguments are
+  borrowed aliases. A `RefCounted` return is `?*Class`, never
+  `godot.ownership.Ref(Class)`.
 - Functions must not be generic.
 - Static virtuals have no self parameter.
 - An alternate Zig declaration name may be provided with
@@ -181,6 +184,13 @@ For the generated signature and for user code this means:
 - The ownership model is stated once in
   [ownership.md](ownership.md#the-model).
 
+Registered extension methods are the other side of the same boundary: the engine
+calls them, so a method returns outgoing values. A raw `?*T` method result is
+borrowed like a virtual return; an owned `RefCounted` result is declared as
+`godot.ownership.Ref(T)` because the method adapter releases the wrapper after
+encoding. Only the virtual override signature is fixed to raw pointers; see
+[classdb.md](classdb.md#d4-methods-are-declared-in-one-methods-container).
+
 ## Do not use upcast/downcast here
 
 `upcast`/`downcast` are user-facing convenience methods. Virtual slots already
@@ -189,9 +199,12 @@ no ABI benefit.
 
 ## Variant and non-trivial builtins
 
-Virtual arguments are borrowed views: the engine owns the storage and cleans it
-up after the callback. Never deinitialize argument values; clone or copy the
-value if it must outlive the call.
+Every virtual argument is a borrow: object pointers are borrowed pointers, and
+by-value builtins/`Variant` are borrowed value aliases. The engine owns the
+storage and cleans it up after the callback. Never deinitialize or store an
+argument value; copy it if it must outlive the call (`String.fromString`,
+`Variant.clone`, etc.). A stored alias is a use-after-free/double-release bug,
+not a leak: the callback acquired no reference.
 
 Return values are transferred to the engine. Godot's virtual thunk
 default-constructs the return temp before calling the extension, so the callback

@@ -1,14 +1,14 @@
 # Declared-type conversion
 
 Every engine-facing surface declares the Zig type it carries: a
-[`Property(T, ...)`](properties.md) field, a [`Signal`](signals.md) argument, and
-later a method parameter or virtual signature. That **declared type** crosses the
-engine boundary on one of two paths:
+[`Property(T, ...)`](properties.md) field, a [`Signal`](signals.md) argument, a
+method parameter or result, and a virtual signature. That **declared type**
+crosses the engine boundary on one of two paths:
 
 | Path | Used by | Carries |
 |---|---|---|
-| Variant | property set/get, signal registration and emit | an engine `Variant` |
-| ptrcall | virtual callbacks; methods when they land | one raw ABI slot |
+| Variant | property set/get, signal registration and emit, method `call_func` | an engine `Variant` |
+| ptrcall | virtual callbacks, method `ptrcall_func` | one raw ABI slot |
 
 Conversion is a compile-time model, not a user API. One internal layer decides
 which paths a declared type supports, which engine type represents it, and how a
@@ -97,7 +97,8 @@ Rules:
   wins and the type's declarations are not scanned.
 - The marker is found on the type itself, never on a class field or through a
   registry. Conversion is a property of the type, not of a surface: properties,
-  signals, and future methods share one marker with no per-surface override.
+  signals, methods, and virtual signatures share one marker with no per-surface
+  override.
 
 Converter functions follow the ownership direction below. `to_engine` receives
 the declared value by value and returns an independent engine value when the
@@ -130,9 +131,11 @@ directions have fixed defaults:
 
 Consumers apply the direction: properties store the decoded value under their
 declared `.set`/`.deinit` modes, signal emit keeps the caller's Zig values owned,
-and virtual callbacks return raw borrowed pointers. Ownership of the decodes is
-stated once in [ownership.md](ownership.md); this page states only how values
-cross.
+method adapters release their call-scoped decoded arguments after the user
+function returns and the method-argument gate rejects declared argument types that
+own storage, and virtual callbacks return raw borrowed pointers. Ownership of
+the decodes is stated once in [ownership.md](ownership.md); this page states only
+how values cross.
 
 ### Variant path
 
@@ -184,8 +187,16 @@ The two paths are independent, and a surface requires the ones it uses:
 | `Property` | Variant for every field, including hidden ones |
 | `Signal` | Variant at declaration; registration derives metadata, emit converts |
 | Virtuals | ptrcall for every parameter and non-void return |
-| Methods (planned) | both: `call` decodes Variant arguments, ptrcall uses slots |
+| Methods | both: `call_func` decodes Variant arguments, `ptrcall_func` uses slots; argument types must be borrow-like |
 
+- Method arguments are call-scoped borrowed, and the declaration gate enforces
+  it: a direct type is accepted (its Variant-path decode is an adapter-managed
+  copy released after the call), while a converter must declare no `deinit` and
+  have a non-owning engine representation. `Ref(T)`, typed container wrappers,
+  managed/heap/packed engine representations, and `RefCounted` object-pointer
+  converters are compile errors as arguments - declare the borrowed direct type
+  and wrap inside the method. Method results are outgoing and follow the
+  engine-boundary rule in [ownership.md](ownership.md#engine-boundary).
 - A signature that cannot support a required path is a compile error at the
   declaration, naming the surface and field/argument. The error is the whole
   gate: a value is never silently converted on a path its type does not support.
@@ -220,10 +231,12 @@ paths:
   A wrapper's `Element`/`Key`/`Value` declarations are property-hint metadata,
   not conversion support declarations; they do not type an assigned container.
 - A wrapper decoded from the engine owns one engine reference, like `Ref`; a
-  wrapper moved into a `Property` field transfers its handle. A method surface
-  that receives a decoded wrapper argument must release it once; virtual
-  signatures use engine-defined types, so no virtual release path is needed and
-  the case does not arise yet.
+  wrapper moved into a `Property` field transfers its handle. A wrapper is never a
+  method argument: its decode owns a reference and method arguments are
+  borrow-only, so the signature gate rejects it and every other owning converter.
+  Use the wrapper for storage and results, and the engine builtin or another
+  borrowed form at a method argument. Virtual signatures are engine-defined, so a
+  converter cannot reach a virtual and no virtual release path is needed.
 - `Property` container hints are separate metadata derived from the wrapper
   declarations or explicit `.element`/`.key`/`.value` options; see
   [properties.md](properties.md#typed-container-hints).
@@ -235,8 +248,9 @@ paths:
   or plain structs without a marker.
 - No callables integration: a custom converter argument has no closure-side
   receive yet; see [callables.md](callables.md).
-- No methods yet; method argument-release handling for decoded owning values
-  comes with that surface.
+- No user-owned method arguments: the declaration gate rejects every argument
+  type whose decode or engine representation owns storage, and the adapter
+  releases the remaining call-scoped decodes after the call.
 - No user-facing conversion functions: the declared-type conversion layer is
   internal to the runtime, and test builds reach it through a test-only path
   documented in
